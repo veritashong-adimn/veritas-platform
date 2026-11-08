@@ -91,6 +91,8 @@ function selectItems(whereClause: any) {
         (SELECT email FROM users WHERE id = ${performanceAssignmentsTable.individualUserId}),
         (SELECT email FROM companies WHERE id = ${performanceAssignmentsTable.vendorCompanyId})
       )`,
+      // 지급대상(개인) 통번역사 Master 가능언어 — 지급명세서 상단 표시 전용(정산 계산과 무관).
+      payeeLanguagePairs: sql<string | null>`(SELECT language_pairs FROM translator_profiles WHERE user_id = ${performanceAssignmentsTable.individualUserId})`,
       serviceType: performanceAssignmentsTable.serviceType,
       productName: performanceAssignmentsTable.productNameSnapshot,
       deliveryDate: performanceAssignmentsTable.deliveryDate,
@@ -182,6 +184,7 @@ function aggregate(items: any[]) {
         payeeKey: key, payeeType: isIndiv ? "individual" : "vendor", payeeId: payeeId ?? null,
         payeeName: it.performerName || it.customerName || "(미지정)",
         payeeEmail: it.payeeEmail ?? null,   // 동명이인 식별용 표시정보(그룹 대표값 — 같은 지급대상은 동일 이메일)
+        payeeLanguages: isIndiv ? (it.payeeLanguagePairs ?? null) : null,   // Master 가능언어(지급명세서 상단 표시 전용)
         count: 0, translationCount: 0, interpretationCount: 0, equipmentEtcCount: 0,
         baseTotal: 0, expenseTotal: 0, deductionTotal: 0, grossTotal: 0, withholdingTotal: 0, vatTotal: 0, netTotal: 0,
         treatments: new Set<string>(), rateUnconfirmed: false, allVat: true, items: [] as any[],
@@ -352,6 +355,9 @@ async function loadRoundDetailFromSnapshot(round: any) {
     vendorIds.length ? db.select({ id: companiesTable.id, email: companiesTable.email }).from(companiesTable).where(inArray(companiesTable.id, vendorIds)) : Promise.resolve([]),
   ]);
   for (const u of indivRows) emailMap.set(`individual:${u.id}`, u.email ?? null);
+  // Master 가능언어(지급명세서 상단 표시 전용) — 스냅샷 미보존 정보라 실시간 조회.
+  const langMap = new Map<number, string | null>();
+  if (indivIds.length) for (const p of await db.select({ userId: translatorProfilesTable.userId, lp: translatorProfilesTable.languagePairs }).from(translatorProfilesTable).where(inArray(translatorProfilesTable.userId, indivIds))) langMap.set(p.userId, p.lp ?? null);
   for (const c of vendorRows) emailMap.set(`vendor:${c.id}`, c.email ?? null);
   const emailOf = (r: any) => (r.payeeId != null ? emailMap.get(`${r.payeeType}:${r.payeeId}`) ?? null : null);
   const groups = new Map<string, any>();
@@ -364,6 +370,7 @@ async function loadRoundDetailFromSnapshot(round: any) {
         payeeKey: key, payeeType: isIndiv ? "individual" : "vendor", payeeId: r.payeeId ?? null,
         payeeName: r.payeeName || "(미지정)",
         payeeEmail: emailOf(r),
+        payeeLanguages: isIndiv && r.payeeId != null ? (langMap.get(r.payeeId) ?? null) : null,
         count: 0, translationCount: 0, interpretationCount: 0, equipmentEtcCount: 0,
         baseTotal: 0, expenseTotal: 0, deductionTotal: 0, grossTotal: 0, withholdingTotal: 0, vatTotal: 0, netTotal: 0,
         treatments: new Set<string>(), rateUnconfirmed: false, allVat: true, items: [] as any[],
@@ -403,6 +410,41 @@ function payStatsOf(statuses: string[]) {
   let paid = 0, hold = 0;
   for (const s of statuses) { if (s === "paid") paid++; else if (s === "payment_hold") hold++; }
   return { paid, hold, unpaid: statuses.length - paid - hold, total: statuses.length };
+}
+
+// 지급대상 자격(eligibleConds) 미충족 사유 — 회차 경고(loadWarnings)·전체 지급대상 개요(loadPending) 공용. 충족이면 null.
+function notEligibleReason(r: any): string | null {
+  if (r.paymentStatus === "payment_hold") return "지급보류";
+  const hasPayee = (r.performerCategory === "individual" && r.individualUserId != null) || (r.performerCategory === "vendor" && r.vendorCompanyId != null);
+  if (!hasPayee) return "수행자 미지정";
+  if (!r.deliveryDate) return "납품일 미입력";
+  if (!r.deliveryConfirmed) return "납품확인 미완료";
+  if (num(r.costTotal) <= 0) return "지급액 0원";
+  if (r.performerCategory === "individual" && !r.withholdingTreatment) return "세금처리 미선택";
+  return null;
+}
+
+// 전체 지급대상 개요 보조 정보(읽기 전용) — 신규 플랫폼 미지급 수행건 중 아직 지급 조건을 못 채운 건의 사유별 건수.
+//  · 대상이 0건일 때 '조회 실패'가 아니라 '조건 미충족'임을 화면에 알려 주기 위한 정보. 지급대상 판정·금액은 바꾸지 않는다.
+//  · 과거 CRM 자료(legacy_archive_rows)는 은행이체 대상이 아니므로 포함하지 않는다(performance_assignments 만).
+async function loadPending() {
+  const rows = await db.select({
+    performerCategory: performanceAssignmentsTable.performerCategory, individualUserId: performanceAssignmentsTable.individualUserId,
+    vendorCompanyId: performanceAssignmentsTable.vendorCompanyId, deliveryDate: performanceAssignmentsTable.deliveryDate,
+    deliveryConfirmed: performanceAssignmentsTable.deliveryConfirmed, costTotal: performanceAssignmentsTable.costTotal,
+    withholdingTreatment: performanceAssignmentsTable.withholdingTreatment, paymentStatus: performanceAssignmentsTable.paymentStatus,
+  }).from(performanceAssignmentsTable).where(and(
+    isNull(performanceAssignmentsTable.deletedAt),
+    sql`${performanceAssignmentsTable.performerCategory} IN ('individual','vendor')`,
+    ne(performanceAssignmentsTable.paymentStatus, "paid"),
+  ));
+  const byReason = new Map<string, { count: number; amount: number }>();
+  for (const r of rows) {
+    const why = notEligibleReason(r); if (!why) continue;
+    const b = byReason.get(why) ?? { count: 0, amount: 0 }; b.count++; b.amount += num(r.costTotal); byReason.set(why, b);
+  }
+  const list = [...byReason].map(([reason, v]) => ({ reason, count: v.count, amount: Math.round(v.amount * 100) / 100 }));
+  return { total: list.reduce((a, b) => a + b.count, 0), byReason: list };
 }
 
 // 제외·확인 필요 목록(§8) — 대상기간 내 지급대상(개인/외주)이지만 수집조건을 못 채운 건을 사유별 분류.
@@ -445,13 +487,9 @@ async function loadWarnings(round: any) {
   let holdAmount = 0;
   for (const r of rows) {
     if (r.payoutRoundId != null && r.payoutRoundId !== round.id) { push("이미 다른 회차에 포함됨", r); continue; }
-    if (r.paymentStatus === "payment_hold") { push("지급보류", r); holdAmount += num(r.costTotal); continue; }
-    const hasPayee = (r.performerCategory === "individual" && r.individualUserId != null) || (r.performerCategory === "vendor" && r.vendorCompanyId != null);
-    if (!hasPayee) { push("수행자 미지정", r); continue; }
-    if (!r.deliveryDate) { push("납품일 미입력", r); continue; }
-    if (!r.deliveryConfirmed) { push("납품확인 미완료", r); continue; }
-    if (num(r.costTotal) <= 0) { push("지급액 0원", r); continue; }
-    if (r.performerCategory === "individual" && !r.withholdingTreatment) { push("세금처리 미선택", r); continue; }
+    const why = notEligibleReason(r);
+    if (why === "지급보류") holdAmount += num(r.costTotal);
+    if (why) { push(why, r); continue; }
     // 위 조건을 모두 통과했는데도 이 회차에 없는 건 = 미수집(예: 저장 전 제외 처리) → 별도 표기
   }
   const byReason = Object.entries(buckets).map(([reason, items]) => ({ reason, count: items.length, items }));
@@ -662,7 +700,7 @@ router.get("/admin/payout-rounds/overview", ...adminGuard, async (req, res) => {
     // 회차 상세와 동일한 응답 형태(round=null)로 반환해 화면 렌더링을 공용화. 회차 전용 필드는 빈 값.
     res.json({
       round: null,
-      overview: { scope: unassignedOnly ? "unassigned" : "all", unassignedCount },
+      overview: { scope: unassignedOnly ? "unassigned" : "all", unassignedCount, pending: await loadPending() },
       summary, totals,
       warnings: { total: 0, holdAmount: 0, byReason: [] },
       collectable: [],

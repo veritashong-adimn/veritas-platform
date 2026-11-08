@@ -62,5 +62,6 @@ export * from "./import_batches";
 export * from "./legacy_master_mappings";
 export * from "./legacy_archive_rows";
 export * from "./legacy_sales_progress_links";
+export * from "./legacy_payout_conversions";
 export * from "./translator_merges";
 export * from "./archive";

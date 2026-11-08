@@ -25,6 +25,7 @@ import { requireAuth, requireRole } from "../middlewares/auth";
 import { getPermissionsForRole } from "../lib/rbac";
 import { isLegacyPlaceholderEmail } from "../lib/mailer";
 import { LEGACY_PAID_DELIVERY_CUTOFF, LEGACY_PAID_BASIS, LEGACY_PAID_BY_ROUND_BASIS } from "../lib/legacyPayoutRule";
+import { conversionsByRow } from "../services/legacyPayoutConversion";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -93,6 +94,10 @@ const PROG = sql`
       coalesce(nullif(regexp_replace(coalesce(source_raw->>'지급액(세전)',''), '[^0-9.-]', '', 'g'), '')::numeric, 0) AS pretax,
       coalesce(nullif(regexp_replace(coalesce(source_raw->>'지금액(세후)',''), '[^0-9.-]', '', 'g'), '')::numeric, 0) AS posttax
     FROM legacy_archive_rows WHERE source_type = 'progress' AND is_effective = true
+      -- 운영 지급으로 넘어간 과거 수행행 제외(중복 집계 방지): 과거 판매 운영 전환 후 '과거 지급 확인 → 미지급'으로 처리된 건
+      --   (과거 CRM 지급 전환 승인 포함)은 운영 수행정보(cur)로만 집계한다. 원본 행은 그대로 보존.
+      AND NOT EXISTS (SELECT 1 FROM import_row_sources s JOIN performance_assignments xpa ON xpa.id = s.entity_id AND xpa.deleted_at IS NULL
+        WHERE s.module = 'legacy_sale_activation' AND s.row_key = 'progress:' || legacy_archive_rows.id AND s.status = 'payout_review_unpaid')
   )`;
 
 // 신규 수행정보(performance_assignments) 정규화 — 지급일 = 지급예정일(자동/수동). 거래처 = 프로젝트 거래처 스냅샷.
@@ -127,6 +132,10 @@ const CUR = sql`
     LEFT JOIN users cu ON cu.id = pa.individual_user_id
     LEFT JOIN translator_profiles tp ON tp.user_id = pa.individual_user_id
     WHERE pa.deleted_at IS NULL
+      -- 과거 판매 운영 전환으로 만들어진 수행정보 중 운영 지급으로 넘어오지 않은 건(과거 지급완료·지급 확인 필요 등)은 제외 —
+      --   같은 거래가 과거 CRM 행(prog)으로 이미 집계되므로 중복 집계 방지. '미지급' 확인된 건(지급 전환 승인 포함)만 운영 건으로 집계.
+      AND NOT EXISTS (SELECT 1 FROM import_row_sources s WHERE s.module = 'legacy_sale_activation' AND s.entity_id = pa.id
+        AND s.row_key LIKE 'progress:%' AND s.status <> 'payout_review_unpaid')
   )`;
 
 // 지급상태 코드 — 실제 '지급' 여부만 나타낸다(검증상태와 분리).
@@ -143,6 +152,19 @@ const STATUS_LABEL: Record<PayStatus, string> = {
 function legacyStatus(r: { legacy_paid?: unknown; payout_future?: unknown }): PayStatus {
   if (r.legacy_paid === true) return "paid";
   return r.payout_future === true ? "scheduled" : "deposit_unconfirmed";
+}
+
+// ── 지급상태 4분류(지급회차관리 건수 집계 · 지급명세서와 같은 지급완료 판정) ───────────────────────
+//   수행건 1건 = 1분류. paid(지급완료) | unpaid(미지급: 신규 지급예정일 경과·미지급) | scheduled(지급예정: 지급일 도래 전 미완료)
+//   | review(확인필요: 과거 지급일 없음·신규 지급보류·지급일 없음·중복 의심). 지급완료 판정은 status(기존 PROG/CUR 규칙) 그대로.
+//   표시용 집계일 뿐 — 지급상태·금액·기록을 바꾸지 않는다. 보류·확인필요 건을 미지급으로 보지 않는다.
+export type PayBucket = "paid" | "unpaid" | "scheduled" | "review";
+const kstToday = () => new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+function payBucket(it: { source: string; status: string; payoutDate: string | null }, today: string): PayBucket {
+  if (it.status === "paid") return "paid";
+  if (it.status === "scheduled") return "scheduled";
+  if (it.status === "pending" && it.payoutDate) return it.payoutDate < today ? "unpaid" : "scheduled";
+  return "review";   // deposit_unconfirmed · excluded(지급보류) · dup_suspect · 지급일 없는 신규 미지급
 }
 
 // 날짜 범위 필터(선택 기준 컬럼에 적용). 그룹핑은 항상 실제 지급일(payout_date).
@@ -178,7 +200,8 @@ router.get("/admin/payout-unified/rounds", ...adminGuard, async (req, res) => {
         coalesce(sum(pretax) FILTER (WHERE legacy_paid),0) AS paid_total,
         count(*) FILTER (WHERE NOT legacy_paid AND NOT payout_future)::int AS need_review_cnt,
         count(*) FILTER (WHERE NOT legacy_paid AND payout_future)::int AS scheduled_cnt,
-        coalesce(sum(pretax) FILTER (WHERE NOT legacy_paid AND payout_future),0) AS scheduled_total
+        coalesce(sum(pretax) FILTER (WHERE NOT legacy_paid AND payout_future),0) AS scheduled_total,
+        count(*) FILTER (WHERE legacy_paid)::int AS paid_cnt
       FROM prog ${filters} GROUP BY payout_date`)).rows as any[];
 
     // 신규 집계 — paid/unpaid/hold.
@@ -189,23 +212,29 @@ router.get("/admin/payout-unified/rounds", ...adminGuard, async (req, res) => {
         coalesce(sum(pretax),0) AS pretax_total, coalesce(sum(posttax),0) AS posttax_total,
         coalesce(sum(pretax) FILTER (WHERE payment_status='paid'),0) AS paid_total,
         coalesce(sum(pretax) FILTER (WHERE payment_status='unpaid'),0) AS unpaid_total,
-        count(*) FILTER (WHERE payment_status='payment_hold')::int AS excluded_cnt
+        count(*) FILTER (WHERE payment_status='payment_hold')::int AS excluded_cnt,
+        count(*) FILTER (WHERE payment_status='paid')::int AS paid_cnt,
+        count(*) FILTER (WHERE payment_status='unpaid' AND payout_date < ${kstToday()})::int AS overdue_cnt,
+        count(*) FILTER (WHERE payment_status='unpaid' AND payout_date >= ${kstToday()})::int AS future_cnt
       FROM cur ${filters} GROUP BY payout_date`)).rows as any[];
 
     // 지급일별 병합(과거+신규). 지급일 null → '지급일 미확인'.
     const map = new Map<string, any>();
     const key = (d: any) => d ?? "__none__";
     for (const r of legacyRows) {
-      const k = key(r.payout_date); const g = map.get(k) ?? { payoutDate: r.payout_date ?? null, cnt: 0, payees: new Set<string>(), pretax: 0, posttax: 0, paid: 0, unpaid: 0, needReview: 0, excluded: 0, scheduled: 0, scheduledTotal: 0, legacyCnt: 0, currentCnt: 0 };
+      const k = key(r.payout_date); const g = map.get(k) ?? { payoutDate: r.payout_date ?? null, cnt: 0, payees: new Set<string>(), pretax: 0, posttax: 0, paid: 0, unpaid: 0, needReview: 0, excluded: 0, scheduled: 0, scheduledTotal: 0, legacyCnt: 0, currentCnt: 0, sc: { paid: 0, unpaid: 0, scheduled: 0, review: 0 } };
       g.cnt += num(r.cnt); g.pretax += num(r.pretax_total); g.posttax += num(r.posttax_total);
       g.paid += num(r.paid_total); g.needReview += num(r.need_review_cnt); g.legacyCnt += num(r.cnt);
       g.scheduled += num(r.scheduled_cnt); g.scheduledTotal += num(r.scheduled_total);
+      g.sc.paid += num(r.paid_cnt); g.sc.scheduled += num(r.scheduled_cnt); g.sc.review += num(r.need_review_cnt);
       map.set(k, g);
     }
     for (const r of curRows) {
-      const k = key(r.payout_date); const g = map.get(k) ?? { payoutDate: r.payout_date ?? null, cnt: 0, payees: new Set<string>(), pretax: 0, posttax: 0, paid: 0, unpaid: 0, needReview: 0, excluded: 0, scheduled: 0, scheduledTotal: 0, legacyCnt: 0, currentCnt: 0 };
+      const k = key(r.payout_date); const g = map.get(k) ?? { payoutDate: r.payout_date ?? null, cnt: 0, payees: new Set<string>(), pretax: 0, posttax: 0, paid: 0, unpaid: 0, needReview: 0, excluded: 0, scheduled: 0, scheduledTotal: 0, legacyCnt: 0, currentCnt: 0, sc: { paid: 0, unpaid: 0, scheduled: 0, review: 0 } };
       g.cnt += num(r.cnt); g.pretax += num(r.pretax_total); g.posttax += num(r.posttax_total);
       g.paid += num(r.paid_total); g.unpaid += num(r.unpaid_total); g.excluded += num(r.excluded_cnt); g.currentCnt += num(r.cnt);
+      g.sc.paid += num(r.paid_cnt); g.sc.unpaid += num(r.overdue_cnt); g.sc.scheduled += num(r.future_cnt);
+      g.sc.review += num(r.cnt) - num(r.paid_cnt) - num(r.overdue_cnt) - num(r.future_cnt);   // 지급보류·지급일 없음 등
       map.set(k, g);
     }
     // payees(인원)는 과거/신규가 같은 Master면 중복 셈 방지를 위해 상세에서 정확 계산 → 여기선 이름기준 근사치(표시용).
@@ -225,6 +254,7 @@ router.get("/admin/payout-unified/rounds", ...adminGuard, async (req, res) => {
         withholdingRecalc: recalcDeduction(g.pretax),
         paidTotal: g.paid, unpaidTotal: g.unpaid, needReviewCount: g.needReview, excludedCount: g.excluded,
         scheduledCount: g.scheduled, scheduledTotal: g.scheduledTotal,
+        statusCounts: g.sc,   // 지급상태 4분류 건수(합계 = assignmentCount)
       };
     });
     res.json({ rounds, basis, pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) }, referenceRate: 3.3 });
@@ -322,6 +352,8 @@ export async function collectUnifiedItems(opts: {
         pretax, posttax, withholdingImplied: Math.round((pretax - posttax) * 100) / 100,
         withholdingTax: null,   // 과거 CRM: 원천세·기타공제 분리 정보 없음(세전−세후만 존재) — 추정 분리 금지
         status, statusLabel: STATUS_LABEL[status], hasDeposit: r.has_deposit === true, paidBasis,
+        // 통번역사 Master 가능언어(확정 연결 건만, 원문 그대로) — 지급명세서 상단 언어 표시용. 이름만 같은 후보는 사용하지 않음.
+        masterLanguages: r.mapped_user_id != null ? (r.mapped_langpairs ?? null) : null,
       };
     }),
     ...curItems.map((r) => {
@@ -335,6 +367,7 @@ export async function collectUnifiedItems(opts: {
         deliveryDate: r.delivery_date ?? null, payoutDate: r.payout_date ?? null,
         client: r.client ?? null, translator: r.translator ?? null,
         residentMasked: null, language: r.language ?? null, languageSource: r.language ? "original" : null,
+        masterLanguages: r.master_langpairs ?? null,   // 통번역사 Master 가능언어(지급명세서 상단 표시용)
         masterEmail: canViewFullContact ? emailFull(r.master_email) : maskEmail(r.master_email),
         masterPhone: canViewFullContact ? phoneFull(r.master_phone) : maskPhone(r.master_phone), originalPhone: null,
         matchStatus: confirmed ? "confirmed" : (r.vendor_company_id != null ? "vendor" : "unmatched"),
@@ -364,6 +397,17 @@ export async function collectUnifiedItems(opts: {
     }
   }
   items.forEach((it) => { if ((it as any).dupSuspect == null) (it as any).dupSuspect = false; });
+  const today = kstToday();
+  for (const it of items as any[]) it.payBucket = payBucket(it, today);
+  // 과거 CRM 지급 전환(은행이체) — 수행행별 최근 요청·승인·반려 상태 + 요청 가능 여부(지급일 없음·지급확인 필요·지급액>0).
+  //   판매건 연결 등 세부 조건은 요청 시 서버에서 다시 확인한다. 표시 전용(지급상태·금액 불변).
+  const conv = await conversionsByRow(db, items.filter((it) => it.source === "legacy").map((it) => it.id));
+  for (const it of items as any[]) {
+    if (it.source !== "legacy") continue;
+    it.conversion = conv.get(it.id) ?? null;
+    it.conversionEligible = it.status === "deposit_unconfirmed" && !it.payoutDate && it.pretax > 0
+      && !(it.conversion && (it.conversion.status === "requested" || it.conversion.status === "approved"));
+  }
   return { items: items as UnifiedItem[], legacyCount: legacyItems.length, currentCount: curItems.length };
 }
 
@@ -424,6 +468,7 @@ router.get("/admin/payout-unified/payees", ...adminGuard, async (req, res) => {
       return t;
     }, { assignmentCount: 0, pretaxTotal: 0, posttaxTotal: 0, withholdingImpliedTotal: 0, paidTotal: 0, unpaidTotal: 0, needReviewCount: 0, dupSuspectCount: 0, excludedCount: 0, scheduledCount: 0, scheduledTotal: 0 });
     (totals as any).payeeCount = new Set(items.map(i => i.masterKey)).size;
+    (totals as any).statusCounts = items.reduce((c: Record<PayBucket, number>, i: any) => { c[i.payBucket as PayBucket]++; return c; }, { paid: 0, unpaid: 0, scheduled: 0, review: 0 });
 
     const truncated = legacyCount >= 5000 || currentCount >= 5000;   // 조회 상한 도달 — 화면에서 조건 축소 안내
     res.json({ items: shown, allCount: items.length, payees, totals, basis, contactFull: canViewFullContact, referenceRate: 3.3, truncated });

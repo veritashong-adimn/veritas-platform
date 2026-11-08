@@ -10,7 +10,7 @@ import { formatDisplayDate, formatScheduleRange, formatLabelDates } from '../../
 import { ModalOverlay, GhostBtn, PrimaryBtn } from '../ui';
 import { C, TYPO, SP, BD } from '../../lib/ds';
 import { downloadStatementExcel, todayStamp, type ExcelColumn, type ExcelCell } from '../../lib/payoutExcel';
-import { printPayoutStatementPdf, type PayoutStatementPdfRow } from '../../lib/payoutStatementPdf';
+import { printPayoutStatementPdf, payeeLanguageLabel, type PayoutStatementPdfRow } from '../../lib/payoutStatementPdf';
 import './readTableView.css';   // 목록 테이블 헤더를 플랫폼 공통 read-table 규격(.veritas-thead)으로 통일
 
 // ── 표시 헬퍼(PayoutRoundsTab 와 동일 — 순수 포맷/라벨. 계산 없음) ──
@@ -200,6 +200,8 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
       fileName: `지급명세서_${fileTag(g)}`,
       issuedDate: `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`,
       payeeName: String(g.payeeName ?? ''),
+      // 상단 수행 언어 — Master 가능언어 우선, 없으면 이 명세서 건들의 언어 스냅샷(개인 통번역사만).
+      payeeLanguages: g.payeeType === 'individual' ? payeeLanguageLabel(g.payeeLanguages, (g.items ?? []).map((it: any) => it.languageOrService)) : null,
       email: g.payeeEmail || '-',
       phone: g.payeePhone || '-',
       payeeType: payeeTypeLabel(g.payeeType),

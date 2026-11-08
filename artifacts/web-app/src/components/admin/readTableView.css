@@ -117,3 +117,12 @@
 .veritas-read-table.pr-detail-zebra tbody tr:hover { background: #e5e7eb; }
 .veritas-read-table.pr-detail-zebra tbody tr.vz-summary,
 .veritas-read-table.pr-detail-zebra tbody tr.vz-norow { background: transparent; }
+
+/* ── 정산 목록 교차배경(지급회차관리 회차 목록 · 지급명세서 목록) ─────────────────────
+   세무자료 표와 같은 색을 쓴다: 행 배경 #ffffff / #f9fafb(C.g50) 교차 + 행 구분선 1px #f3f4f6(BD.divider) + hover #f3f4f6.
+   이 두 목록은 바탕 카드가 #f9fafb 라 공통 규칙(짝수행 투명)으로는 모든 행이 같은 색으로 보였다 → 짝수·홀수 모두 명시.
+   요청 순서: 1행 흰색 · 2행 연회색. 선택행(인라인 #dbeafe)은 인라인이 우선해 그대로 유지. 다른 화면 영향 없음(pz- 스코프). */
+.veritas-read-table.pz-zebra tbody tr:nth-child(odd)  { background: #ffffff; }
+.veritas-read-table.pz-zebra tbody tr:nth-child(even) { background: #f9fafb; }
+.veritas-read-table.pz-zebra tbody tr:hover { background: #f3f4f6; }
+.veritas-read-table.pz-zebra tbody tr > td { border-bottom: 1px solid #f3f4f6; }

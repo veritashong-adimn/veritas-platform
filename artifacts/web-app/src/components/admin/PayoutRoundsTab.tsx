@@ -585,6 +585,13 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
             <span>{filterActive ? '실지급' : '총 실지급'} <b style={{ color: C.primaryText }}>{won(filteredTotals.netTotal)}원</b></span>
             {filterActive && <span style={{ ...TYPO.badge, color: C.primaryText, background: C.primaryBg, padding: '2px 8px', borderRadius: 6, fontWeight: 700 }}>필터 적용 중</span>}
           </div>
+          {/* 조회는 정상이나 지급 조건을 아직 채우지 못한 신규 플랫폼 미지급 수행건 — 0건의 이유 안내(판정·금액 변경 없음). 과거 CRM 건은 은행이체 대상 아님. */}
+          {!filterActive && (overviewInfo?.pending?.total ?? 0) > 0 && (
+            <div style={{ marginTop: 8, ...TYPO.helper, color: C.textSecondary }} data-testid="payout-overview-pending">
+              지급 조건 미충족(신규 플랫폼 미지급) <b>{overviewInfo.pending.total}건</b> — {overviewInfo.pending.byReason.map((b: any) => `${b.reason} ${b.count}건`).join(' · ')}
+              <span style={{ marginLeft: 6, color: C.g400 }}>조건을 채우면 지급대상에 자동 포함됩니다. 과거 CRM 지급건은 은행이체 대상이 아닙니다.</span>
+            </div>
+          )}
         </Card>
       )}
 
@@ -677,7 +684,7 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
                     <th style={{ ...th, textAlign: 'right' }}>세전</th><th style={th}>세금처리</th><th style={{ ...th, textAlign: 'right' }} title="조회된 개인 지급대상의 원천세율(확정 회차는 확정 당시 스냅샷 기준)">{deductionHeaderLabel(filteredSummary)}</th><th style={{ ...th, textAlign: 'right' }}>실지급</th>
                   </tr></thead>
                   <tbody>
-                    {filteredSummary.length === 0 && <tr><td colSpan={14} style={{ ...td, textAlign: 'center', color: C.g400, padding: 20 }}>{filterActive ? '조건에 맞는 지급대상이 없습니다.' : '수집된 지급대상이 없습니다.'}</td></tr>}
+                    {filteredSummary.length === 0 && <tr><td colSpan={14} style={{ ...td, textAlign: 'center', color: C.g400, padding: 20 }}>{filterActive ? '조건에 맞는 지급대상이 없습니다.' : (isOverview ? '현재 지급확정 대상이 없습니다.' : '수집된 지급대상이 없습니다.')}</td></tr>}
                     {/* 집계 전용 — 펼침 없음. 건별 근거·세부내역은 '건별 상세내역' 탭에서 확인(§1·§2). */}
                     {sumPg.paged.map((g) => (
                       <tr key={g.payeeKey} style={summaryRowBg(g) ? { background: summaryRowBg(g) } : undefined}>
@@ -745,7 +752,7 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
                     {showActions && <th style={th}>조치</th>}
                   </tr></thead>
                   <tbody>
-                    {itemRows.length === 0 && <tr><td colSpan={18 + (showActions ? 1 : 0) + (perItemMode ? 1 : 0)} style={{ ...td, textAlign: 'center', color: C.g400, padding: 20 }}>{filterActive ? '조건에 맞는 지급 건이 없습니다.' : (isOverview ? '지급대상이 없습니다.' : '수집된 지급대상이 없습니다.')}</td></tr>}
+                    {itemRows.length === 0 && <tr><td colSpan={18 + (showActions ? 1 : 0) + (perItemMode ? 1 : 0)} style={{ ...td, textAlign: 'center', color: C.g400, padding: 20 }}>{filterActive ? '조건에 맞는 지급 건이 없습니다.' : (isOverview ? '현재 지급확정 대상이 없습니다.' : '수집된 지급대상이 없습니다.')}</td></tr>}
                     {itemPg.paged.map((it: any) => (
                       <tr key={it.id} style={isItemPaid(it) ? { background: PAID_ROW_BG } : undefined}>
                         {/* [0] 건별 선택 체크박스(§건별) — 지급확정 회차에서만. 지급완료 건은 '완료' 표시(선택 불가). */}

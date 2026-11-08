@@ -6,9 +6,10 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { api } from '../../lib/constants';
 import { Pagination } from '../ui/Paginator';
-import { exportReproStatementExcel, exportReproStatementPdf } from '../../lib/payoutReproStatement';
+import { exportReproStatementExcel, exportReproStatementPdf, reproPayeeLanguages } from '../../lib/payoutReproStatement';
 import { DateField } from './DatePickerShared';
 import './readTableView.css';
+import { ConversionCell, ConversionRequestsPanel, type ConversionInfo } from './LegacyPayoutConversion';
 
 type DateBasis = 'delivery' | 'payout';
 type RoundRow = {
@@ -17,7 +18,9 @@ type RoundRow = {
   pretaxTotal: number; posttaxTotal: number; withholdingImplied: number; withholdingRecalc: number;
   paidTotal: number; unpaidTotal: number; needReviewCount: number; excludedCount: number;
   scheduledCount?: number; scheduledTotal?: number;
+  statusCounts?: StatusCounts;   // 지급상태 4분류 건수(지급완료·미지급·지급예정·확인필요, 합계 = 수행건수)
 };
+type StatusCounts = { paid: number; unpaid: number; scheduled: number; review: number };
 type DetailRow = {
   source: 'legacy' | 'current'; sourceKey: string; id: number;
   deliveryDate: string | null; payoutDate: string | null; client: string | null;
@@ -27,6 +30,8 @@ type DetailRow = {
   content: string | null; filename: string | null; pretax: number; posttax: number; withholdingImplied: number;
   status: 'paid' | 'scheduled' | 'pending' | 'deposit_unconfirmed' | 'excluded' | 'dup_suspect'; statusLabel: string; dupSuspect: boolean;
   paidBasis: string | null;
+  conversion?: ConversionInfo; conversionEligible?: boolean;
+  languageSource?: 'original' | 'master' | null; masterLanguages?: string | null;   // 명세서 상단 수행 언어(지급명세서 화면과 같은 규칙)   // 과거 CRM 지급 전환(은행이체) 요청·승인 상태 · 요청 가능 여부
 };
 type PayeeGroup = {
   masterKey: string; name: string; confirmed: boolean; matchStatus: string; matchedUserId: number | null;
@@ -97,6 +102,7 @@ export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (
     } catch (e: any) { onToast(e?.message || '통합 회차 조회 실패'); } finally { setLoading(false); }
   }, [token, pg.pageSize, basis, dateFrom, dateTo, translator, client, source, status]);
 
+  const [convKey, setConvKey] = useState(0);   // 전환 요청·승인 후 요청 패널·상세 재조회
   const loadDetail = useCallback(async (round: RoundRow) => {
     setSel(round); setDetailLoading(true); setSelPayee(null); setDetail([]); setPayees([]); // 회차 변경 시 이전 선택·상세 초기화(§6-12)
     try {
@@ -122,16 +128,20 @@ export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (
   // 지급명세서 출력 버튼 — 텍스트 버튼(§3), 같은 행 내 크기·높이 통일.
   const stmtBtn: React.CSSProperties = { minWidth: 58, padding: '5px 12px', borderRadius: 6, fontSize: 12, fontWeight: 700, border: '1px solid #cbd5e1', background: '#fff', color: '#334155', cursor: 'pointer', lineHeight: 1.2 };
 
+  // 지급상태 4분류 건수 — 서버 statusCounts(구버전 응답이면 기존 필드로 대체).
+  const sc = (r: { statusCounts?: StatusCounts; scheduledCount?: number; needReviewCount?: number }): StatusCounts =>
+    r.statusCounts ?? { paid: 0, unpaid: 0, scheduled: num(r.scheduledCount), review: num(r.needReviewCount) };
+  const cntSub = (color: string, n: number): React.CSSProperties => ({ fontSize: 11, fontWeight: 600, marginTop: 1, color: n > 0 ? color : '#cbd5e1' });
   // §4 — '실지급액'(전체 세후)과 '지급완료'(지급완료 건 세전)는 기준이 달라 값이 다르다. 라벨에 기준 명시(계산 로직 불변).
   const summaryList: [string, string, string?][] = sel && totals ? [
     ['지급대상 인원', `${num(totals.payeeCount)}명`], ['수행건수', `${num(totals.assignmentCount)}건`],
     ['세전금액', `${won(totals.pretaxTotal)}원`, '전체 건 세전 합계'],
     ['원천세공제(3.3%)', `${won(totals.withholdingImpliedTotal)}원`, '원본 세전−세후(실제 공제) 합계 · 3.3%는 참고'],
     ['실지급액(세후)', `${won(totals.posttaxTotal)}원`, '전체 건 세후(실지급) 합계 = 세전 − 원천세공제'],
-    ['지급완료(세전)', `${won(totals.paidTotal)}원`, '지급완료 건의 세전 합계 — 과거 CRM: 납품일 ≤ 2026-09-15(대표 확인) 또는 지급일 경과(별도 지급파일 처리분) · 신규: 지급회차 지급완료 처리 건(전체 세후와 기준이 다름)'],
-    ['미지급(세전)', `${won(totals.unpaidTotal)}원`, '신규 미지급 건의 세전 합계'],
-    ['지급예정', `${num(totals.scheduledCount)}건`, '과거 CRM 지급일이 오늘 이후이고 지급확정 기록이 없는 건'],
-    ['지급확인 필요', `${num(totals.needReviewCount)}건`, '지급일이 지났거나 미상인데 지급확정 기록이 없는 과거 CRM 건 · 입금일/입금내역(고객 수금)은 지급 근거가 아님. 대표 확인 대상.'],
+    ['지급완료(세전)', `${won(totals.paidTotal)}원 · ${num(sc(totals).paid)}건`, '지급완료 건의 세전 합계 — 과거 CRM: 납품일 ≤ 2026-09-15(대표 확인) 또는 지급일 경과(별도 지급파일 처리분) · 신규: 지급회차 지급완료 처리 건(전체 세후와 기준이 다름)'],
+    ['미지급(세전)', `${won(totals.unpaidTotal)}원 · ${num(sc(totals).unpaid)}건`, '금액 = 신규 미지급 건의 세전 합계 · 건수 = 지급예정일이 지났는데 지급완료되지 않은 신규 건(지급보류·확인필요 제외)'],
+    ['지급예정', `${num(sc(totals).scheduled)}건`, '지급일(지급예정일)이 아직 오지 않은 미완료 건 — 과거 CRM·신규 플랫폼'],
+    ['지급확인 필요', `${num(sc(totals).review)}건`, '지급일·지급완료 근거가 불명확한 건(과거 CRM 지급일 없음 · 신규 지급보류·지급일 없음 · 중복 의심). 기록을 보정하지 않고 별도 집계.'],
   ] : [];
 
   // 선택한 통번역사의 상세만 표시(§6). null=미선택(숨김) · '__all__'=전체 건별.
@@ -145,7 +155,7 @@ export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (
   const stmtFor = (g: PayeeGroup) => {
     const rows = detail.filter(r => r.masterKey === g.masterKey);
     const payDate = rows.find(r => r.payoutDate)?.payoutDate ?? (sel?.payoutDate ?? '-');
-    return { payeeName: g.name, email: g.email, phone: g.phone ?? pickPhone(rows), scopeValue: `${sel?.payoutDate ?? '지급일 미확인'} 지급`, payDate,
+    return { payeeName: g.name, payeeLanguages: reproPayeeLanguages(rows), email: g.email, phone: g.phone ?? pickPhone(rows), scopeValue: `${sel?.payoutDate ?? '지급일 미확인'} 지급`, payDate,
       rows: rows.map(r => ({ client: r.client, filename: r.filename, deliveryDate: r.deliveryDate, payoutDate: r.payoutDate, content: r.content, pretax: r.pretax, posttax: r.posttax })) };
   };
 
@@ -179,11 +189,14 @@ export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (
         </div>
       )}
 
+      {/* 과거 CRM 지급 전환 승인 요청(있을 때만) — 관리자 승인·반려 */}
+      <ConversionRequestsPanel token={token} onToast={onToast} reloadKey={convKey} onChanged={() => { if (sel) loadDetail(sel); }} />
+
       {/* ① 지급회차 목록 — 페이지당 건수만큼 자연 확장(내부 세로 스크롤 없음, 페이지 전체 스크롤) */}
       <div style={secTitle}>① 지급회차 목록 <span style={{ fontSize: 11, fontWeight: 600, color: '#9ca3af' }}>· 행 클릭 → 통번역사별 지급내역</span></div>
       <div style={roundsBox}>
-        <table className="veritas-read-table vz-sticky" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-          <thead><tr>{['지급일(회차)', '수행건수', '출처(과거/신규)', '세전금액', '원천세공제', '지급완료', '미지급', '지급예정', '지급확인'].map(h => <th key={h} style={{ padding: '8px 12px', textAlign: h.includes('금액') || h.includes('완료') || h.includes('미지급') || h.includes('공제') ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>)}</tr></thead>
+        <table className="veritas-read-table vz-sticky pz-zebra" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <thead><tr>{['지급일(회차)', '수행건수', '출처(과거/신규)', '세전금액', '원천세공제', '지급완료', '미지급', '지급예정', '지급확인'].map(h => <th key={h} style={{ padding: '8px 12px', textAlign: h.includes('금액') || h.includes('완료') || h.includes('미지급') || h.includes('공제') || h === '지급예정' || h === '지급확인' ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>)}</tr></thead>
           <tbody>
             {rounds.map((r, i) => (
               <tr key={(r.payoutDate ?? 'none') + i} data-testid={`pu-round-${r.payoutDate ?? 'none'}`} onClick={() => loadDetail(r)}
@@ -193,10 +206,11 @@ export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (
                 <td style={td}><span style={{ color: '#6d28d9', fontWeight: 600 }}>{r.legacyCount}</span> / <span style={{ color: '#047857', fontWeight: 600 }}>{r.currentCount}</span></td>
                 <td style={tdR}>{won(r.pretaxTotal)}</td>
                 <td style={{ ...tdR, color: '#6b7280' }}>{won(r.withholdingImplied)}</td>
-                <td style={{ ...tdR, color: '#1d4ed8' }}>{won(r.paidTotal)}</td>
-                <td style={{ ...tdR, color: r.unpaidTotal > 0 ? '#b45309' : '#9ca3af' }}>{won(r.unpaidTotal)}</td>
-                <td style={{ ...tdR, color: num(r.scheduledCount) > 0 ? '#047857' : '#9ca3af' }} data-testid={`pu-round-scheduled-${r.payoutDate ?? 'none'}`}>{num(r.scheduledCount).toLocaleString()}건</td>
-                <td style={{ ...tdR, color: r.needReviewCount > 0 ? '#92400e' : '#9ca3af' }} data-testid={`pu-round-review-${r.payoutDate ?? 'none'}`}>{r.needReviewCount.toLocaleString()}건</td>
+                {/* 금액 아래 작은 글씨 = 지급상태 4분류 건수(지급완료 파랑·미지급 주황·지급예정 녹색). 금액은 기존 값 그대로. */}
+                <td style={{ ...tdR, color: '#1d4ed8' }}>{won(r.paidTotal)}<div style={cntSub('#1d4ed8', sc(r).paid)} data-testid={`pu-round-paidcnt-${r.payoutDate ?? 'none'}`}>{sc(r).paid.toLocaleString()}건</div></td>
+                <td style={{ ...tdR, color: r.unpaidTotal > 0 ? '#b45309' : '#9ca3af' }}>{won(r.unpaidTotal)}<div style={cntSub('#c2410c', sc(r).unpaid)} data-testid={`pu-round-unpaidcnt-${r.payoutDate ?? 'none'}`}>{sc(r).unpaid.toLocaleString()}건</div></td>
+                <td style={{ ...tdR, color: sc(r).scheduled > 0 ? '#047857' : '#9ca3af' }} data-testid={`pu-round-scheduled-${r.payoutDate ?? 'none'}`}>{sc(r).scheduled.toLocaleString()}건</td>
+                <td style={{ ...tdR, color: sc(r).review > 0 ? '#92400e' : '#9ca3af' }} data-testid={`pu-round-review-${r.payoutDate ?? 'none'}`}>{sc(r).review.toLocaleString()}건</td>
               </tr>
             ))}
             {rounds.length === 0 && !loading && <tr><td colSpan={9} style={{ padding: 28, textAlign: 'center', color: '#9ca3af' }}>조회된 회차가 없습니다.</td></tr>}
@@ -287,7 +301,7 @@ export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (
               {/* 내부 세로 스크롤 제거 — 건수만큼 자연 확장, 가로 부족 시에만 가로 스크롤. 헤더는 페이지 스크롤에 sticky. */}
               <div style={{ overflowX: 'auto', overflowY: 'visible', border: '1px solid #e5e7eb', borderRadius: 10 }}>
                 <table className="veritas-read-table vz-sticky pr-detail-zebra" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                  <thead><tr>{['거래처', '통번역사', '주민번호', '언어', '상품/업무', '상세내역', '납품일', '지급일', '세전지급액', '세후지급액', '원천세공제액', '지급상태'].map(h => <th key={h} style={{ padding: '9px 12px', textAlign: h.includes('액') ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>)}</tr></thead>
+                  <thead><tr>{['거래처', '통번역사', '주민번호', '언어', '상품/업무', '상세내역', '납품일', '지급일', '세전지급액', '세후지급액', '원천세공제액', '지급상태', '지급 전환'].map(h => <th key={h} style={{ padding: '9px 12px', textAlign: h.includes('액') ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>)}</tr></thead>
                   <tbody>
                     {detailRows.map((p, i) => {
                       const sm = STATUS_META[p.status] ?? STATUS_META.deposit_unconfirmed;
@@ -308,10 +322,14 @@ export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (
                           <td style={tdR}>{won(p.posttax)}</td>
                           <td style={{ ...tdR, color: '#dc2626' }}>{won(p.withholdingImplied)}</td>
                           <td style={td}><span style={{ padding: '2px 8px', borderRadius: 10, background: sm.bg, color: sm.fg, fontSize: 12, fontWeight: 700, cursor: p.paidBasis ? 'help' : undefined }} title={p.paidBasis ? `지급완료 근거: ${p.paidBasis}` : undefined} data-testid={`pu-detail-status-${i}`} aria-label={`지급상태 ${sm.label}`}>{sm.label}</span></td>
+                          <td style={td} data-testid={`pu-detail-conv-${i}`}>{p.source === 'legacy'
+                            ? <ConversionCell token={token} rowId={p.id} conversion={p.conversion ?? null} eligible={!!p.conversionEligible} onToast={onToast}
+                                onChanged={() => { setConvKey(k => k + 1); if (sel) loadDetail(sel); }} />
+                            : <span style={{ color: '#d1d5db' }}>-</span>}</td>
                         </tr>
                       );
                     })}
-                    {detailRows.length === 0 && !detailLoading && <tr><td colSpan={12} style={{ padding: 24, textAlign: 'center', color: '#9ca3af' }}>상세 내역이 없습니다.</td></tr>}
+                    {detailRows.length === 0 && !detailLoading && <tr><td colSpan={13} style={{ padding: 24, textAlign: 'center', color: '#9ca3af' }}>상세 내역이 없습니다.</td></tr>}
                   </tbody>
                 </table>
               </div>

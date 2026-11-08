@@ -12,7 +12,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../../lib/constants';
 import { Pagination } from '../ui/Paginator';
 import { DateField } from './DatePickerShared';
-import { exportReproStatementExcel, exportReproStatementPdf, type ReproStmtOpts } from '../../lib/payoutReproStatement';
+import { exportReproStatementExcel, exportReproStatementPdf, reproPayeeLanguages, type ReproStmtOpts } from '../../lib/payoutReproStatement';
 import { exportDataset, todayStamp } from '../../lib/excelExport';
 import './readTableView.css';
 
@@ -20,7 +20,7 @@ type Status = 'paid' | 'scheduled' | 'pending' | 'deposit_unconfirmed' | 'exclud
 type Item = {
   source: 'legacy' | 'current'; sourceKey: string; id: number;
   deliveryDate: string | null; payoutDate: string | null; client: string | null; translator: string | null;
-  language: string | null; masterEmail: string | null; masterPhone: string | null; originalPhone: string | null;
+  language: string | null; languageSource?: 'original' | 'master' | null; masterLanguages?: string | null; masterEmail: string | null; masterPhone: string | null; originalPhone: string | null;
   matchStatus: string; matchedUserId: number | null; masterKey: string; confirmed: boolean;
   content: string | null; filename: string | null; pretax: number; posttax: number; withholdingImplied: number;
   withholdingTax?: number | null;   // 신규: 저장 원천세 / 과거 CRM: null(세전−세후만 존재 → 전액 원천징수로 표시, 분리 추정 안 함)
@@ -69,8 +69,9 @@ function pickPhone(rows: Item[]): string | null {
 
 /** 지급완료 건만 정식 명세서에 담는다(미지급·예정·확인필요 건을 지급완료 명세서로 출력하지 않음). */
 function stmtOpts(s: Stmt): ReproStmtOpts {
+  // 상단 수행 언어 — 지급회차관리 PDF 와 같은 공용 규칙(reproPayeeLanguages). 명세서 대상(지급완료) 건 기준.
   return {
-    payeeName: s.name, email: s.email, phone: s.phone, scopeValue: roundLabel(s.payoutDate), payDate: s.payoutDate ?? '-',
+    payeeName: s.name, payeeLanguages: reproPayeeLanguages(s.paidItems), email: s.email, phone: s.phone, scopeValue: roundLabel(s.payoutDate), payDate: s.payoutDate ?? '-',
     rows: s.paidItems.map(r => ({ client: r.client, filename: r.filename, deliveryDate: r.deliveryDate, payoutDate: r.payoutDate, content: r.content, pretax: r.pretax, posttax: r.posttax })),
   };
 }
@@ -245,7 +246,7 @@ export function PayoutStatementSearchTab({ token, onToast }: { token: string; on
             </div>
           )}
           <div style={{ overflowX: 'auto', border: '1px solid #e5e7eb', borderRadius: 10 }}>
-            <table className="veritas-read-table vz-sticky" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <table className="veritas-read-table vz-sticky pz-zebra" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead><tr>
                 <th style={th}>통번역사</th><th style={th}>이메일</th><th style={th}>지급일(회차)</th><th style={thR}>수행건수</th>
                 <th style={thR}>세전금액</th><th style={thR} title="과거 CRM은 원본 세전−세후 전액">원천징수액</th><th style={thR}>기타 공제액</th><th style={thR}>실지급금액</th><th style={th}>지급상태</th><th style={thR}>명세서 출력</th>

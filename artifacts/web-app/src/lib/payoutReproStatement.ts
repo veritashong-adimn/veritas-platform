@@ -7,7 +7,15 @@
 //  · '구분'·'수행일' 열은 제거(원본에 분해값 없음). 작업량/단가/기타비용/차감 분해도 없어 '-'/0으로 둔다.
 //    (세전=통번역료로 간주, 기타비용·차감=0, 공제=원본 세전-세후, 실지급=세후)
 import { downloadStatementExcel, todayStamp, type ExcelCell, type ExcelColumn } from './payoutExcel';
-import { printPayoutStatementPdf, type PayoutStatementPdfRow } from './payoutStatementPdf';
+import { printPayoutStatementPdf, payeeLanguageLabel, type PayoutStatementPdfRow } from './payoutStatementPdf';
+
+/** 명세서 상단 수행 언어(지급명세서·지급회차관리 공용) — 통번역사 Master 가능언어(확정 연결 건) 우선,
+ *  없으면 명세서에 담긴 건들의 원본 수행 언어(Master 대체값 제외). 중복 제거, 없으면 null(이름만 표시). */
+export function reproPayeeLanguages(items: { masterLanguages?: string | null; language?: string | null; languageSource?: string | null }[]): string | null {
+  const master = items.map(r => r.masterLanguages).find(Boolean) ?? null;
+  const performed = items.map(r => (r.languageSource === 'master' ? null : r.language ?? null));
+  return payeeLanguageLabel(master, performed);
+}
 
 export interface ReproStmtRow {
   client: string | null;    // 과거 CRM 원본 거래처명(없으면 '거래처 확인 필요')
@@ -20,6 +28,7 @@ export interface ReproStmtRow {
 }
 export interface ReproStmtOpts {
   payeeName: string;
+  payeeLanguages?: string | null;   // 지급명세서 상단 수행 언어(payeeLanguageLabel 결과). 없으면 이름만.
   email?: string | null;
   phone?: string | null;    // 연락처(휴대폰) — Master 등록 우선, 없으면 원본 CRM 연락처(§3). 없으면 '-'.
   scopeValue: string;       // 지급회차 라벨(예: "2026-09-15 지급")
@@ -98,7 +107,7 @@ export function exportReproStatementPdf(opts: ReproStmtOpts): boolean {
   return printPayoutStatementPdf({
     fileName: `지급명세서_${safe(opts.payeeName)}_${safe(opts.scopeValue)}`,
     issuedDate: `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`,
-    payeeName: opts.payeeName, email: opts.email || '-', phone: opts.phone || '-', payeeType: '통번역사',
+    payeeName: opts.payeeName, payeeLanguages: opts.payeeLanguages ?? null, email: opts.email || '-', phone: opts.phone || '-', payeeType: '통번역사',
     scopeFieldLabel: '지급회차', scopeValue: opts.scopeValue,
     payDate: opts.payDate || '-', taxDisplay: TAX_DISPLAY,
     count: opts.rows.length, rows: pdfRows,

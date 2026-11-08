@@ -1,5 +1,5 @@
 import React from 'react';
-import { ChevronLeft } from 'lucide-react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { C } from '../../lib/ds';
 
 /**
@@ -13,7 +13,7 @@ import { C } from '../../lib/ds';
  *   - 연한 회색 배경 + 테두리, Hover 시 브랜드 컬러 계열로 강조
  */
 export function BackToListButton({
-  onClick, label = '목록으로', testId = 'btn-back-to-list', style, variant = 'default',
+  onClick, label = '목록으로', testId = 'btn-back-to-list', style, variant = 'default', direction = 'back', ariaLabel,
 }: {
   onClick: () => void;
   label?: string;
@@ -22,6 +22,10 @@ export function BackToListButton({
   /** 'default' = 기존 g50 배경·Primary 계열 hover(견적/거래처 등 상세 공용, 변경 없음).
    *  'subtle'  = compact 흰색·얇은 neutral border·작은 chevron·아주 연한 회색 hover(강조 없음). */
   variant?: 'default' | 'subtle';
+  /** 'back'(기본) = 왼쪽 화살표 + 명칭 · 'forward' = 명칭 + 오른쪽 화살표(같은 디자인으로 앞 화면 이동). */
+  direction?: 'back' | 'forward';
+  /** 스크린리더 설명(기본 = label) */
+  ariaLabel?: string;
 }) {
   const subtle = variant === 'subtle';
   // subtle: 기본 배경(흰색). style.background 로 오버라이드 시 hover 복귀값도 그 값을 사용.
@@ -50,7 +54,7 @@ export function BackToListButton({
       type="button"
       onClick={onClick}
       data-testid={testId}
-      aria-label={label}
+      aria-label={ariaLabel ?? label}
       style={baseStyle}
       onMouseEnter={e => {
         if (subtle) {
@@ -69,10 +73,13 @@ export function BackToListButton({
         if (!subtle) e.currentTarget.style.color = C.textSecondary;
       }}
     >
-      {subtle
+      {direction === 'back' && (subtle
         ? <ChevronLeft size={17} strokeWidth={2.75} aria-hidden style={{ display: 'block', marginLeft: -3, flexShrink: 0 }} />
-        : <span aria-hidden style={{ fontSize: 15, lineHeight: 1 }}>←</span>}
+        : <span aria-hidden style={{ fontSize: 15, lineHeight: 1 }}>←</span>)}
       {label}
+      {direction === 'forward' && (subtle
+        ? <ChevronRight size={17} strokeWidth={2.75} aria-hidden style={{ display: 'block', marginRight: -3, flexShrink: 0 }} />
+        : <span aria-hidden style={{ fontSize: 15, lineHeight: 1 }}>→</span>)}
     </button>
   );
 }
