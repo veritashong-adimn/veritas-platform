@@ -8,6 +8,7 @@
 //  · 과거 지급 재현 엔진/탭(PayoutReproductionTab)은 삭제하지 않고 관리자 검증용으로 보존(라우팅만 비노출).
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useState } from 'react';
+import { BackToListButton } from './BackToListButton';
 import PayoutRoundsTab from './PayoutRoundsTab';
 import PayoutStatementTab from './PayoutStatementTab';
 import TaxReportTab from './TaxReportTab';
@@ -16,11 +17,13 @@ import { PayoutStatementSearchTab } from './PayoutStatementSearchTab';
 
 interface Props {
   view: 'payout' | 'statement' | 'tax';
+  /** 운영 지급확정·은행이체 화면 접근 권한(menu.payout_ops). 없으면 이동 버튼을 숨기고 통합 화면만 표시. */
+  canOps?: boolean;
   token: string;
   onToast: (m: string) => void;
 }
 
-export function SettlementTabs({ view, token, onToast }: Props) {
+export function SettlementTabs({ view, token, onToast, canOps = true }: Props) {
   // 지급회차 관리 화면: 통합 조회(기본) ↔ 운영 지급확정·이체(보조). 다른 view(명세서·세무)는 영향 없음.
   const [mode, setMode] = useState<'unified' | 'operational'>('unified');
   // 지급명세서: 통합 검색(기본 — 지급회차 관리와 같은 통합 지급자료) ↔ 운영 지급회차 확정 스냅샷 명세서(기존 화면, 보조).
@@ -49,17 +52,14 @@ export function SettlementTabs({ view, token, onToast }: Props) {
   return (
     <div data-testid="settlement-payout-container">
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 4 }}>
-        <button
-          type="button"
-          aria-label={mode === 'unified' ? '운영 지급확정·은행이체 화면 열기' : '통합 지급회차관리로 돌아가기'}
-          data-testid="settlement-mode-toggle"
-          onClick={() => setMode(m => (m === 'unified' ? 'operational' : 'unified'))}
-          style={{ padding: '7px 14px', borderRadius: 8, fontSize: 13, fontWeight: 700, border: '1px solid #cbd5e1', background: '#fff', color: '#334155', cursor: 'pointer' }}
-        >
-          {mode === 'unified' ? '운영 지급확정·은행이체 →' : '← 통합 지급회차관리'}
-        </button>
+        {/* 페이지 이동 버튼 — 통번역사 상세 '뒤로가기'(BackToListButton subtle)와 같은 디자인. 앞으로 = 오른쪽 화살표, 돌아가기 = 왼쪽 화살표. */}
+        {!canOps ? null : mode === 'unified'
+          ? <BackToListButton variant="subtle" direction="forward" label="운영 지급확정·은행이체" ariaLabel="운영 지급확정·은행이체 화면 열기"
+              testId="settlement-mode-toggle" onClick={() => setMode('operational')} />
+          : <BackToListButton variant="subtle" label="통합 지급회차관리" ariaLabel="통합 지급회차관리로 돌아가기"
+              testId="settlement-mode-toggle" onClick={() => setMode('unified')} />}
       </div>
-      {mode === 'unified'
+      {mode === 'unified' || !canOps
         ? <PayoutUnifiedTab token={token} onToast={onToast} />
         : <PayoutRoundsTab token={token} onToast={onToast} />}
     </div>

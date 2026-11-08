@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { formatDisplayDate } from '../lib/dateFormat';
-import { ADMIN_NAV_GROUPS, ADMIN_PAGE_TITLE, STAFF_DEFAULT_PERMS, navItemVisible, navItemMatches } from '../config/adminNav';
+import { ADMIN_NAV_GROUPS, ADMIN_PAGE_TITLE, STAFF_DEFAULT_PERMS, navItemVisible, navItemMatches, findNavItem } from '../config/adminNav';
 import {
   api, User, AdminProject, AdminPayment, AdminTask, AdminSettlement, AdminUser,
   AdminCustomer, AdminContact, Company, Contact, Division, Product, ProductOption, BoardPost, TranslatorProfile,
@@ -60,6 +60,7 @@ import { LanguageServiceDataTab } from '../components/admin/LanguageServiceDataT
 import { InsightManagementTab } from '../components/admin/InsightManagementTab';
 import { InsightAnalyticsTab } from '../components/admin/InsightAnalyticsTab';
 import { SettlementTabs } from '../components/admin/SettlementTabs';
+import { RolePermissionGroups } from '../components/admin/RolePermissionGroups';
 import { SettingsTab } from '../components/admin/SettingsTab';
 import { BillingManagementTab } from '../components/admin/BillingManagementTab';
 import { CollectionsTab } from '../components/admin/CollectionsTab';
@@ -304,7 +305,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
   // ── RBAC role management state ──────────────────────────────
   type RbacRole = { id: number; name: string; description: string | null; isSystem: boolean; createdAt: string; permissionCount: number; permissions: string[] };
-  type RbacPerm = { key: string; name: string; category: "menu" | "action" };
+  type RbacPerm = { key: string; name: string; category: "menu" | "action"; group?: string; deprecated?: boolean; enforce?: "api" | "menu" | "none" };
   const [rbacRoles, setRbacRoles] = useState<RbacRole[]>([]);
   const [rbacAllPerms, setRbacAllPerms] = useState<RbacPerm[]>([]);
   const [rbacSelectedRole, setRbacSelectedRole] = useState<RbacRole | null>(null);
@@ -1021,6 +1022,15 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
   // 사이드바 대제목(그룹 안 1단계 메뉴) 공통 글자 굵기 — 하위 메뉴 유무와 무관하게 동일 적용
   const SIDEBAR_TOP_ITEM_FONT_WEIGHT = 700;
+  // 메뉴 접근권한 → 실제 페이지 접근에도 적용: 권한 없는 메뉴 화면(주소·복원 탭 등으로 진입)은 대시보드로 돌려보낸다.
+  //   (권한 목록을 아직 받지 못한 역할 사용자는 판정 보류 — 잘못된 차단 방지)
+  const tabBlocked = (() => { const it = findNavItem(adminTab); return !!it && !navItemVisible(it, hasPerm); })();
+  useEffect(() => {
+    if (!tabBlocked) return;
+    if (user.roleId && permissions.length === 0) return;
+    setToast("이 메뉴에 대한 접근 권한이 없습니다.");
+    setAdminTab("dashboard");
+  }, [tabBlocked, permissions.length]); // eslint-disable-line react-hooks/exhaustive-deps
   const SIDEBAR_GROUPS = ADMIN_NAV_GROUPS.map(group => ({
     ...group,
     items: group.items
@@ -1755,6 +1765,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       {(adminTab === "settlements" || adminTab === "settlement-statement" || adminTab === "settlement-tax") && (
         <SettlementTabs
           view={adminTab === "settlement-statement" ? "statement" : adminTab === "settlement-tax" ? "tax" : "payout"}
+          canOps={hasPerm("menu.payout_ops")}
           token={token ?? ""}
           onToast={setToast}
         />
@@ -3319,63 +3330,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                       {rbacSaving ? "저장 중..." : "권한 저장"}
                     </button>
                   </div>
-                  <div style={{ padding: 20 }}>
-                    {/* 메뉴 권한 */}
-                    <div style={{ marginBottom: 24 }}>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                        <h4 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "#374151" }}>메뉴 접근 권한</h4>
-                        <div style={{ display: "flex", gap: 6 }}>
-                          <button onClick={() => {
-                            const menuKeys = rbacAllPerms.filter(p => p.category === "menu").map(p => p.key);
-                            setRbacRolePerms(prev => { const n = new Set(prev); menuKeys.forEach(k => n.add(k)); return n; });
-                          }} style={{ padding: "3px 10px", fontSize: 11, fontWeight: 600, border: "1px solid #d1d5db", borderRadius: 6, background: "#f9fafb", cursor: "pointer", color: "#374151" }}>전체 선택</button>
-                          <button onClick={() => {
-                            const menuKeys = new Set(rbacAllPerms.filter(p => p.category === "menu").map(p => p.key));
-                            setRbacRolePerms(prev => { const n = new Set(prev); menuKeys.forEach(k => n.delete(k)); return n; });
-                          }} style={{ padding: "3px 10px", fontSize: 11, fontWeight: 600, border: "1px solid #d1d5db", borderRadius: 6, background: "#f9fafb", cursor: "pointer", color: "#374151" }}>전체 해제</button>
-                        </div>
-                      </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 8 }}>
-                        {rbacAllPerms.filter(p => p.category === "menu").map(p => (
-                          <label key={p.key} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", border: `1px solid ${rbacRolePerms.has(p.key) ? "#3b82f6" : "#e5e7eb"}`, borderRadius: 8, cursor: "pointer", background: rbacRolePerms.has(p.key) ? "#eff6ff" : "#fff", transition: "all 0.1s" }}>
-                            <input type="checkbox" checked={rbacRolePerms.has(p.key)} onChange={e => {
-                              setRbacRolePerms(prev => { const n = new Set(prev); e.target.checked ? n.add(p.key) : n.delete(p.key); return n; });
-                            }} style={{ width: 15, height: 15, cursor: "pointer" }} />
-                            <span style={{ fontSize: 13, fontWeight: rbacRolePerms.has(p.key) ? 600 : 400, color: rbacRolePerms.has(p.key) ? "#1d4ed8" : "#374151" }}>{p.name}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                    {/* 기능 권한 */}
-                    <div>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                        <h4 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "#374151" }}>기능 실행 권한</h4>
-                        <div style={{ display: "flex", gap: 6 }}>
-                          <button onClick={() => {
-                            const actionKeys = rbacAllPerms.filter(p => p.category === "action").map(p => p.key);
-                            setRbacRolePerms(prev => { const n = new Set(prev); actionKeys.forEach(k => n.add(k)); return n; });
-                          }} style={{ padding: "3px 10px", fontSize: 11, fontWeight: 600, border: "1px solid #d1d5db", borderRadius: 6, background: "#f9fafb", cursor: "pointer", color: "#374151" }}>전체 선택</button>
-                          <button onClick={() => {
-                            const actionKeys = new Set(rbacAllPerms.filter(p => p.category === "action").map(p => p.key));
-                            setRbacRolePerms(prev => { const n = new Set(prev); actionKeys.forEach(k => n.delete(k)); return n; });
-                          }} style={{ padding: "3px 10px", fontSize: 11, fontWeight: 600, border: "1px solid #d1d5db", borderRadius: 6, background: "#f9fafb", cursor: "pointer", color: "#374151" }}>전체 해제</button>
-                        </div>
-                      </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 8 }}>
-                        {rbacAllPerms.filter(p => p.category === "action").map(p => (
-                          <label key={p.key} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", border: `1px solid ${rbacRolePerms.has(p.key) ? "#10b981" : "#e5e7eb"}`, borderRadius: 8, cursor: "pointer", background: rbacRolePerms.has(p.key) ? "#f0fdf4" : "#fff", transition: "all 0.1s" }}>
-                            <input type="checkbox" checked={rbacRolePerms.has(p.key)} onChange={e => {
-                              setRbacRolePerms(prev => { const n = new Set(prev); e.target.checked ? n.add(p.key) : n.delete(p.key); return n; });
-                            }} style={{ width: 15, height: 15, cursor: "pointer" }} />
-                            <div>
-                              <p style={{ margin: 0, fontSize: 12, fontWeight: rbacRolePerms.has(p.key) ? 600 : 400, color: rbacRolePerms.has(p.key) ? "#065f46" : "#374151" }}>{p.name}</p>
-                              <p style={{ margin: 0, fontSize: 10, color: "#9ca3af" }}>{p.key}</p>
-                            </div>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
+                  {/* 권한 설정 — 사이드메뉴 업무 영역별(접기·펼치기) · 메뉴 접근권한/기능 실행권한 구분 · 미사용 권한 숨김 */}
+                  <RolePermissionGroups perms={rbacAllPerms} selected={rbacRolePerms} onChange={setRbacRolePerms} />
                 </Card>
               ) : (
                 <Card style={{ padding: "48px 24px", textAlign: "center" }}>

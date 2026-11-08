@@ -36,6 +36,8 @@ export type NavGroup = {
  */
 export const STAFF_DEFAULT_PERMS: string[] = [
   "menu.project",
+  // (2026-11-08 권한 현행화) menu.project 로 함께 노출되던 의뢰접수·견적관리, 권한 없이 노출되던 휴지통 — 기존 노출 범위 유지
+  "menu.inquiry", "menu.quote", "menu.trash",
   "menu.company",
   "menu.contact",
   "menu.customer",
@@ -80,15 +82,15 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
     perm: "menu.project",
     items: [
       // 의뢰건 접수(pre-sales): 견적 이전 단계. 견적관리보다 위에 배치.
-      { id: "inquiry-catalog", label: "의뢰건 접수", icon: "📥", perm: "menu.project", children: [
-        { id: "inquiries",        label: "의뢰건 목록", icon: "📥", perm: "menu.project" },
-        { id: "inquiry-register", label: "의뢰건 등록", icon: "➕", perm: "menu.project" },
+      { id: "inquiry-catalog", label: "의뢰건 접수", icon: "📥", perm: "menu.inquiry", children: [
+        { id: "inquiries",        label: "의뢰건 목록", icon: "📥", perm: "menu.inquiry" },
+        { id: "inquiry-register", label: "의뢰건 등록", icon: "➕", perm: "menu.inquiry" },
       ] },
       // 견적 ERP 마스터: 목록 / 등록. 부모는 펼침 전용.
       //  · 개별 휴지통 메뉴는 사이드바 하단 「통합 휴지통」으로 일원화(진입점 제거). 내부 view='trash'·API는 유지.
-      { id: "quotes-catalog", label: "견적관리", icon: "📄", perm: "menu.project", children: [
-        { id: "quotes",         label: "견적서 목록", icon: "📄", perm: "menu.project" },
-        { id: "quote-register", label: "견적서 등록", icon: "➕", perm: "menu.project" },
+      { id: "quotes-catalog", label: "견적관리", icon: "📄", perm: "menu.quote", children: [
+        { id: "quotes",         label: "견적서 목록", icon: "📄", perm: "menu.quote" },
+        { id: "quote-register", label: "견적서 등록", icon: "➕", perm: "menu.quote" },
       ] },
       { id: "projects", label: "판매관리", icon: "📋", perm: "menu.project" },
     ],
@@ -122,18 +124,18 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
     perm: "menu.payment",
     items: [
       // [지급] 정산 — 회사 → 통번역사/외주 지급.
-      { id: "settlement-catalog", label: "정산", icon: "📊", perm: "menu.settlement", children: [
-        { id: "settlements",          label: "지급회차 관리",     icon: "📊", perm: "menu.settlement" },
-        { id: "settlement-statement", label: "지급명세서",        icon: "📄", perm: "menu.settlement" },
-        { id: "settlement-tax",       label: "세무자료",          icon: "🧾", perm: "menu.settlement" },
+      { id: "settlement-catalog", label: "정산", icon: "📊", permAny: ["menu.payout", "menu.payout_statement", "menu.tax_report"], children: [
+        { id: "settlements",          label: "지급회차 관리",     icon: "📊", perm: "menu.payout" },
+        { id: "settlement-statement", label: "지급명세서",        icon: "📄", perm: "menu.payout_statement" },
+        { id: "settlement-tax",       label: "세무자료",          icon: "🧾", perm: "menu.tax_report" },
         // 「과거 지급 재현(검증)」은 별도 사이드바 항목이 아니라 '지급회차 관리' 화면의 상단 하위탭으로 통합(§3).
       ] },
       // [수입] 수금관리 — 고객/거래처 → 회사 수금. 하위 화면의 기존 id·route·API·DB 는 그대로 재사용(위치만 이동).
       //  · 그룹은 perm 미지정(항상 통과) → 하위 각 항목의 개별 perm 으로 노출 제어 → 기존 접근권한 보존.
       { id: "revenue-catalog", label: "수금관리", icon: "💵", children: [
         { id: "payments",  label: "수금 현황",   icon: "💳", perm: "menu.payment" },
-        { id: "billing",   label: "누적 청구",   icon: "📑", perm: "menu.settlement" },
-        { id: "prepaid",   label: "선입금 관리", icon: "💰", perm: "menu.settlement" },
+        { id: "billing",   label: "누적 청구",   icon: "📑", perm: "menu.billing" },
+        { id: "prepaid",   label: "선입금 관리", icon: "💰", perm: "menu.prepaid" },
       ] },
     ],
   },
@@ -143,11 +145,11 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
     accentColor: "#0ea5e9",
     perm: "menu.user",
     items: [
-      { id: "legacy-crm-archive", label: "과거 CRM 자료",      icon: "🗂️", perm: "menu.user" },
-      { id: "data-layer",         label: "번역 데이터",        icon: "🗃️", perm: "menu.user" },
-      { id: "language-service",   label: "언어 서비스 데이터",  icon: "📊", perm: "menu.user" },
-      { id: "insight-management", label: "인사이트 관리",       icon: "💡", perm: "menu.user" },
-      { id: "insight-analytics",  label: "인사이트 성과분석",   icon: "📈", perm: "menu.user" },
+      { id: "legacy-crm-archive", label: "과거 CRM 자료",      icon: "🗂️", perm: "menu.data" },
+      { id: "data-layer",         label: "번역 데이터",        icon: "🗃️", perm: "menu.data" },
+      { id: "language-service",   label: "언어 서비스 데이터",  icon: "📊", perm: "menu.data" },
+      { id: "insight-management", label: "인사이트 관리",       icon: "💡", perm: "menu.data" },
+      { id: "insight-analytics",  label: "인사이트 성과분석",   icon: "📈", perm: "menu.data" },
       // 회사 자료보관함 — 하나의 통합 저장소를 3개 메뉴(전체 자료·자료 등록·자료 관리설정)로 이용. menu.archive 보유자에게만 노출.
       //  · 그룹(data) perm 은 사이드바 필터에 쓰이지 않으므로 기존 5개 항목의 노출 범위는 그대로다.
       //  · 세부 자료 권한은 서버(자료보관함 ACL)가 강제한다.
@@ -171,7 +173,7 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
       { id: "roles",    label: "역할관리",   icon: "🔑", perm: "menu.permission" },
       { id: "board",    label: "게시판",     icon: "📌", perm: "menu.board" },
       { id: "settings", label: "환경설정",   icon: "⚙️", perm: "menu.settings" },
-      { id: "test",     label: "운영 테스트", icon: "🧪", perm: "menu.user" },
+      { id: "test",     label: "운영 테스트", icon: "🧪", perm: "menu.test" },
     ],
   },
   {
@@ -182,7 +184,7 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
     label: "휴지통",
     accentColor: "#6b7280",
     items: [
-      { id: "trash", label: "휴지통", icon: "🗑" },
+      { id: "trash", label: "휴지통", icon: "🗑", perm: "menu.trash" },
     ],
   },
 ];
@@ -241,3 +243,13 @@ export const ADMIN_PAGE_TITLE: Record<string, string> = {
   "archive-approvals":    "회사 자료보관함 · 승인 관리",
   "archive-settings":     "회사 자료보관함 · 자료 관리설정",
 };
+
+/** 메뉴 항목(id = 화면 탭) 조회 — 페이지 접근 차단에 사용. 메뉴에 없는 화면(상세·하위 화면)은 undefined. */
+export function findNavItem(id: string): NavItem | undefined {
+  const walk = (items: NavItem[]): NavItem | undefined => {
+    for (const it of items) { if (it.id === id) return it; const c = it.children ? walk(it.children) : undefined; if (c) return c; }
+    return undefined;
+  };
+  for (const g of ADMIN_NAV_GROUPS) { const f = walk(g.items); if (f) return f; }
+  return undefined;
+}
