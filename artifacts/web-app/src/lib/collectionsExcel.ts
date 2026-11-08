@@ -18,9 +18,11 @@ export interface CollectionExportRow {
   expectedDate: string | null;
   lastPaidDate: string | null;
   amount: number;
-  paidAmount: number;
-  receivable: number;
-  status: 'scheduled' | 'partial' | 'completed';
+  paidAmount: number | null;         // 과거 CRM '확인 필요' → null(blank)
+  receivable: number | null;
+  status: 'scheduled' | 'partial' | 'completed' | 'review';
+  source?: 'current' | 'legacy';
+  reviewReason?: string | null;
   overdue: boolean;
   bankAccount: string | null;
   foreign: { currency: string; foreignAmount: number }[];
@@ -30,7 +32,7 @@ export interface CollectionExportRow {
 
 // 입금상태 라벨 — 수금현황 화면(STATUS_META)과 동일. 미지 값은 원본 그대로.
 const STATUS_LABEL: Record<string, string> = {
-  scheduled: '입금예정', partial: '부분입금', completed: '입금완료',
+  scheduled: '입금예정', partial: '부분입금', completed: '입금완료', review: '확인 필요',
 };
 const statusLabel = (r: CollectionExportRow) => {
   const base = STATUS_LABEL[r.status] ?? r.status;
@@ -67,6 +69,9 @@ const COLLECTION_COLUMNS: ExcelColumn<CollectionExportRow>[] = [
   { header: '외화입금액', value: fxAmount, type: 'number' },
   { header: '담당PM', value: (r) => r.pmName ?? '' },
   { header: '비고', value: (r) => r.note ?? '' },
+  // 과거 CRM 통합 — 기존 열 뒤에 추가
+  { header: '자료 출처', value: (r) => (r.source === 'legacy' ? '과거 CRM' : '신규 판매') },
+  { header: '확인 사유', value: (r) => r.reviewReason ?? '' },
 ];
 
 /** 수금현황 Excel 다운로드 — 현재 검색/필터에 매칭되는 전체 청구행(현재 화면 rows). */

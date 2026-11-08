@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { formatDisplayDate } from '../lib/dateFormat';
-import { ADMIN_NAV_GROUPS, ADMIN_PAGE_TITLE, STAFF_DEFAULT_PERMS } from '../config/adminNav';
+import { ADMIN_NAV_GROUPS, ADMIN_PAGE_TITLE, STAFF_DEFAULT_PERMS, navItemVisible, navItemMatches } from '../config/adminNav';
 import {
   api, User, AdminProject, AdminPayment, AdminTask, AdminSettlement, AdminUser,
   AdminCustomer, AdminContact, Company, Contact, Division, Product, ProductOption, BoardPost, TranslatorProfile,
@@ -891,7 +891,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           setOpenSections(prev => ({ ...prev, [g.key]: true }));
           return;
         }
-        if (item.children?.some(c => c.id === adminTab)) {
+        if (item.children?.some(c => navItemMatches(c, adminTab))) {
           setOpenSections(prev => ({ ...prev, [g.key]: true, [item.id]: true }));
           return;
         }
@@ -1019,12 +1019,14 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     borderBottom: "1px solid #edf0f3", verticalAlign: "middle",
   };
 
+  // 사이드바 대제목(그룹 안 1단계 메뉴) 공통 글자 굵기 — 하위 메뉴 유무와 무관하게 동일 적용
+  const SIDEBAR_TOP_ITEM_FONT_WEIGHT = 700;
   const SIDEBAR_GROUPS = ADMIN_NAV_GROUPS.map(group => ({
     ...group,
     items: group.items
-      .filter(item => hasPerm(item.perm))
+      .filter(item => navItemVisible(item, hasPerm))
       .map(item => item.children
-        ? { ...item, children: item.children.filter(c => hasPerm(c.perm)) }
+        ? { ...item, children: item.children.filter(c => navItemVisible(c, hasPerm)) }
         : item)
       .filter(item => !item.children || item.children.length > 0),
   })).filter(group => group.items.length > 0);
@@ -1142,7 +1144,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               const isOpen = group.isDashboard || openSections[group.key] !== false;
               // 필터 전 전체 아이템 기준으로 active 여부 판단 (perm 필터와 무관하게 일관성 보장)
               const rawGroup = ADMIN_NAV_GROUPS.find(g => g.key === group.key);
-              const hasActiveItem = (rawGroup ?? group).items.some(item => item.id === adminTab || item.children?.some(c => c.id === adminTab));
+              const hasActiveItem = (rawGroup ?? group).items.some(item => item.id === adminTab || item.children?.some(c => navItemMatches(c, adminTab)));
               return (
                 <div key={group.key} style={{ marginBottom: group.isDashboard ? 4 : 1 }}>
                   {/* 섹션 헤더 (대시보드 제외) */}
@@ -1181,7 +1183,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                   {isOpen && group.items.map(item => {
                     // ── 중첩 하위메뉴 부모 (예: 상품관리) — 페이지 아님, 펼침 전용 ──
                     if (item.children && item.children.length > 0) {
-                      const parentActive = item.children.some(c => c.id === adminTab);
+                      const parentActive = item.children.some(c => navItemMatches(c, adminTab));
                       const childOpen = openSections[item.id] !== false; // 기본 펼침
                       return (
                         <div key={item.id}>
@@ -1192,7 +1194,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                               width: "100%", padding: "9px 20px 9px 22px", border: "none", cursor: "pointer",
                               background: "transparent",
                               color: parentActive ? group.accentColor : "#d7dce4",
-                              fontSize: 13, fontWeight: 700,
+                              fontSize: 13, fontWeight: SIDEBAR_TOP_ITEM_FONT_WEIGHT,
                               textAlign: "left", whiteSpace: "nowrap",
                               borderRadius: 0, transition: "color 0.12s",
                             }}
@@ -1204,7 +1206,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                             <span style={{ fontSize: 8, color: parentActive ? group.accentColor : "#4a5568", display: "inline-block", transform: childOpen ? "rotate(90deg)" : "rotate(0deg)", transition: "transform 0.18s" }}>▶</span>
                           </button>
                           {childOpen && item.children.map(child => {
-                            const childActive = adminTab === child.id;
+                            const childActive = navItemMatches(child, adminTab);
                             return (
                               <button
                                 key={child.id}
@@ -1239,7 +1241,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                           width: "100%", padding: "9px 20px 9px 22px", border: "none", cursor: "pointer",
                           background: isActive ? group.accentColor : "transparent",
                           color: isActive ? "#fff" : "#c1c8d4",
-                          fontSize: 13, fontWeight: isActive ? 600 : 400,
+                          fontSize: 13, fontWeight: SIDEBAR_TOP_ITEM_FONT_WEIGHT,
                           textAlign: "left", whiteSpace: "nowrap",
                           borderRadius: 0, transition: "background 0.15s, color 0.12s",
                         }}
@@ -1709,6 +1711,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           token={token}
           onToast={setToast}
           onOpenSalesDetail={openSalesDetail}
+          onOpenLegacyDetail={openLegacyDetail}
         />
       )}
 

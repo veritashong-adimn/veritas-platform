@@ -9,11 +9,18 @@
 //      - 두 경로 금액을 절대 합산하지 않는다(한 청구행은 둘 중 하나의 기준만 사용).
 //  · 선입금/차감(b2c_prepaid·prepaid_deduction) 견적은 prepaid_ledger 별도 SSOT → 수금 현황에서 제외(§6).
 //    → 기존 재무 집계와 동일 기준(isPrepaidDeductionQuoteType / PREPAID_DEDUCTION_QUOTE_TYPES).
+//  · ?include=legacy — 과거 CRM 판매목록(legacy_archive_rows sales_list, is_effective) 판매번호 1건 = 1행 통합(읽기 전용).
+//      - 수금 판정은 과거 판매 전환과 같은 기준(parseDepositAmounts): 입금일 + 입금내역 금액합계 = 총액 → 입금완료,
+//        입금일·입금내역 모두 없음 → 입금예정(미수), 그 외 → '확인 필요'(review: 입금액·미수금 미확정, 상단 집계 제외).
+//      - 신규 판매로 전환된 판매번호(legacy_master_mappings old_crm/sale, rolled_back 제외)는 신규 청구행으로 집계되므로 제외(중복 방지).
+//      - 원본에 없는 입금예정일·결제방법·입금은행은 null(추정 없음). 원본 수정·청구회차 생성 없음.
+//    파라미터가 없으면 기존 응답(신규 청구행만) 그대로.
 // ─────────────────────────────────────────────────────────────────────────────
 import { Router, type IRouter } from "express";
 import { db, paymentTransactionsTable } from "@workspace/db";
 import { inArray, asc, sql } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
+import { parseDepositAmounts } from "../services/legacySaleActivation";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -176,24 +183,105 @@ router.get("/admin/collections", ...adminGuard, async (req, res) => {
       };
     });
 
-    // ── 상단 요약 — 조회 대상(선입/차감 제외) 청구행 합계. 매출 중복집계 없음(청구행별 1회). ──
-    const summary = {
-      count: out.length,
-      totalBilled: out.reduce((s, r) => s + r.amount, 0),
-      totalPaid: out.reduce((s, r) => s + r.paidAmount, 0),
-      totalReceivable: out.reduce((s, r) => s + r.receivable, 0),
-      completedCount: out.filter((r) => r.status === "completed").length,
-      partialCount: out.filter((r) => r.status === "partial").length,
-      scheduledCount: out.filter((r) => r.status === "scheduled").length,
-      receivableCount: out.filter((r) => r.receivable > 0).length,
-      overdueCount: out.filter((r) => r.overdue).length,
-    };
+    const includeLegacy = String(req.query.include ?? "") === "legacy";
+    const legacy = includeLegacy ? await loadLegacyCollections() : null;
+    const all: any[] = includeLegacy
+      ? [...out.map((r) => ({ ...r, source: "current", rowKey: `current:${r.id}`, legacyRowId: null })), ...legacy!.rows]
+      : out;
+    // 집계 대상 = 금액이 확정된 행(신규 전체 + 과거 입금완료·입금예정). '확인 필요'는 별도 집계.
+    const counted = all.filter((r) => r.status !== "review");
 
-    res.json({ summary, rows: out });
+    // ── 상단 요약 — 조회 대상(선입/차감 제외) 청구행 합계. 매출 중복집계 없음(청구행별 1회). ──
+    const summary: Record<string, unknown> = {
+      count: counted.length,
+      totalBilled: counted.reduce((s, r) => s + r.amount, 0),
+      totalPaid: counted.reduce((s, r) => s + r.paidAmount, 0),
+      totalReceivable: counted.reduce((s, r) => s + r.receivable, 0),
+      completedCount: counted.filter((r) => r.status === "completed").length,
+      partialCount: counted.filter((r) => r.status === "partial").length,
+      scheduledCount: counted.filter((r) => r.status === "scheduled").length,
+      receivableCount: counted.filter((r) => r.receivable > 0).length,
+      overdueCount: counted.filter((r) => r.overdue).length,
+    };
+    if (legacy) {
+      const review = all.filter((r) => r.status === "review");
+      summary.review = { count: review.length, totalAmount: review.reduce((s, r) => s + r.amount, 0) };
+      summary.sources = { current: out.length, legacy: legacy.rows.length, legacyLinkedExcluded: legacy.linkedExcluded };
+    }
+
+    res.json({ summary, rows: all });
   } catch (err) {
     req.log.error({ err }, "수금 현황 조회 실패");
     res.status(500).json({ error: "수금 현황 조회 중 오류가 발생했습니다." });
   }
 });
+
+// ── 과거 CRM 판매목록 → 수금 현황 행(읽기 전용) ─────────────────────────────────
+type LegacySaleRow = {
+  id: number; sale_no: string | null; total: string | null; deposit_date: string | null; deposit_memo: string | null;
+  invoice_date: string | null; client: string | null; product: string | null; opportunity: string | null; sales_rep: string | null;
+  sale_date: string | null;
+};
+async function loadLegacyCollections() {
+  const r = await db.execute<LegacySaleRow>(sql`
+    WITH linked AS (
+      SELECT DISTINCT btrim(legacy_id) AS sale_no FROM legacy_master_mappings
+      WHERE source_system = 'old_crm' AND entity_type = 'sale' AND status <> 'rolled_back'
+    ), src AS (
+      SELECT l.id,
+        nullif(btrim(l.source_raw->>'판매번호'), '') AS sale_no,
+        coalesce(l.total_amount::text, nullif(regexp_replace(coalesce(l.source_raw->>'총액',''), '[^0-9.-]', '', 'g'), '')) AS total,
+        coalesce(to_char(l.collection_date, 'YYYY-MM-DD'), substring(l.source_raw->>'입금일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}')) AS deposit_date,
+        nullif(btrim(l.source_raw->>'입금내역'), '') AS deposit_memo,
+        substring(l.source_raw->>'세금계산서발행(예정)일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') AS invoice_date,
+        nullif(btrim(l.source_raw->>'거래처명'), '') AS client,
+        nullif(btrim(l.source_raw->>'상품명'), '') AS product,
+        nullif(btrim(l.source_raw->>'영업기회명'), '') AS opportunity,
+        nullif(btrim(l.source_raw->>'영업담당자'), '') AS sales_rep,
+        coalesce(substring(l.source_raw->>'판매번호' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}'), to_char(l.record_date, 'YYYY-MM-DD')) AS sale_date
+      FROM legacy_archive_rows l
+      WHERE l.source_type = 'sales_list' AND l.is_effective = true
+    )
+    SELECT src.*, (src.sale_no IN (SELECT sale_no FROM linked)) AS linked FROM src`);
+  const all = r.rows as (LegacySaleRow & { linked: boolean })[];
+  const rows = all.filter((x) => !x.linked).map((x) => {
+    const amount = Number(x.total ?? 0) || 0;
+    const amounts = parseDepositAmounts(x.deposit_memo);
+    const parsedSum = amounts.reduce((s, n) => s + n, 0);
+    // 과거 판매 전환(legacySaleActivation)과 같은 수금 판정 — 새 해석 규칙 없음.
+    let status: "scheduled" | "completed" | "review"; let reviewReason: string | null = null;
+    if (amount <= 0) { status = "review"; reviewReason = "판매 총액 0 또는 없음"; }
+    else if (!x.deposit_date && !x.deposit_memo) status = "scheduled";                   // 원본 입금기록 없음(미수금)
+    else if (!x.deposit_date) { status = "review"; reviewReason = "입금일 없음"; }
+    else if (!amounts.length) { status = "review"; reviewReason = "입금내역에서 금액을 확인할 수 없음"; }
+    else if (parsedSum !== amount) { status = "review"; reviewReason = parsedSum < amount ? "입금합계 < 판매금액(부분입금 가능성)" : "입금합계 > 판매금액(일괄입금 등)"; }
+    else status = "completed";
+    const confirmed = status !== "review";
+    const paidAmount = status === "completed" ? amount : status === "scheduled" ? 0 : null;
+    return {
+      id: -x.id,                         // 신규 청구행 id 와 충돌 방지(음수) — 식별은 rowKey/legacyRowId 사용
+      rowKey: `legacy:${x.id}`, legacyRowId: x.id, source: "legacy",
+      projectId: null, sequence: 1,
+      quoteNumber: x.sale_no,            // 과거 CRM 판매번호
+      projectTitle: x.opportunity ?? x.product,
+      billingCompanyId: null, billingCompanyName: x.client,
+      paymentMethod: null,
+      issueDate: x.invoice_date,         // 원본 '세금계산서발행(예정)일'
+      expectedDate: null,                // 원본에 입금예정일 없음(추정 금지)
+      lastPaidDate: x.deposit_date,
+      amount,
+      paidAmount,                        // review → null(미확정)
+      receivable: confirmed ? Math.max(amount - (paidAmount ?? 0), 0) : null,
+      status, reviewReason, parsedDepositAmount: amounts.length ? parsedSum : null,
+      overdue: false,                    // 입금예정일 없음 → 기한경과 판정 불가
+      depositStatus: null, isLegacyFallback: false,
+      bankAccount: null, foreign: [],
+      pmName: x.sales_rep,
+      note: x.deposit_memo,              // 원본 입금내역(원문 그대로)
+      saleDate: x.sale_date,
+    };
+  });
+  return { rows, linkedExcluded: all.length - rows.length };
+}
 
 export default router;
