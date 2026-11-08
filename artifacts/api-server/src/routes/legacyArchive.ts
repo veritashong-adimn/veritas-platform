@@ -24,6 +24,7 @@ import {
   type ArchiveSourceType, type ArchivePreviewRow, type MatchableRow,
 } from "../services/legacyArchiveResolve";
 import { executeArchiveSync, loadStoredIdentities, SyncError } from "../services/legacyArchiveSync";
+import { latestFileOrderId, fileOrderCte } from "../services/legacyFileOrder";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -569,19 +570,26 @@ export async function searchArchive(dbx: any, f: ArchiveSearchFilters) {
 
 // (C-4I-c/g) 전체컬럼 조회 — source_raw 원본 전체를 그대로 투영(server pagination). 동일 필터 재사용.
 //   normalized 가 아니라 원본 보존값. 상세 이동 없음(이 응답은 목록 테이블 전용).
-//   정렬(화면·다운로드 일치): sales_list = 판매일(SALE_SORT_KEY) 최신순, id desc. 그 외(progress) = 원본 Excel 순서(import_batch→source_row→id).
+//   정렬(화면·다운로드 일치): 최신 업로드 파일의 원본 Excel 행 순서(services/legacyFileOrder 순서표) — 아래 참고.
 export async function searchArchiveFull(dbx: any, f: ArchiveSearchFilters, fullType?: ArchiveSourceType) {
   const where = buildArchiveWhere(f);
   const page = Math.max(1, Math.floor(Number(f.page) || 1));
   const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Math.floor(Number(f.pageSize) || DEFAULT_PAGE_SIZE)));
   const totalRow = await dbx.select({ n: count() }).from(T).where(where);
   const total = Number(totalRow[0]?.n ?? 0);
-  const orderBy: SQL[] = fullType === "sales_list"
-    ? [sql`${SALE_SORT_KEY} desc nulls last`, sql`${T.id} desc`]
-    : [sql`${T.importBatchId} asc`, sql`${T.sourceRow} asc`, sql`${T.id} asc`];
-  const rows = await dbx.select({ id: T.id, sourceRow: T.sourceRow, importBatchId: T.importBatchId, sourceSheet: T.sourceSheet, sourceRaw: T.sourceRaw })
-    .from(T).where(where).orderBy(...orderBy)
-    .limit(pageSize).offset((page - 1) * pageSize);
+  // 정렬(2026-11-08): 판매목록·진행관리표 모두 최신 업로드 파일의 원본 Excel 행 순서. 서버에서 일괄 정렬(페이지·검색·필터 공통).
+  //   특정 스냅샷 조회는 그 스냅샷 파일의 행 순서(source_row). 순서표에 없는 행은 뒤에 기존 기준(import_batch→source_row→id).
+  //   fileRow = 최신 파일의 Excel 행 번호(순서표 기준, 없으면 null → 화면은 sourceRow 표시).
+  const orderId = isSpecificSnapshot(f.snapshot) || !fullType ? null : await latestFileOrderId(dbx, fullType);
+  // 정렬은 id 만으로 먼저 끝내고(페이지 범위) 해당 행의 원본만 붙인다(대용량 source_raw 정렬 방지).
+  const rows = (await dbx.execute(sql`WITH ${fileOrderCte(orderId)},
+    pg AS (SELECT legacy_archive_rows.id, ord.pos, ord.file_row FROM legacy_archive_rows LEFT JOIN ord ON ord.rid = legacy_archive_rows.id
+      ${where ? sql`WHERE ${where}` : sql``}
+      ORDER BY ord.pos ASC NULLS LAST, legacy_archive_rows.import_batch_id ASC, legacy_archive_rows.source_row ASC, legacy_archive_rows.id ASC
+      LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize})
+    SELECT lr.id, lr.source_row AS "sourceRow", lr.import_batch_id AS "importBatchId", lr.source_sheet AS "sourceSheet", lr.source_raw AS "sourceRaw", pg.file_row AS "fileRow"
+    FROM pg JOIN legacy_archive_rows lr ON lr.id = pg.id
+    ORDER BY pg.pos ASC NULLS LAST, lr.import_batch_id ASC, lr.source_row ASC, lr.id ASC`)).rows as any[];
   return { rows, pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) } };
 }
 
@@ -812,13 +820,12 @@ async function resolveExportHeaders(dbx: any, type: ArchiveSourceType, where: SQ
 }
 
 // 한 자료유형을 배치로 읽어 시트에 흘려보낸다. 행 수가 Excel 시트 한도를 넘으면 (2),(3)… 시트로 분할.
-// 정렬(화면과 동일): sales_list = 판매일(SALE_SORT_KEY) 최신순, id desc. progress = import_batch → source_row → id(원본 Excel 순서).
+// 정렬(화면과 동일): 최신 업로드 파일의 원본 Excel 행 순서(순서표) → 순서표 밖 행은 import_batch → source_row → id.
 //   → 요구 6(다운로드도 동일 정렬) + 요구 4(판매 외 자료 영향 없음). source_raw 원본값만 투영.
-async function streamTypeSheet(wb: ExcelJS.stream.xlsx.WorkbookWriter, type: ArchiveSourceType, where: SQL | undefined, headers: string[]): Promise<number> {
+async function streamTypeSheet(wb: ExcelJS.stream.xlsx.WorkbookWriter, type: ArchiveSourceType, where: SQL | undefined, headers: string[], specificSnapshot = false): Promise<number> {
   const headerRow = ["Excel 행", ...headers];
-  const orderBy: SQL[] = type === "sales_list"
-    ? [sql`${SALE_SORT_KEY} desc nulls last`, sql`${T.id} desc`]
-    : [sql`${T.importBatchId} asc`, sql`${T.sourceRow} asc`, sql`${T.id} asc`];
+  // 정렬(화면과 동일): 최신 업로드 파일의 원본 Excel 행 순서. 특정 스냅샷 다운로드는 그 파일 순서(source_row).
+  const orderId = specificSnapshot ? null : await latestFileOrderId(db, type);
   let part = 1;
   let ws = wb.addWorksheet(SOURCE_TYPE_SHEET[type]);
   ws.addRow(headerRow).commit();
@@ -826,10 +833,14 @@ async function streamTypeSheet(wb: ExcelJS.stream.xlsx.WorkbookWriter, type: Arc
   let written = 0;
   let offset = 0;
   for (;;) {
-    const batch = await db.select({ sourceRow: T.sourceRow, sourceRaw: T.sourceRaw })
-      .from(T).where(where)
-      .orderBy(...orderBy)
-      .limit(EXPORT_BATCH).offset(offset);
+    const batch = (await db.execute(sql`WITH ${fileOrderCte(orderId)},
+      pg AS (SELECT legacy_archive_rows.id, ord.pos, ord.file_row FROM legacy_archive_rows LEFT JOIN ord ON ord.rid = legacy_archive_rows.id
+        ${where ? sql`WHERE ${where}` : sql``}
+        ORDER BY ord.pos ASC NULLS LAST, legacy_archive_rows.import_batch_id ASC, legacy_archive_rows.source_row ASC, legacy_archive_rows.id ASC
+        LIMIT ${EXPORT_BATCH} OFFSET ${offset})
+      SELECT coalesce(pg.file_row, lr.source_row) AS "sourceRow", lr.source_raw AS "sourceRaw"
+      FROM pg JOIN legacy_archive_rows lr ON lr.id = pg.id
+      ORDER BY pg.pos ASC NULLS LAST, lr.import_batch_id ASC, lr.source_row ASC, lr.id ASC`)).rows as any[];
     if (batch.length === 0) break;
     for (const r of batch) {
       if (rowsInSheet >= EXCEL_MAX_DATA_ROWS) {
@@ -881,7 +892,7 @@ export async function writeArchiveWorkbook(stream: Writable, plan: ArchiveExport
     await ws.commit();
   } else {
     for (const e of plan.entries) {
-      const rows = await streamTypeSheet(wb, e.type, e.where, e.headers);
+      const rows = await streamTypeSheet(wb, e.type, e.where, e.headers, isSpecificSnapshot(plan.base.snapshot));
       sheets.push({ label: SOURCE_TYPE_SHEET[e.type], rows });
     }
   }

@@ -11,6 +11,7 @@
 //   · 이름·날짜만으로 동일 자료를 확정하지 않는다(복합키 다중 후보 → AMBIGUOUS).
 //   · 수정 시 판매·진행 연결은 새 버전으로 이관(carry_over_v1, append)하고 재검토 대상은 보고한다.
 //   · 변경 로그·되돌리기 근거 = import_row_sources(batch_id, status, source_raw=JSON 근거). DB 구조 변경 없음.
+import { recordFileOrder } from "./legacyFileOrder";
 import crypto from "node:crypto";
 import { sql, eq, and, count, isNotNull, inArray } from "drizzle-orm";
 import { legacyArchiveRowsTable, importBatchesTable, importRowSourcesTable, legacySalesProgressLinksTable } from "@workspace/db";
@@ -1395,6 +1396,9 @@ export async function executeFullSync(tx: any, o: { fullSyncId: string; salesTok
   const integrity = await syncIntegrity(tx, [sales.batchId, progress.batchId].filter((x): x is number => x != null));
   if (integrity.newLinksToInactive > 0) throw new Error(`연결 무결성 위반: 이번 동기화가 비유효 행과의 연결 ${integrity.newLinksToInactive}건을 만들었습니다. 롤백합니다.`);
   if (integrity.orphanedByRun > 0) throw new Error(`연결 무결성 위반: 이번 동기화로 판매건을 잃은 수행행 ${integrity.orphanedByRun}건. 롤백합니다.`);
+  // 최신 파일 행 순서표(표시 정렬 전용) — 변경이 없어도 매 교체마다 새 파일 순서로 기록
+  await recordFileOrder(tx, set.sales, { runId, userId: o.userId, fileName: set.salesName });
+  await recordFileOrder(tx, set.progress, { runId, userId: o.userId, fileName: set.progressName });
   fullSyncCache.delete(set.id);
   return { runId: sales.batchId || progress.batchId ? runId : null, asOfDate: set.asOfDate, mode: sales.mode === "no_change" && progress.mode === "no_change" ? "no_change" : "applied", sales, progress, integrity, cancelled,
     keptProgressOfCancelledSales: keptOfCancelled, relinked: relinkedRows.map(x => ({ progressRowId: x.progressRowId, toSaleId: x.toSaleId })) };

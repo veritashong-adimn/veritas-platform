@@ -83,7 +83,7 @@ type ListRow = {
 };
 type Pagination = { page: number; pageSize: number; total: number; totalPages: number };
 // (C-4I-c) 진행관리 전체컬럼 조회 행 — source_raw 원본 그대로.
-type FullRow = { id: number; sourceRow: number | null; sourceSheet: string | null; sourceRaw: Record<string, unknown> };
+type FullRow = { id: number; sourceRow: number | null; fileRow?: number | null; sourceSheet: string | null; sourceRaw: Record<string, unknown> };
 // (C-4I-d) 다운로드 대상 행수 추정.
 type ExportEstimate = { scope: 'search' | 'all'; sourceType: string; total: number; types: { sourceType: SourceType; label: string; count: number }[] };
 
@@ -460,7 +460,7 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
                             style={{ background: ri % 2 ? '#fafafa' : '#fff', cursor: clickable ? 'pointer' : 'default' }}
                             onMouseEnter={e => clickable && (e.currentTarget.style.background = '#eff6ff')}
                             onMouseLeave={e => (e.currentTarget.style.background = ri % 2 ? '#fafafa' : '#fff')}>
-                          <td style={{ position: 'sticky', left: 0, background: ri % 2 ? '#fafafa' : '#fff', zIndex: 1, padding: '6px 10px', fontWeight: 700, color: '#4338ca', whiteSpace: 'nowrap', borderBottom: '1px solid #f0f0f0' }}>{r.sourceRow ?? '-'}</td>
+                          <td style={{ position: 'sticky', left: 0, background: ri % 2 ? '#fafafa' : '#fff', zIndex: 1, padding: '6px 10px', fontWeight: 700, color: '#4338ca', whiteSpace: 'nowrap', borderBottom: '1px solid #f0f0f0' }}>{r.fileRow ?? r.sourceRow ?? '-'}</td>
                           {fullHeaders.map((h, ci) => {
                             const v = r.sourceRaw?.[h];
                             return (
