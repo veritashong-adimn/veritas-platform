@@ -30,8 +30,10 @@ const secRow = (label: string, extra?: React.ReactNode): React.ReactNode => (
   </div>
 );
 
-export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenProject, onEdit, onRefresh, onDeleted }: {
+export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenProject, onEdit, onRefresh, onDeleted, entityLabel = '거래처' }: {
   companyId: number; token: string; onClose: () => void;
+  /** 진입 화면 표시 명칭(제목 등 표기만 구분). 외주업체 목록 → '외주업체', 그 외 기본 '거래처'. */
+  entityLabel?: '거래처' | '외주업체';
   onToast: (msg: string) => void; onOpenProject: (id: number) => void;
   /** 정보 수정 → 거래처 수정 페이지(/admin/companies/:id/edit)로 이동. 미제공 시 버튼 숨김. */
   onEdit?: (id: number) => void;
@@ -94,7 +96,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
       // 선입금 계정 로드
       const paRes = await fetch(api(`/api/admin/prepaid-accounts?companyId=${companyId}`), { headers: authH });
       if (paRes.ok) setPrepaidAccounts(await paRes.json());
-    } catch { onToast("오류: 거래처 정보 불러오기 실패"); }
+    } catch { onToast(`오류: ${entityLabel} 정보 불러오기 실패`); }
     finally { setLoading(false); }
   };
   useEffect(() => { load(); }, [companyId]);
@@ -376,7 +378,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
       </div>
     )}
 
-    <DraggableModal title={`거래처 #${companyId} 상세`} onClose={onClose} width={1100} height="90vh" zIndex={300} bodyPadding="24px 36px" resizable
+    <DraggableModal title={`${entityLabel} #${companyId} 상세`} onClose={onClose} width={1100} height="90vh" zIndex={300} bodyPadding="24px 36px" resizable
       headerExtra={
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           {allowHardDelete && (
@@ -395,7 +397,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
     >
         {loading ? <p style={{ color: "#9ca3af", textAlign: "center", padding: "32px 0" }}>불러오는 중...</p> : !detail ? <p style={{ color: "#dc2626" }}>데이터를 불러올 수 없습니다.</p> : (
           <>
-            <ReviewMemoPanel storageKey={`company_${companyId}`} label="이 거래처 검수 메모" />
+            <ReviewMemoPanel storageKey={`company_${companyId}`} label={`이 ${entityLabel} 검수 메모`} />
 
             {/* ══════════════════════════════════════════════
                 상단 요약 카드

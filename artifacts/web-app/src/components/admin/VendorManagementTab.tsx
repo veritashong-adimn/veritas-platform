@@ -138,6 +138,7 @@ export function VendorManagementTab({ token, onToast, onOpenProject, onRegister,
       {companyModal !== null && (
         <CompanyDetailModal
           companyId={companyModal}
+          entityLabel="외주업체"
           token={token}
           onClose={() => setCompanyModal(null)}
           onToast={onToast}
