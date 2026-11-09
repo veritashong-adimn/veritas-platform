@@ -30,10 +30,12 @@ const secRow = (label: string, extra?: React.ReactNode): React.ReactNode => (
   </div>
 );
 
-export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenProject, onEdit, onRefresh, onDeleted, entityLabel = '거래처' }: {
+export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenProject, onEdit, onRefresh, onDeleted, entityLabel = '거래처', extraSection }: {
   companyId: number; token: string; onClose: () => void;
   /** 진입 화면 표시 명칭(제목 등 표기만 구분). 외주업체 목록 → '외주업체', 그 외 기본 '거래처'. */
-  entityLabel?: '거래처' | '외주업체';
+  entityLabel?: '거래처' | '외주업체' | '고객사';
+  /** 진입 화면 전용 보조 영역(예: 고객관리 → 고객 등급·실적 접기 영역). 미제공 시 표시 없음. */
+  extraSection?: React.ReactNode;
   onToast: (msg: string) => void; onOpenProject: (id: number) => void;
   /** 정보 수정 → 거래처 수정 페이지(/admin/companies/:id/edit)로 이동. 미제공 시 버튼 숨김. */
   onEdit?: (id: number) => void;
@@ -397,6 +399,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
     >
         {loading ? <p style={{ color: "#9ca3af", textAlign: "center", padding: "32px 0" }}>불러오는 중...</p> : !detail ? <p style={{ color: "#dc2626" }}>데이터를 불러올 수 없습니다.</p> : (
           <>
+            {extraSection}
             <ReviewMemoPanel storageKey={`company_${companyId}`} label={`이 ${entityLabel} 검수 메모`} />
 
             {/* ══════════════════════════════════════════════

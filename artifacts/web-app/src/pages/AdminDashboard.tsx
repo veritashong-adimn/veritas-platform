@@ -47,6 +47,7 @@ import { SalesDetailPage } from './SalesDetailPage';
 import { LegacyArchiveDetailPage } from '../components/admin/LegacyArchiveDetailPage';
 import { QuoteListTab } from '../components/admin/QuoteListTab';
 import { CompanyManagementTab } from '../components/admin/CompanyManagementTab';
+import { CustomerManagementTab } from "../components/admin/CustomerManagementTab";
 import { VendorManagementTab } from '../components/admin/VendorManagementTab';
 import { VendorRegisterPage } from '../components/admin/VendorRegisterPage';
 import { isCompanyPath, companyPaths, navigate as navPath } from '../lib/adminNav';
@@ -866,7 +867,6 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   }, [token]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
-  useEffect(() => { if (adminTab === "customers") fetchCustomers(); }, [adminTab, fetchCustomers]);
   useEffect(() => { if (adminTab === "companies") fetchCompanies(); }, [adminTab, fetchCompanies]);
   useEffect(() => { if (adminTab === "contacts") { fetchContacts(); if (companies.length === 0) fetchCompanies(); } }, [adminTab, fetchContacts]);
   useEffect(() => { if (adminTab === "board") fetchBoard(); }, [adminTab, fetchBoard]);
@@ -1787,148 +1787,9 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
         />
       )}
 
-      {/* ── 고객 관리 탭 ── */}
+      {/* ── 고객 관리 탭 — 거래처(고객사) 통합 뷰 ── */}
       {adminTab === "customers" && (
-        <Section title={`고객 관리 (${customers.length})`} action={
-          <PrimaryBtn onClick={() => setShowCreateCustomer(v => !v)} style={{ fontSize: 13, padding: "7px 14px" }}>
-            {showCreateCustomer ? "취소" : "+ 고객 등록"}
-          </PrimaryBtn>
-        }>
-          {/* 고객 등록 폼 */}
-          {showCreateCustomer && (
-            <Card style={{ marginBottom: 16, padding: "16px 20px" }}>
-              <p style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700, color: "#111827" }}>새 고객 등록</p>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px" }}>
-                {([
-                  ["companyName", "회사명 *"],
-                  ["contactName", "담당자명 *"],
-                  ["email", "이메일 *"],
-                  ["phone", "전화번호"],
-                ] as const).map(([field, label]) => (
-                  <div key={field}>
-                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>{label}</label>
-                    <input
-                      value={newCustomer[field]}
-                      onChange={e => setNewCustomer(f => ({ ...f, [field]: e.target.value }))}
-                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }}
-                      placeholder={label.replace(" *", "")}
-                    />
-                  </div>
-                ))}
-              </div>
-              <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-                <PrimaryBtn onClick={handleCreateCustomer} disabled={creatingCustomer} style={{ fontSize: 13, padding: "8px 18px" }}>
-                  {creatingCustomer ? "등록 중..." : "등록"}
-                </PrimaryBtn>
-                <GhostBtn onClick={() => setShowCreateCustomer(false)} style={{ fontSize: 13, padding: "8px 14px" }}>취소</GhostBtn>
-              </div>
-            </Card>
-          )}
-
-          {/* 검색 */}
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14, alignItems: "center" }}>
-            <input
-              value={customerSearch} onChange={e => setCustomerSearch(e.target.value)}
-              placeholder="회사명, 담당자명, 이메일 검색..."
-              style={{ ...inputStyle, maxWidth: 300, flex: "1 1 200px", padding: "8px 12px", fontSize: 13 }}
-              onKeyDown={e => e.key === "Enter" && fetchCustomers()}
-            />
-            <PrimaryBtn onClick={fetchCustomers} disabled={customersLoading} style={{ padding: "8px 16px", fontSize: 13 }}>
-              {customersLoading ? "검색 중..." : "검색"}
-            </PrimaryBtn>
-          </div>
-
-          {customersLoading ? (
-            <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
-          ) : customers.length === 0 ? (
-            <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>
-              고객이 없습니다. 상단의 "+ 고객 등록" 버튼으로 추가하세요.
-            </Card>
-          ) : (
-            <Card style={{ padding: 0, overflow: "hidden" }}>
-              <div style={{ overflowX: "auto" }}>
-                <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr style={{ background: "#f8fafc" }}>
-                      {["ID","고객사","등급","프로젝트 현황","총 매출","미수금","최근 거래","등록일"].map(h => (
-                        <th key={h} style={{ ...tableTh, background: "transparent", fontSize: 11, letterSpacing: "0.2px" }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {customers.map(c => {
-                      const grade = c.projectCount === 0
-                        ? { label: "신규", bg: "#f0fdf4", color: "#16a34a", border: "#86efac" }
-                        : (Number(c.totalPayment) >= 3000000 || c.projectCount >= 5)
-                          ? { label: "VIP", bg: "#fdf4ff", color: "#9333ea", border: "#d8b4fe" }
-                          : { label: "일반", bg: "#f8fafc", color: "#64748b", border: "#cbd5e1" };
-                      const lastDate = c.lastTransactionAt
-                        ? formatDisplayDate(c.lastTransactionAt)
-                        : null;
-                      return (
-                        <tr key={c.id}
-                          onClick={() => setCustomerModal(c.id)}
-                          style={{ cursor: "pointer", transition: "background 0.1s" }}>
-
-                          {/* ID */}
-                          <td style={{ ...tableTd, color: "#d1d5db", fontSize: 11, width: 40 }}>#{c.id}</td>
-
-                          {/* 고객사 + 담당자 · 연락처 */}
-                          <td style={{ ...tableTd, maxWidth: 200 }}>
-                            <div style={{ fontWeight: 600, fontSize: 13, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.companyName}</div>
-                            <div style={{ fontSize: 11, color: "#c0c8d4", marginTop: 1 }}>
-                              {c.contactName}
-                              {c.phone && <span style={{ marginLeft: 6 }}>{formatPhoneDisplay(c.phone)}</span>}
-                            </div>
-                          </td>
-
-                          {/* 등급 */}
-                          <td style={{ ...tableTd, width: 64 }}>
-                            <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600, lineHeight: "18px", background: grade.bg, color: grade.color, border: `1px solid ${grade.border}` }}>
-                              {grade.label}
-                            </span>
-                          </td>
-
-                          {/* 프로젝트 현황 */}
-                          <td style={{ ...tableTd, minWidth: 110 }}>
-                            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                              <span style={{ fontSize: 12, color: "#374151", fontWeight: 500 }}>전체 {c.projectCount}건</span>
-                              {c.inProgressCount > 0 && (
-                                <span style={{ fontSize: 11, color: "#7c3aed", fontWeight: 600 }}>진행 중 {c.inProgressCount}건</span>
-                              )}
-                            </div>
-                          </td>
-
-                          {/* 총 매출 */}
-                          <td style={{ ...tableTd, fontWeight: 600, color: "#059669", whiteSpace: "nowrap", fontSize: 12 }}>
-                            {formatWon(Number(c.totalPayment))}
-                          </td>
-
-                          {/* 미수금 */}
-                          <td style={{ ...tableTd, width: 90 }}>
-                            {Number(c.unpaidAmount) > 0
-                              ? <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600, lineHeight: "18px", background: "transparent", border: "1px solid #fcd34d", color: "#92400e", whiteSpace: "nowrap" }}>{formatWon(Number(c.unpaidAmount))}</span>
-                              : <span style={{ color: "#d1d5db", fontSize: 11 }}>-</span>}
-                          </td>
-
-                          {/* 최근 거래 */}
-                          <td style={{ ...tableTd, fontSize: 11, color: lastDate ? "#6b7280" : "#d1d5db", whiteSpace: "nowrap" }}>
-                            {lastDate ?? "-"}
-                          </td>
-
-                          {/* 등록일 */}
-                          <td style={{ ...tableTd, fontSize: 11, color: "#c0c8d4", whiteSpace: "nowrap" }}>
-                            {formatDisplayDate(c.createdAt)}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          )}
-        </Section>
+        <CustomerManagementTab token={token} isAdmin={user.role === "admin"} onToast={setToast} onOpenProject={(id) => openDetail(id)} />
       )}
 
       {/* ── 거래처 탭 ── */}
