@@ -50,3 +50,68 @@ export function toComparisonItemName(raw: string | null | undefined): string {
   }
   return s; // 미등록 언어/미매칭 → 원본 보존
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 고객용 출력 정리(v2) — 저장 데이터는 그대로 두고 "PDF 출력/새 품목 초기값"에만 적용한다.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// 내부 관리 문구 판정 — 원본 견적 memo 는 "단가 확인 필요 / 파일: a.pdf | 형식: PDF | 단어수: 6630 | 글자수: 43229" 형태.
+const INTERNAL_SEGMENT_RULES: RegExp[] = [
+  /확인\s*필요/,                                   // 단가 확인 필요 · 상품 확인 필요 등 검토 플래그
+  /AI\s*(분석|초안|추정|생성)/i,                    // AI 초안 관련 내부 안내
+  /^(파일|파일명|형식|단어수|글자수|페이지\s*산정|원본\s*단가|원본\s*공급가액|원가|마진|내부\s*메모)\s*[:：]/,
+  /내부\s*(검토|계산|관리|확인|참고|메모)/,
+  /검토용|계산용/,
+  /^[a-z]{2,3}(-[a-z]{2,4})?$/i,                   // 단독 언어 코드(en, ko, zh-hans …)
+];
+
+/** 내부 관리 문구 여부(세그먼트 단위). */
+export function isInternalSegment(seg: string): boolean {
+  const s = seg.trim();
+  if (!s) return true;
+  return INTERNAL_SEGMENT_RULES.some((r) => r.test(s));
+}
+
+/**
+ * 품목 설명 → 고객용 문구. " / ", " | ", 줄바꿈 단위로 나눠 내부 관리 문구를 제거한다.
+ * 남는 문구가 없으면 빈 문자열(= PDF 미출력).
+ */
+export function toCustomerFacingNote(raw: string | null | undefined): string {
+  const s = (raw ?? '').trim();
+  if (!s) return '';
+  const lines = s.split(/\r?\n/).map((line) =>
+    line.split(/\s+[/|]\s+|\s*\|\s*/).map((x) => x.trim()).filter((x) => !isInternalSegment(x)).join(' · '),
+  ).filter(Boolean);
+  return lines.join('\n');
+}
+
+/** 고객용 정리 결과와 원문이 다른지(작성 화면에서 "PDF 미출력 문구 있음" 안내용). */
+export function hasInternalText(raw: string | null | undefined): boolean {
+  const s = (raw ?? '').trim();
+  if (!s) return false;
+  const norm = (x: string) => x.replace(/\s+/g, '');
+  return norm(toCustomerFacingNote(s)) !== norm(s.split(/\s+[/|]\s+|\s*\|\s*/).join(' · '));
+}
+
+const ABBR_TO_FULL: Record<string, string> = Object.fromEntries(
+  Object.entries(LANG_FULL_TO_ABBR).map(([full, abbr]) => [abbr, full]),
+);
+
+/**
+ * 품목명에서 번역 언어 방향을 "영어 → 한국어" 형태로 해석한다. 확실한 경우만 반환, 아니면 null(추정 금지).
+ *  · "영한번역" / "한영 번역"  → 약칭 2개가 모두 등록 언어이고 바로 뒤가 '번역'일 때만(방향이 명확)
+ *  · "영어→한국어 번역"        → 전체 언어명 + 화살표가 명시된 경우
+ *  · 통역 약칭("한일 순차통역")은 방향이 명시되지 않으므로 표시하지 않는다.
+ *  · 품목명에 이미 전체 언어명이 쓰여 있으면 중복 표시하지 않는다(null).
+ */
+export function toLanguageDirectionLabel(name: string | null | undefined): string | null {
+  const s = (name ?? '').trim();
+  if (!s) return null;
+  const full = s.match(/^(\S+?)\s*(→|↔|⟷)\s*(\S+?)(?:\s|$)/);
+  if (full && LANG_FULL_TO_ABBR[full[1]] && LANG_FULL_TO_ABBR[full[3]]) return null; // 품목명에 이미 표시됨
+  const ab = s.match(/^([가-힣])([가-힣])\s?번역/);
+  if (ab && ABBR_TO_FULL[ab[1]] && ABBR_TO_FULL[ab[2]] && ab[1] !== ab[2]) {
+    return `${ABBR_TO_FULL[ab[1]]} → ${ABBR_TO_FULL[ab[2]]}`;
+  }
+  return null;
+}

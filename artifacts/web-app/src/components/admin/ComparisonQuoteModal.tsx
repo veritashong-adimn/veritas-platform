@@ -8,8 +8,12 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { api } from '../../lib/constants';
 import { ClickSelect } from '../ui';
 import ComparisonQuotePdfPreviewModal from './ComparisonQuotePdfPreviewModal';
-import { buildComparisonQuotePdfData, type ComparisonQuotePdfData } from '../../lib/comparisonQuotePdf';
-import { toComparisonItemName } from '../../lib/comparisonItemName';
+import {
+  buildComparisonQuotePdfData, cleanTerms, normalizeDesign, DEFAULT_COMPARISON_ACCENT, DEFAULT_COMPARISON_DOC_TITLE,
+  type ComparisonQuotePdfData, type ComparisonTerms, type ComparisonIssueType,
+} from '../../lib/comparisonQuotePdf';
+import { toComparisonItemName, toCustomerFacingNote, hasInternalText, toLanguageDirectionLabel } from '../../lib/comparisonItemName';
+import { IssueTypeSelector, TermsEditor, BrandingPanel, type ImgState } from './ComparisonQuoteExtras';
 
 // 원본 견적 품목에서 복사해오는 초기 행(부모가 계산해 전달).
 export interface ComparisonSeedRow {
@@ -62,7 +66,8 @@ function seedToRows(seed: ComparisonSeedRow[]): ItemRow[] {
     unit: s.unit ?? '건',
     unitPrice: String(round0(s.unitPrice ?? 0)),
     amount: String(round0(s.amount ?? 0)),
-    memo: s.memo ?? '',
+    // 품목 설명 초기값 — 원본 메모에서 내부 관리 문구(단가 확인 필요·파일/단어수 등)를 뺀 고객용 문구만. 원본 quote_items 는 불변.
+    memo: toCustomerFacingNote(s.memo),
   }));
 }
 const emptyRow = (): ItemRow => ({ sourceQuoteItemId: null, description: '', languagePair: '', quantity: '1', unit: '건', unitPrice: '0', amount: '0', memo: '' });
@@ -70,13 +75,20 @@ const emptyRow = (): ItemRow => ({ sourceQuoteItemId: null, description: '', lan
 type ListItem = {
   id: number; companyName: string; displayNumber: string | null; quoteDate: string | null;
   vatMode: string; itemCount: number; supply: number; tax: number; total: number; createdAt: string;
+  issueType?: ComparisonIssueType | null;
 };
 
 // 비교견적 공급자(업체) Master 행
 interface Vendor {
   id: number; companyName: string; representativeName: string | null; businessNumber: string | null;
   address: string | null; phone: string | null; email: string | null; website: string | null; isActive: boolean;
+  contactName?: string | null; hasLogo?: boolean; hasStamp?: boolean;
+  designSettings?: { accentColor?: string | null; docTitle?: string | null } | null;
 }
+
+const todayKst = () => new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+const NO_IMG: ImgState = { action: 'keep', preview: null };
+const DEFAULT_DESIGN = { accentColor: DEFAULT_COMPARISON_ACCENT, docTitle: DEFAULT_COMPARISON_DOC_TITLE };
 
 export default function ComparisonQuoteModal({ sourceQuoteId, sourceTitle, seedRows, sourceTotal, token, onClose, onToast }: Props) {
   const authH = { Authorization: `Bearer ${token}` };
@@ -85,6 +97,7 @@ export default function ComparisonQuoteModal({ sourceQuoteId, sourceTitle, seedR
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [pdfData, setPdfData] = useState<ComparisonQuotePdfData | null>(null);
+  const [pdfImageError, setPdfImageError] = useState<string | null>(null);
 
   // form state
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -102,6 +115,17 @@ export default function ComparisonQuoteModal({ sourceQuoteId, sourceTitle, seedR
   const [memo, setMemo] = useState('');
   const [rows, setRows] = useState<ItemRow[]>([]);
   const [adjustPct, setAdjustPct] = useState('0');
+  // v2 — 발행 구분('' = 미지정: 기존 데이터. 새 비교견적은 저장 전 선택 필수) / 견적 조건 / 디자인 / 로고·직인
+  const [issueType, setIssueType] = useState<ComparisonIssueType | ''>('');
+  const [legacyUnset, setLegacyUnset] = useState(false);
+  const [terms, setTerms] = useState<ComparisonTerms>({});
+  const [design, setDesign] = useState(DEFAULT_DESIGN);
+  const [logoImg, setLogoImg] = useState<ImgState>(NO_IMG);
+  const [stampImg, setStampImg] = useState<ImgState>(NO_IMG);
+  const [createdAt, setCreatedAt] = useState<string | null>(null);
+  // 수신처 스냅샷(미리보기 표시용 — 저장은 서버가 원본 견적에서 해결/보존. 여기서 보내지 않음)
+  type Customer = { customerCompanyName?: string | null; customerRepresentativeName?: string | null; customerContactName?: string | null; customerPhone?: string | null; customerEmail?: string | null };
+  const [customer, setCustomer] = useState<Customer>({});
 
   // 비교견적 공급자(업체) Master
   const [vendors, setVendors] = useState<Vendor[]>([]);
@@ -126,9 +150,56 @@ export default function ComparisonQuoteModal({ sourceQuoteId, sourceTitle, seedR
     if (!v) return;
     setCompanyName(v.companyName ?? ''); setRep(v.representativeName ?? ''); setBiz(v.businessNumber ?? '');
     setAddress(v.address ?? ''); setPhone(v.phone ?? ''); setEmail(v.email ?? ''); setWebsite(v.website ?? '');
+    // v2 — 등록된 정보만 불러온다(없는 항목은 비워 둠 · 임의 생성 없음)
+    setContact(v.contactName ?? '');
+    setDesign(normalizeDesign(v.designSettings));
+    void loadVendorImages(v.id);
   };
 
-  const vendorPayload = () => ({ companyName: companyName.trim(), representativeName, businessNumber, address, phone, email, website });
+  // 업체 Master 의 실제 등록 로고·직인 → 이 비교견적 스냅샷으로 사용(action 'vendor'). 없으면 미출력.
+  const loadVendorImages = async (vendorId: number) => {
+    try {
+      const res = await fetch(api(`/api/admin/comparison-quote-vendors/${vendorId}/images`), { headers: authH });
+      const d = await res.json().catch(() => ({}));
+      setLogoImg({ action: 'vendor', preview: res.ok ? d.logoDataUrl ?? null : null });
+      setStampImg({ action: 'vendor', preview: res.ok ? d.stampDataUrl ?? null : null });
+      if (res.ok && d.error) onToast(`주의: ${d.error}`);
+    } catch {
+      setLogoImg({ action: 'vendor', preview: null }); setStampImg({ action: 'vendor', preview: null });
+    }
+  };
+
+  const uploadVendorImage = async (kind: 'logo' | 'stamp', file: File) => {
+    if (!selectedVendorId) { onToast('저장된 업체를 먼저 선택해 주세요.'); return; }
+    if (file.size > 2 * 1024 * 1024) { onToast('이미지는 2MB 이하만 등록할 수 있습니다.'); return; }
+    setVendorBusy(true);
+    try {
+      const fd = new FormData(); fd.append('file', file);
+      const res = await fetch(api(`/api/admin/comparison-quote-vendors/${selectedVendorId}/images/${kind}`), { method: 'POST', headers: authH, body: fd });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { onToast(`오류: ${d.error ?? '이미지 등록 실패'}`); return; }
+      onToast(kind === 'logo' ? '업체 로고를 등록했습니다.' : '업체 직인/서명을 등록했습니다.');
+      await loadVendorImages(Number(selectedVendorId)); fetchVendors();
+    } catch { onToast('오류: 이미지 등록 실패'); }
+    finally { setVendorBusy(false); }
+  };
+
+  const deleteVendorImage = async (kind: 'logo' | 'stamp') => {
+    if (!selectedVendorId) return;
+    if (!window.confirm('업체 Master 에서 이 이미지를 삭제할까요? (이미 생성된 비교견적에는 영향 없음)')) return;
+    setVendorBusy(true);
+    try {
+      const res = await fetch(api(`/api/admin/comparison-quote-vendors/${selectedVendorId}/images/${kind}`), { method: 'DELETE', headers: authH });
+      if (!res.ok) { onToast('오류: 이미지 삭제 실패'); return; }
+      await loadVendorImages(Number(selectedVendorId)); fetchVendors();
+    } catch { onToast('오류: 이미지 삭제 실패'); }
+    finally { setVendorBusy(false); }
+  };
+
+  const vendorPayload = () => ({
+    companyName: companyName.trim(), representativeName, businessNumber, address, phone, email, website,
+    contactName, designSettings: design,
+  });
 
   const saveVendorNew = async () => {
     if (!companyName.trim()) { onToast('업체 상호명을 입력해 주세요.'); return; }
@@ -191,9 +262,16 @@ export default function ComparisonQuoteModal({ sourceQuoteId, sourceTitle, seedR
   const resetForm = () => {
     setEditingId(null); setCompanyName(''); setRep(''); setBiz(''); setAddress(''); setPhone(''); setEmail(''); setWebsite(''); setContact('');
     setDisplayNumber(''); setQuoteDate(''); setVatMode('vat_10'); setMemo(''); setAdjustPct('0'); setSelectedVendorId('');
+    setIssueType(''); setLegacyUnset(false); setTerms({}); setDesign(DEFAULT_DESIGN); setLogoImg(NO_IMG); setStampImg(NO_IMG); setCreatedAt(null);
   };
 
-  const startCreate = () => { resetForm(); setRows(seedToRows(seedRows)); setView('form'); };
+  // 새 비교견적 — 발행일 기본값은 오늘(수정 가능). 견적번호는 임의 생성하지 않는다.
+  const startCreate = () => {
+    resetForm(); setQuoteDate(todayKst()); setRows(seedToRows(seedRows)); setView('form');
+    setCustomer({});
+    fetch(api(`/api/admin/quotes/${sourceQuoteId}/customer-info`), { headers: authH })
+      .then((r) => (r.ok ? r.json() : {})).then((c) => setCustomer(c ?? {})).catch(() => { /* 미리보기 수신처 생략 */ });
+  };
 
   const startEdit = async (id: number) => {
     try {
@@ -204,6 +282,13 @@ export default function ComparisonQuoteModal({ sourceQuoteId, sourceTitle, seedR
       setCompanyName(d.companyName ?? ''); setRep(d.representativeName ?? ''); setBiz(d.businessNumber ?? '');
       setAddress(d.address ?? ''); setPhone(d.phone ?? ''); setEmail(d.email ?? ''); setWebsite(d.website ?? ''); setContact(d.contactName ?? '');
       setDisplayNumber(d.displayNumber ?? ''); setQuoteDate(d.quoteDate ?? ''); setVatMode(d.vatMode === 'none' ? 'none' : 'vat_10'); setMemo(d.memo ?? ''); setAdjustPct('0');
+      // v2 — 기존 값 그대로 로드(미지정은 미지정 유지). 견적번호·발행일은 저장값 보존.
+      const it0 = d.issueType === 'vendor_confirmed' || d.issueType === 'internal_simulation' ? d.issueType : '';
+      setIssueType(it0); setLegacyUnset(it0 === '');
+      setTerms(cleanTerms(d.terms)); setDesign(normalizeDesign(d.designSettings)); setCreatedAt(d.createdAt ?? null);
+      setLogoImg({ action: 'keep', preview: d.logoDataUrl ?? null }); setStampImg({ action: 'keep', preview: d.stampDataUrl ?? null });
+      setSelectedVendorId('');
+      setCustomer({ customerCompanyName: d.customerCompanyName, customerRepresentativeName: d.customerRepresentativeName, customerContactName: d.customerContactName, customerPhone: d.customerPhone, customerEmail: d.customerEmail });
       setRows((d.items ?? []).map((it: Record<string, unknown>) => ({
         sourceQuoteItemId: (it.sourceQuoteItemId as number) ?? null,
         description: String(it.description ?? ''), languagePair: String(it.languagePair ?? ''),
@@ -237,17 +322,39 @@ export default function ComparisonQuoteModal({ sourceQuoteId, sourceTitle, seedR
   const addRow = () => setRows((p) => [...p, emptyRow()]);
   const removeRow = (i: number) => setRows((p) => p.filter((_, idx) => idx !== i));
 
+  // 저장/미리보기 공용 품목 페이로드
+  const itemPayload = () => rows.filter((r) => r.description.trim()).map((r, i) => ({
+    sourceQuoteItemId: r.sourceQuoteItemId, description: r.description.trim(), languagePair: r.languagePair || null,
+    quantity: num(r.quantity), unit: r.unit || '건', unitPrice: num(r.unitPrice), amount: num(r.amount), memo: r.memo || null, sortOrder: i,
+  }));
+
+  // 작성 중인 내용 그대로 미리보기(저장 전) — 저장 후 PDF 와 같은 렌더러.
+  const previewDraft = () => {
+    if (!companyName.trim()) { onToast('상호명을 입력해 주세요.'); return; }
+    setPdfImageError(null);
+    setPdfData(buildComparisonQuotePdfData({
+      companyName: companyName.trim(), representativeName, businessNumber, address, phone, email, website, contactName,
+      displayNumber, quoteDate: quoteDate || null, vatMode, memo, items: itemPayload(),
+      customerCompanyName: customer.customerCompanyName, customerRepresentativeName: customer.customerRepresentativeName,
+      customerContactName: customer.customerContactName, customerPhone: customer.customerPhone, customerEmail: customer.customerEmail,
+      issueType: issueType || null, terms, designSettings: design,
+      logoDataUrl: logoImg.preview, stampDataUrl: stampImg.preview, createdAt,
+    }));
+  };
+
   const save = async () => {
     if (!companyName.trim()) { onToast('상호명을 입력해 주세요.'); return; }
+    // 새 비교견적은 발행 구분을 반드시 직접 선택(자동 확정 금지). 기존 미지정 건은 미지정 그대로 저장 가능.
+    if (!editingId && !issueType) { onToast('발행 구분(실제 업체 견적 / 내부 비교용)을 선택해 주세요.'); return; }
     setSaving(true);
     try {
       const body = {
         companyName: companyName.trim(), representativeName, businessNumber, address, phone, email, website, contactName,
         displayNumber, quoteDate: quoteDate || null, vatMode, memo,
-        items: rows.filter((r) => r.description.trim()).map((r, i) => ({
-          sourceQuoteItemId: r.sourceQuoteItemId, description: r.description.trim(), languagePair: r.languagePair || null,
-          quantity: num(r.quantity), unit: r.unit || '건', unitPrice: num(r.unitPrice), amount: num(r.amount), memo: r.memo || null, sortOrder: i,
-        })),
+        issueType: issueType || null, terms: cleanTerms(terms), designSettings: design,
+        vendorId: selectedVendorId ? Number(selectedVendorId) : null,
+        logoAction: logoImg.action, stampAction: stampImg.action,
+        items: itemPayload(),
       };
       const url = editingId ? api(`/api/admin/comparison-quotes/${editingId}`) : api(`/api/admin/quotes/${sourceQuoteId}/comparison-quotes`);
       const res = await fetch(url, { method: editingId ? 'PUT' : 'POST', headers: { ...authH, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -264,6 +371,7 @@ export default function ComparisonQuoteModal({ sourceQuoteId, sourceTitle, seedR
       const res = await fetch(api(`/api/admin/comparison-quotes/${id}`), { headers: authH });
       const d = await res.json();
       if (!res.ok) { onToast('오류: 비교견적 조회 실패'); return; }
+      setPdfImageError(d.imageError ?? null);
       setPdfData(buildComparisonQuotePdfData(d));
     } catch { onToast('오류: 비교견적 조회 실패'); }
   };
@@ -319,7 +427,13 @@ export default function ComparisonQuoteModal({ sourceQuoteId, sourceTitle, seedR
                     {list.map((r) => (
                       <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 10, border: '1px solid #e5e7eb', borderRadius: 10, padding: '10px 14px' }}>
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: '#111827' }}>{r.companyName}{r.displayNumber ? <span style={{ color: '#9ca3af', fontWeight: 500, marginLeft: 6, fontSize: 11 }}>{r.displayNumber}</span> : null}</div>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: '#111827' }}>
+                            <span data-testid="cq-list-issue-badge" style={{ fontSize: 10.5, fontWeight: 800, borderRadius: 999, padding: '1px 8px', marginRight: 6, verticalAlign: 1,
+                              background: r.issueType === 'vendor_confirmed' ? '#dcfce7' : '#fef3c7', color: r.issueType === 'vendor_confirmed' ? '#166534' : '#92400e' }}>
+                              {r.issueType === 'vendor_confirmed' ? '실제 업체 견적' : r.issueType === 'internal_simulation' ? '내부 비교용' : '내부 비교용 · 미지정'}
+                            </span>
+                            {r.companyName}{r.displayNumber ? <span style={{ color: '#9ca3af', fontWeight: 500, marginLeft: 6, fontSize: 11 }}>{r.displayNumber}</span> : null}
+                          </div>
                           <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>합계 {fmt(r.total)}원 · {r.itemCount}개 품목{r.quoteDate ? ` · ${r.quoteDate}` : ''}</div>
                         </div>
                         <button onClick={() => openPdf(r.id)} style={smallBtn('#f0fdfa', '#0f766e', '#99f6e4')} data-testid="btn-comparison-view">보기</button>
@@ -334,6 +448,8 @@ export default function ComparisonQuoteModal({ sourceQuoteId, sourceTitle, seedR
               </>
             ) : (
               <>
+                <IssueTypeSelector value={issueType} onChange={setIssueType} legacyUnset={legacyUnset} />
+
                 {/* 비교견적 업체(공급자 Master) 선택 */}
                 <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, flexWrap: 'wrap', marginBottom: 14, padding: '10px 12px', background: '#f0fdfa', border: '1px solid #99f6e4', borderRadius: 8 }}>
                   <div style={{ flex: 1, minWidth: 220 }}>
@@ -345,7 +461,7 @@ export default function ComparisonQuoteModal({ sourceQuoteId, sourceTitle, seedR
                       triggerStyle={inp}
                       aria-label="비교견적 업체 선택"
                       data-testid="cq-vendor-select"
-                      options={[{ value: '', label: '직접 입력' }, ...vendors.map((v) => ({ value: String(v.id), label: v.companyName, sub: v.businessNumber ?? undefined }))]}
+                      options={[{ value: '', label: '직접 입력' }, ...vendors.map((v) => ({ value: String(v.id), label: v.companyName, sub: [`#${v.id}`, v.phone, v.email, v.businessNumber].filter(Boolean).join(' · ') }))]}
                     />
                   </div>
                   <button onClick={saveVendorNew} disabled={vendorBusy} style={smallBtn('#0f766e', '#fff')} data-testid="cq-vendor-save-new">+ 새 업체로 저장</button>
@@ -361,19 +477,28 @@ export default function ComparisonQuoteModal({ sourceQuoteId, sourceTitle, seedR
                 <div style={{ fontSize: 13, fontWeight: 700, color: '#374151', marginBottom: 8 }}>비교업체 정보 <span style={{ fontSize: 11, color: '#9ca3af', fontWeight: 400 }}>(VERITAS 정보는 표시되지 않습니다)</span></div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 14 }}>
                   <div><label style={lbl}>상호명 <span style={{ color: '#dc2626' }}>*</span></label><input value={companyName} onChange={(e) => setCompanyName(e.target.value)} placeholder="예: ○○번역" style={inp} data-testid="cq-company-name" /></div>
-                  <div><label style={lbl}>대표자명</label><input value={representativeName} onChange={(e) => setRep(e.target.value)} style={inp} /></div>
-                  <div><label style={lbl}>사업자등록번호</label><input value={businessNumber} onChange={(e) => setBiz(e.target.value)} style={inp} /></div>
-                  <div style={{ gridColumn: '1 / 3' }}><label style={lbl}>주소</label><input value={address} onChange={(e) => setAddress(e.target.value)} style={inp} /></div>
-                  <div><label style={lbl}>담당자명</label><input value={contactName} onChange={(e) => setContact(e.target.value)} style={inp} /></div>
-                  <div><label style={lbl}>전화번호</label><input value={phone} onChange={(e) => setPhone(e.target.value)} style={inp} /></div>
-                  <div><label style={lbl}>이메일</label><input value={email} onChange={(e) => setEmail(e.target.value)} style={inp} /></div>
-                  <div><label style={lbl}>홈페이지</label><input value={website} onChange={(e) => setWebsite(e.target.value)} style={inp} /></div>
+                  {/* 표시 순서 = PDF 공급자(FROM) 순서: 상호 · 대표자 · 사업자등록번호 · 연락처 · 이메일 → 주소 · 홈페이지 · 담당자 */}
+                  <div><label style={lbl}>대표자명</label><input value={representativeName} onChange={(e) => setRep(e.target.value)} style={inp} aria-label="대표자명" data-testid="cq-rep-name" /></div>
+                  <div><label style={lbl}>사업자등록번호</label><input value={businessNumber} onChange={(e) => setBiz(e.target.value)} style={inp} aria-label="사업자등록번호" data-testid="cq-business-number" /></div>
+                  <div><label style={lbl}>연락처</label><input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="예: 1600-0000" style={inp} aria-label="연락처" data-testid="cq-phone" /></div>
+                  <div><label style={lbl}>이메일</label><input value={email} onChange={(e) => setEmail(e.target.value)} style={inp} aria-label="이메일" data-testid="cq-email" /></div>
+                  <div><label style={lbl}>담당자명</label><input value={contactName} onChange={(e) => setContact(e.target.value)} style={inp} aria-label="담당자명" data-testid="cq-contact-name" /></div>
+                  <div style={{ gridColumn: '1 / 3' }}><label style={lbl}>주소</label><input value={address} onChange={(e) => setAddress(e.target.value)} style={inp} aria-label="주소" data-testid="cq-address" /></div>
+                  <div><label style={lbl}>홈페이지</label><input value={website} onChange={(e) => setWebsite(e.target.value)} style={inp} aria-label="홈페이지" data-testid="cq-website" /></div>
                 </div>
+
+                <BrandingPanel
+                  vendorSelected={!!selectedVendorId} isSimulation={issueType !== 'vendor_confirmed'}
+                  logo={logoImg} stamp={stampImg} busy={vendorBusy}
+                  onRemove={(k) => (k === 'logo' ? setLogoImg({ action: 'clear', preview: null }) : setStampImg({ action: 'clear', preview: null }))}
+                  onUpload={uploadVendorImage} onDeleteFromVendor={deleteVendorImage}
+                  design={design} onDesign={setDesign}
+                />
 
                 {/* 문서 정보 */}
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 14 }}>
                   <div><label style={lbl}>견적번호 (표시용, 선택)</label><input value={displayNumber} onChange={(e) => setDisplayNumber(e.target.value)} placeholder="예: ABC-2026-001" style={inp} data-testid="cq-display-number" /></div>
-                  <div><label style={lbl}>견적일자</label><input type="date" value={quoteDate} onChange={(e) => setQuoteDate(e.target.value)} style={inp} /></div>
+                  <div><label style={lbl}>발행일</label><input type="date" value={quoteDate} onChange={(e) => setQuoteDate(e.target.value)} style={inp} /></div>
                   <div><label style={lbl}>부가세</label>
                     <ClickSelect value={vatMode} onChange={(v) => setVatMode(v as 'vat_10' | 'none')} triggerStyle={inp}
                       options={[{ value: 'vat_10', label: '부가세 10%' }, { value: 'none', label: '부가세 없음' }]} />
@@ -401,8 +526,20 @@ export default function ComparisonQuoteModal({ sourceQuoteId, sourceTitle, seedR
                   {rows.map((r, i) => (
                     <div key={i} style={{ display: 'grid', gridTemplateColumns: '2.4fr 0.8fr 0.7fr 1fr 1.1fr 28px', gap: 6, padding: '6px 10px', borderTop: '1px solid #f1f5f9', alignItems: 'center' }}>
                       <div>
-                        <input value={r.description} onChange={(e) => setRow(i, { description: e.target.value })} placeholder="상품/업무명" style={cellInp} />
-                        <input value={r.memo} onChange={(e) => setRow(i, { memo: e.target.value })} placeholder="비고" style={{ ...cellInp, marginTop: 4, fontSize: 11, color: '#6b7280' }} />
+                        <input value={r.description} onChange={(e) => setRow(i, { description: e.target.value })} placeholder="품목명 (예: 영한번역)" style={cellInp}
+                          aria-label={`${i + 1}번 품목명`} data-testid={`cq-item-name-${i}`} />
+                        <input value={r.memo} onChange={(e) => setRow(i, { memo: e.target.value })} placeholder="품목 설명 (고객에게 표시)" style={{ ...cellInp, marginTop: 4, fontSize: 11, color: '#6b7280' }}
+                          aria-label={`${i + 1}번 품목 설명`} data-testid={`cq-item-desc-${i}`} />
+                        {(toLanguageDirectionLabel(r.description) || hasInternalText(r.memo)) && (
+                          <div style={{ fontSize: 10.5, marginTop: 3, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            {toLanguageDirectionLabel(r.description) && <span style={{ color: '#0f766e' }}>언어: {toLanguageDirectionLabel(r.description)}</span>}
+                            {hasInternalText(r.memo) && (
+                              <span style={{ color: '#b45309' }} data-testid={`cq-item-internal-${i}`}>
+                                내부 관리 문구는 PDF 미출력 → {toCustomerFacingNote(r.memo) ? `"${toCustomerFacingNote(r.memo)}"만 출력` : '설명 출력 없음'}
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </div>
                       <input value={r.quantity} onChange={(e) => setRow(i, { quantity: e.target.value })} inputMode="decimal" style={{ ...cellInp, textAlign: 'right' }} />
                       <input value={r.unit} onChange={(e) => setRow(i, { unit: e.target.value })} style={cellInp} />
@@ -423,6 +560,8 @@ export default function ComparisonQuoteModal({ sourceQuoteId, sourceTitle, seedR
                   <span style={{ color: '#0f766e', fontWeight: 800, fontSize: 15 }}>합계 {fmt(totals.total)}원</span>
                 </div>
 
+                <TermsEditor terms={terms} onChange={setTerms} />
+
                 <div><label style={lbl}>비고 (PDF 하단 표시)</label><textarea value={memo} onChange={(e) => setMemo(e.target.value)} rows={2} style={{ ...inp, resize: 'vertical' }} /></div>
               </>
             )}
@@ -433,6 +572,8 @@ export default function ComparisonQuoteModal({ sourceQuoteId, sourceTitle, seedR
             {view === 'form' ? (
               <>
                 <button onClick={() => { resetForm(); setView('list'); }} style={{ padding: '9px 18px', borderRadius: 8, border: '1px solid #d1d5db', background: '#fff', color: '#374151', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>목록으로</button>
+                <button onClick={previewDraft} aria-label="작성 중인 비교견적 미리보기" data-testid="cq-preview-draft"
+                  style={{ padding: '9px 18px', borderRadius: 8, border: '1px solid #99f6e4', background: '#f0fdfa', color: '#0f766e', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>미리보기</button>
                 <button onClick={save} disabled={saving} style={{ padding: '9px 22px', borderRadius: 8, border: 'none', background: '#0f766e', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', opacity: saving ? 0.6 : 1 }} data-testid="cq-save">
                   {saving ? '저장 중…' : (editingId ? '수정 저장' : '비교견적 생성')}
                 </button>
@@ -444,7 +585,7 @@ export default function ComparisonQuoteModal({ sourceQuoteId, sourceTitle, seedR
         </div>
       </div>
 
-      {pdfData && <ComparisonQuotePdfPreviewModal data={pdfData} onClose={() => setPdfData(null)} />}
+      {pdfData && <ComparisonQuotePdfPreviewModal data={pdfData} imageError={pdfImageError} onClose={() => setPdfData(null)} />}
     </>
   );
 }

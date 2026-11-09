@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, text, varchar, date, timestamp, type AnyPgColumn } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, varchar, date, timestamp, jsonb, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { quotesTable } from "./quotes";
 
 // ── 비교견적 (고객 제출용 보조 문서) ──────────────────────────────────────────
@@ -8,6 +8,24 @@ import { quotesTable } from "./quotes";
 //  · projectId 없음. 금융/워크플로 테이블과 FK 관계를 만들지 않는다. source_quote_id 는 감사용 참조만.
 //  · 생성 시점 스냅샷: 원본 견적이 이후 수정돼도 비교견적은 불변(품목은 comparison_quote_items 로 복사 저장).
 //  · 정식 견적번호 체계(quote_number_seq / Q000001)를 사용하지 않는다. display_number 는 사용자 직접 입력(선택).
+// 비교견적 발행 구분 — NULL(기존 데이터) = 미지정 → 화면/PDF 는 내부 비교용으로 취급(값은 변경하지 않음).
+export type ComparisonIssueType = "vendor_confirmed" | "internal_simulation";
+// 견적 조건 — 입력된 항목만 PDF 에 표시. 자동 확정/기본 문구 없음.
+export type ComparisonTerms = {
+  validity?: string | null;        // 견적 유효기간
+  schedule?: string | null;        // 작업 기간 및 납품예정일
+  deliveryMethod?: string | null;  // 납품 방식
+  scope?: string | null;           // 작업 범위
+  revisionTerms?: string | null;   // 추가 작업 및 수정 조건
+  paymentTerms?: string | null;    // 결제 조건
+  otherNotes?: string | null;      // 기타 안내사항
+};
+// 업체별 견적서 디자인 설정
+export type ComparisonDesignSettings = {
+  accentColor?: string | null;     // '#RRGGBB'
+  docTitle?: string | null;        // 견적서 제목(기본 '견 적 서')
+};
+
 export const comparisonQuotesTable = pgTable("comparison_quotes", {
   id: serial("id").primaryKey(),
   // 원본 VERITAS 견적 참조(감사/역추적용). 금융 흐름과 무관 — 원본 삭제 시 함께 정리.
@@ -43,6 +61,13 @@ export const comparisonQuotesTable = pgTable("comparison_quotes", {
   customerContactName: varchar("customer_contact_name", { length: 100 }),
   customerPhone: varchar("customer_phone", { length: 50 }),
   customerEmail: varchar("customer_email", { length: 200 }),
+
+  // ── v2 (ADD_COLUMNS_comparison_quotes_v2.sql) — 모두 NULL 허용, 기존 행 무변경 ──
+  //  로고는 기존 logo_url 컬럼에 R2 내부 참조로 보관(API 응답에서는 노출하지 않음).
+  stampRef: text("stamp_ref"),                                         // 직인·서명 스냅샷(R2 내부 참조)
+  issueType: varchar("issue_type", { length: 30 }).$type<ComparisonIssueType>(), // NULL=미지정(내부 비교용 취급)
+  terms: jsonb("terms").$type<ComparisonTerms>(),
+  designSettings: jsonb("design_settings").$type<ComparisonDesignSettings>(),
 
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
