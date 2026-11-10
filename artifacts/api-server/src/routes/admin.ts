@@ -16,7 +16,7 @@ import {
 //  · 향후 기본값을 domestic_2_2 로 바꾸면 레거시 정산도 함께 2.2% 로 반영된다(과거 저장 정산건은 불변).
 const DEFAULT_WITHHOLDING_RATE = WITHHOLDING_RATE_BY_TREATMENT[DEFAULT_DOMESTIC_WITHHOLDING_TREATMENT] ?? 3.3;
 import { eq, and, ne, ilike, or, gte, lte, inArray, sql, desc, isNull } from "drizzle-orm";
-import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
+import { requireAuth, requireRole, requirePermission, requireStaffPermission } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
 import { getSettings, invalidateSettingsCache } from "../lib/getSettings";
 import { isSealRef, publicSignatureValue } from "../services/companySeal";
@@ -2343,7 +2343,7 @@ router.get("/admin/prepaid-accounts/:id", ...adminGuard, async (req, res) => {
 });
 
 // ─── 선입금 계정에 거래 추가 (차감 / 추가입금 / 조정) ──────────────────────
-router.post("/admin/prepaid-accounts/:id/transactions", ...adminGuard, async (req, res) => {
+router.post("/admin/prepaid-accounts/:id/transactions", ...adminGuard, requireStaffPermission("prepaid.manage"), async (req, res) => {
   const accountId = Number(req.params.id);
   const { type, amount, description, projectId, quoteId, supplyAmount, taxAmount, transactionDate } = req.body as {
     type: "deduction" | "deposit" | "adjustment";
@@ -2404,7 +2404,7 @@ router.post("/admin/prepaid-accounts/:id/transactions", ...adminGuard, async (re
 });
 
 // ─── 선입금 원장 항목 삭제 (잔액 재계산) ────────────────────────────────────
-router.delete("/admin/prepaid-ledger/:entryId", ...adminGuard, async (req, res) => {
+router.delete("/admin/prepaid-ledger/:entryId", requireAuth, requireRole("admin"), async (req, res) => {
   const entryId = Number(req.params.entryId);
   try {
     const [entry] = await db.select().from(prepaidLedgerTable).where(eq(prepaidLedgerTable.id, entryId));
@@ -2433,7 +2433,7 @@ router.delete("/admin/prepaid-ledger/:entryId", ...adminGuard, async (req, res) 
 });
 
 // ─── 누적 청구 배치 목록 ───────────────────────────────────────────────────────
-router.get("/admin/billing-batches", ...adminGuard, async (req, res) => {
+router.get("/admin/billing-batches", ...adminGuard, requireStaffPermission(["billing.view", "menu.billing", "billing.manage"], { allowStaffWithoutRole: true }), async (req, res) => {
   try {
     const { status: statusFilter, companyId: companyIdFilter } = req.query as { status?: string; companyId?: string };
     const companyAlias2 = db.select({ id: companiesTable.id, name: companiesTable.name }).from(companiesTable).as("bb_company");
@@ -2569,7 +2569,7 @@ router.get("/admin/billing-batches", ...adminGuard, async (req, res) => {
 });
 
 // ─── 거래처의 현재 활성(draft) 누적 배치 조회 ────────────────────────────────
-router.get("/admin/billing-batches/active", ...adminGuard, async (req, res) => {
+router.get("/admin/billing-batches/active", ...adminGuard, requireStaffPermission(["billing.view", "menu.billing", "billing.manage"], { allowStaffWithoutRole: true }), async (req, res) => {
   const cid = Number((req.query as { companyId?: string }).companyId);
   if (!cid || isNaN(cid)) { res.status(400).json({ error: "companyId 필요" }); return; }
   try {
@@ -2601,7 +2601,7 @@ router.get("/admin/billing-batches/active", ...adminGuard, async (req, res) => {
 });
 
 // ─── 새 누적 배치 생성 ──────────────────────────────────────────────────────
-router.post("/admin/billing-batches", ...adminGuard, async (req, res) => {
+router.post("/admin/billing-batches", ...adminGuard, requireStaffPermission("billing.manage", { allowStaffWithoutRole: true }), async (req, res) => {
   const { companyId, note, periodStart, periodEnd } = req.body as { companyId?: number; note?: string; periodStart?: string; periodEnd?: string };
   if (!companyId) { res.status(400).json({ error: "companyId 필요" }); return; }
   const [existing] = await db.select({ id: billingBatchesTable.id }).from(billingBatchesTable)
@@ -2621,7 +2621,7 @@ router.post("/admin/billing-batches", ...adminGuard, async (req, res) => {
 });
 
 // ─── 누적 배치에 프로젝트 항목 추가 ──────────────────────────────────────────
-router.post("/admin/billing-batches/:batchId/items", ...adminGuard, async (req, res) => {
+router.post("/admin/billing-batches/:batchId/items", ...adminGuard, requireStaffPermission("billing.manage", { allowStaffWithoutRole: true }), async (req, res) => {
   const batchId = Number(req.params.batchId);
   const { projectId } = req.body as { projectId: number };
   if (!projectId) { res.status(400).json({ error: "projectId 필요" }); return; }
@@ -2648,7 +2648,7 @@ router.post("/admin/billing-batches/:batchId/items", ...adminGuard, async (req, 
 });
 
 // ─── 누적 배치 항목 제거 ─────────────────────────────────────────────────────
-router.delete("/admin/billing-batches/:batchId/items/:itemId", ...adminGuard, async (req, res) => {
+router.delete("/admin/billing-batches/:batchId/items/:itemId", ...adminGuard, requireStaffPermission("billing.manage", { allowStaffWithoutRole: true }), async (req, res) => {
   const batchId = Number(req.params.batchId), itemId = Number(req.params.itemId);
   try {
     await db.delete(billingBatchItemsTable).where(and(eq(billingBatchItemsTable.id, itemId), eq(billingBatchItemsTable.batchId, batchId)));
@@ -2664,7 +2664,7 @@ router.delete("/admin/billing-batches/:batchId/items/:itemId", ...adminGuard, as
 
 // ─── 누적 배치 작업 항목(work items) CRUD ───────────────────────────────────
 
-router.post("/admin/billing-batches/:batchId/work-items", ...adminGuard, async (req, res) => {
+router.post("/admin/billing-batches/:batchId/work-items", ...adminGuard, requireStaffPermission("billing.manage", { allowStaffWithoutRole: true }), async (req, res) => {
   const batchId = Number(req.params.batchId);
   const { workDate, projectName, language, description, quantity, unitPrice, amount, sortOrder } = req.body as {
     workDate?: string; projectName?: string; language?: string; description?: string;
@@ -2689,7 +2689,7 @@ router.post("/admin/billing-batches/:batchId/work-items", ...adminGuard, async (
   }
 });
 
-router.put("/admin/billing-batches/:batchId/work-items/:itemId", ...adminGuard, async (req, res) => {
+router.put("/admin/billing-batches/:batchId/work-items/:itemId", ...adminGuard, requireStaffPermission("billing.manage", { allowStaffWithoutRole: true }), async (req, res) => {
   const batchId = Number(req.params.batchId);
   const itemId = Number(req.params.itemId);
   const { workDate, projectName, language, description, quantity, unitPrice, amount, sortOrder } = req.body as {
@@ -2723,7 +2723,7 @@ router.put("/admin/billing-batches/:batchId/work-items/:itemId", ...adminGuard, 
   }
 });
 
-router.delete("/admin/billing-batches/:batchId/work-items/:itemId", ...adminGuard, async (req, res) => {
+router.delete("/admin/billing-batches/:batchId/work-items/:itemId", ...adminGuard, requireStaffPermission("billing.manage", { allowStaffWithoutRole: true }), async (req, res) => {
   const batchId = Number(req.params.batchId);
   const itemId = Number(req.params.itemId);
   try {
@@ -2737,7 +2737,7 @@ router.delete("/admin/billing-batches/:batchId/work-items/:itemId", ...adminGuar
 });
 
 // ─── 누적 배치 확정 발행 (견적서 생성) ──────────────────────────────────────
-router.post("/admin/billing-batches/:batchId/issue", ...adminGuard, async (req, res) => {
+router.post("/admin/billing-batches/:batchId/issue", ...adminGuard, requireStaffPermission("billing.manage", { allowStaffWithoutRole: true }), async (req, res) => {
   const batchId = Number(req.params.batchId);
   const { projectId, issueDate, paymentDueDate, taxDocumentType } = req.body as { projectId: number; issueDate?: string; paymentDueDate?: string; taxDocumentType?: string };
   if (!projectId) { res.status(400).json({ error: "projectId 필요" }); return; }

@@ -13,7 +13,7 @@ import {
 } from "@workspace/db";
 import { eq, and, or, isNull, isNotNull, inArray, ne, sql } from "drizzle-orm";
 import { z } from "zod";
-import { requireAuth, requireRole } from "../middlewares/auth";
+import { requireAuth, requireRole, requireStaffPermission } from "../middlewares/auth";
 import { getPermissionsForRole } from "../lib/rbac";
 import { decrypt, maskResidentNumber, maskBankAccount, readAccountPlain, isValidBankAccountFormat } from "../lib/encrypt";
 import { generatePayoutTransfers, reverifyTransfer, REVERIFIABLE_STATUSES } from "../services/payoutTransfers";
@@ -23,6 +23,16 @@ import { collectUnifiedItems } from "./payoutUnified";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
+// ─── 지급회차 실행권한(RBAC) — admin 은 기존과 동일하게 전체 허용 ─────────────────
+//  · 조회: payout.view 또는 payout.statement(명세서 화면이 회차 조회 사용). 역할 미지정 직원은 기존대로 조회 허용.
+//  · 작성·수정(대상 수집·제외·이월·보류): payout.manage
+//  · 지급확정: payout.confirm / 송금건 생성·은행파일·지급완료: payout.transfer (관리자급 권한)
+//  · 확정취소·회차 취소: 관리자 전용(확정취소는 기존 슈퍼관리자 검사 유지)
+const payoutView = [...adminGuard, requireStaffPermission(["payout.view", "payout.statement"], { allowStaffWithoutRole: true })];
+const payoutManage = [...adminGuard, requireStaffPermission("payout.manage")];
+const payoutConfirm = [...adminGuard, requireStaffPermission("payout.confirm")];
+const payoutTransfer = [...adminGuard, requireStaffPermission("payout.transfer")];
+const adminOnlyGuard = [requireAuth, requireRole("admin")];
 
 const num = (v: unknown) => { const n = Number(v ?? 0); return Number.isFinite(n) ? n : 0; };
 
@@ -630,7 +640,7 @@ async function assignUnassignedToRound(round: any) {
 }
 
 // ── GET 목록 ─────────────────────────────────────────────────────────────────
-router.get("/admin/payout-rounds", ...adminGuard, async (_req, res) => {
+router.get("/admin/payout-rounds", ...payoutView, async (_req, res) => {
   const rows = await db.select().from(payoutRoundsTable).orderBy(sql`${payoutRoundsTable.paymentDate} DESC`, sql`${payoutRoundsTable.id} DESC`);
   res.json({ rows });
 });
@@ -645,7 +655,7 @@ const createSchema = z.object({
 });
 
 // ── POST 생성 + 대상 자동수집(§5~§9) ─────────────────────────────────────────
-router.post("/admin/payout-rounds", ...adminGuard, async (req, res) => {
+router.post("/admin/payout-rounds", ...payoutManage, async (req, res) => {
   const parsed = createSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: "유효성 검증 실패", detail: parsed.error.flatten() }); return; }
   const { paymentDate, periodStart, periodEnd, collectionBasis = DEFAULT_COLLECTION_BASIS, note } = parsed.data;
@@ -689,7 +699,7 @@ router.post("/admin/payout-rounds", ...adminGuard, async (req, res) => {
 //   · 지급완료 건은 제외(eligibleConds, §10). 집계·계산은 회차 상세와 동일 함수 재사용(§11 계산 불변).
 //   · 읽기 전용 — payout_round_id·상태·원본 데이터를 일절 변경하지 않는다(§15).
 //   · 반드시 GET /:id 보다 위에 정의(라우팅 충돌 방지: "overview"가 :id로 잡히지 않도록).
-router.get("/admin/payout-rounds/overview", ...adminGuard, async (req, res) => {
+router.get("/admin/payout-rounds/overview", ...payoutView, async (req, res) => {
   const unassignedOnly = String(req.query.scope ?? "all") === "unassigned";
   try {
     const items = await attachLineItems(await selectItems(overviewWhere(unassignedOnly)));
@@ -712,7 +722,7 @@ router.get("/admin/payout-rounds/overview", ...adminGuard, async (req, res) => {
 });
 
 // ── GET 상세 ─────────────────────────────────────────────────────────────────
-router.get("/admin/payout-rounds/:id", ...adminGuard, async (req, res) => {
+router.get("/admin/payout-rounds/:id", ...payoutView, async (req, res) => {
   const id = Number(req.params.id);
   const [round] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
   if (!round) { res.status(404).json({ error: "지급회차를 찾을 수 없습니다." }); return; }
@@ -730,7 +740,7 @@ const saveSchema = z.object({
 });
 
 // ── PATCH 저장(§12·§13·§15) — 메타 수정 + 건별 제외/보류/재포함 적용 ─────────────
-router.patch("/admin/payout-rounds/:id", ...adminGuard, async (req, res) => {
+router.patch("/admin/payout-rounds/:id", ...payoutManage, async (req, res) => {
   const id = Number(req.params.id);
   const parsed = saveSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: "유효성 검증 실패", detail: parsed.error.flatten() }); return; }
@@ -812,7 +822,7 @@ router.patch("/admin/payout-rounds/:id", ...adminGuard, async (req, res) => {
 //   전체 동기화(개별 [포함]과 역할 분리). Draft 상태에서만 허용.
 //   기존 연결은 유지하되: ①신규 대상 자동 편입 ②연결건 금액변경은 링크 기반 실시간 반영
 //   ③지급완료·④지급보류·⑤삭제 건은 회차에서 연결 해제. 새 상태값·컬럼 없이 기존 구조만 사용.
-router.patch("/admin/payout-rounds/:id/recollect", ...adminGuard, async (req, res) => {
+router.patch("/admin/payout-rounds/:id/recollect", ...payoutManage, async (req, res) => {
   const id = Number(req.params.id);
   const [round] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
   if (!round) { res.status(404).json({ error: "지급회차를 찾을 수 없습니다." }); return; }
@@ -861,7 +871,7 @@ router.patch("/admin/payout-rounds/:id/recollect", ...adminGuard, async (req, re
 });
 
 // ── PATCH 지급확정(§16) ──────────────────────────────────────────────────────
-router.patch("/admin/payout-rounds/:id/confirm", ...adminGuard, async (req, res) => {
+router.patch("/admin/payout-rounds/:id/confirm", ...payoutConfirm, async (req, res) => {
   const id = Number(req.params.id);
   const [round] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
   if (!round) { res.status(404).json({ error: "지급회차를 찾을 수 없습니다." }); return; }
@@ -884,7 +894,7 @@ router.patch("/admin/payout-rounds/:id/confirm", ...adminGuard, async (req, res)
 //  · 확정 스냅샷(payout_round_items)만 집계, 원본 재계산 없음. idempotent(중복 미생성, 기존건 불변).
 //  · 계좌정보는 암호화 snapshot 만 저장, 검증결과(verified/missing/invalid)를 함께 기록(§3·§5·§6).
 //  · Phase 1 범위: 생성/동기화 + 계좌검증까지. 실제 송금·IBK 파일은 Phase 2에서 이 레코드에 연결.
-router.post("/admin/payout-rounds/:id/transfers/generate", ...adminGuard, async (req, res) => {
+router.post("/admin/payout-rounds/:id/transfers/generate", ...payoutTransfer, async (req, res) => {
   const id = Number(req.params.id);
   const [round] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
   if (!round) { res.status(404).json({ error: "지급회차를 찾을 수 없습니다." }); return; }
@@ -953,7 +963,7 @@ async function loadTransfersView(id: number) {
 }
 
 // ── GET 지급 송금 목록 — 지급 실행 화면. 계좌번호는 마스킹만 반환(§13). ──
-router.get("/admin/payout-rounds/:id/transfers", ...adminGuard, async (req, res) => {
+router.get("/admin/payout-rounds/:id/transfers", ...payoutView, async (req, res) => {
   const id = Number(req.params.id);
   try {
     const view = await loadTransfersView(id);
@@ -966,7 +976,7 @@ router.get("/admin/payout-rounds/:id/transfers", ...adminGuard, async (req, res)
 });
 
 // ── POST 단건 계좌 재검증(§5) — 최신 통번역사 계좌 재조회·검증. paid/excluded/cancelled 금지. ──
-router.post("/admin/payout-rounds/:id/transfers/:transferId/reverify", ...adminGuard, async (req, res) => {
+router.post("/admin/payout-rounds/:id/transfers/:transferId/reverify", ...payoutTransfer, async (req, res) => {
   const id = Number(req.params.id);
   const transferId = Number(req.params.transferId);
   const [t] = await db.select().from(payoutTransfersTable)
@@ -986,7 +996,7 @@ router.post("/admin/payout-rounds/:id/transfers/:transferId/reverify", ...adminG
 });
 
 // ── POST 전체 재검증(§6) — pending/ready/failed 대상만 재검증. 확정금액(amount) 불변. ──
-router.post("/admin/payout-rounds/:id/transfers/reverify-all", ...adminGuard, async (req, res) => {
+router.post("/admin/payout-rounds/:id/transfers/reverify-all", ...payoutTransfer, async (req, res) => {
   const id = Number(req.params.id);
   const [round] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
   if (!round) { res.status(404).json({ error: "지급회차를 찾을 수 없습니다." }); return; }
@@ -1011,7 +1021,7 @@ router.post("/admin/payout-rounds/:id/transfers/reverify-all", ...adminGuard, as
 });
 
 // ── POST 지급 제외(§7·§8) — 사유 필수. 삭제하지 않고 status=excluded + 사유·주체·시각 기록. ──
-router.post("/admin/payout-rounds/:id/transfers/:transferId/exclude", ...adminGuard, async (req, res) => {
+router.post("/admin/payout-rounds/:id/transfers/:transferId/exclude", ...payoutTransfer, async (req, res) => {
   const id = Number(req.params.id);
   const transferId = Number(req.params.transferId);
   const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
@@ -1035,7 +1045,7 @@ router.post("/admin/payout-rounds/:id/transfers/:transferId/exclude", ...adminGu
 });
 
 // ── POST 지급 제외 해제(§9) — 제외 메타 초기화 후 검증결과로 status 복귀. paid 금지. ──
-router.post("/admin/payout-rounds/:id/transfers/:transferId/unexclude", ...adminGuard, async (req, res) => {
+router.post("/admin/payout-rounds/:id/transfers/:transferId/unexclude", ...payoutTransfer, async (req, res) => {
   const id = Number(req.params.id);
   const transferId = Number(req.params.transferId);
   const [t] = await db.select().from(payoutTransfersTable)
@@ -1064,7 +1074,7 @@ router.post("/admin/payout-rounds/:id/transfers/:transferId/unexclude", ...admin
 //  · 확정 snapshot(amount) 재계산 금지. payout_round_items 재집계 금지. status 를 paid 로 바꾸지 않는다(§8).
 //  · 계좌번호 원본은 이 요청 처리 중 서버 메모리에서만 복호화하고, 응답 헤더·JSON·로그에 남기지 않는다(§11).
 //  · 재생성 허용(§9): 동일 snapshot 으로 Excel 만 다시 만들고 ibkFileGeneratedAt 만 갱신한다.
-router.post("/admin/payout-rounds/:id/transfers/ibk-file", ...adminGuard, async (req, res) => {
+router.post("/admin/payout-rounds/:id/transfers/ibk-file", ...payoutTransfer, async (req, res) => {
   const id = Number(req.params.id);
   try {
     const [round] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
@@ -1184,7 +1194,7 @@ router.post("/admin/payout-rounds/:id/transfers/ibk-file", ...adminGuard, async 
 //  · 확정취소 시에만 건별 확정 스냅샷을 해제(삭제)하고, 같은 지급일의 미배정 건을 재편입한 뒤,
 //    최신 수행정보 기준으로 회차 총계를 재계산한다. 이후 관리자가 다시 지급확정.
 //  · 민감한 회계 상태 전환이므로 super-admin(관리자, roleId 없음)만 허용.
-router.patch("/admin/payout-rounds/:id/unconfirm", ...adminGuard, async (req, res) => {
+router.patch("/admin/payout-rounds/:id/unconfirm", ...adminOnlyGuard, async (req, res) => {
   const id = Number(req.params.id);
   const isSuperAdmin = req.user?.role === "admin" && !req.user?.roleId;
   if (!isSuperAdmin) { res.status(403).json({ error: "확정취소는 관리자만 할 수 있습니다." }); return; }
@@ -1216,7 +1226,7 @@ router.patch("/admin/payout-rounds/:id/unconfirm", ...adminGuard, async (req, re
 //   · 대상: 이 회차에 연결된 건 중 지급보류(payment_hold)가 아닌 건 → 지급완료(paid).
 //   · 지급보류 건은 대상에서 제외(상태 유지). payout_round.status 와 payment_status 는 역할 분리.
 //   · 새 상태값·컬럼을 추가하지 않고 기존 enum(paid)만 사용한다.
-router.patch("/admin/payout-rounds/:id/pay", ...adminGuard, async (req, res) => {
+router.patch("/admin/payout-rounds/:id/pay", ...payoutTransfer, async (req, res) => {
   const id = Number(req.params.id);
   const [round] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
   if (!round) { res.status(404).json({ error: "지급회차를 찾을 수 없습니다." }); return; }
@@ -1254,7 +1264,7 @@ router.patch("/admin/payout-rounds/:id/pay", ...adminGuard, async (req, res) => 
 //   · 처리 후 회차 내 미지급이 0이면 회차를 지급완료(paid)로 전환(전체 완료). 아니면 confirmed 유지(부분).
 //   · 기존 전체 [지급완료]와 계산·스냅샷 로직 동일 — 상태 전환 조건만 건별 반영.
 const itemIdsSchema = z.object({ assignmentIds: z.array(z.number().int().positive()).min(1) });
-router.patch("/admin/payout-rounds/:id/pay-items", ...adminGuard, async (req, res) => {
+router.patch("/admin/payout-rounds/:id/pay-items", ...payoutTransfer, async (req, res) => {
   const id = Number(req.params.id);
   const parsed = itemIdsSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: "선택된 건이 없습니다." }); return; }
@@ -1295,7 +1305,7 @@ router.patch("/admin/payout-rounds/:id/pay-items", ...adminGuard, async (req, re
 //   · 대상: 이 회차 소속·미지급(지급완료 아님) 건만. 지급완료 건은 제외 불가(§5).
 //   · 제외 건: payoutRoundId=NULL(미배정 복귀) + 확정 스냅샷 삭제. 남은 건 스냅샷·금액은 그대로 보존.
 //   · 남은 확정 스냅샷 기준으로 회차 총계만 재계산. 민감 회계전환이므로 super-admin만 허용.
-router.patch("/admin/payout-rounds/:id/unconfirm-items", ...adminGuard, async (req, res) => {
+router.patch("/admin/payout-rounds/:id/unconfirm-items", ...adminOnlyGuard, async (req, res) => {
   const id = Number(req.params.id);
   const isSuperAdmin = req.user?.role === "admin" && !req.user?.roleId;
   if (!isSuperAdmin) { res.status(403).json({ error: "확정취소는 관리자만 할 수 있습니다." }); return; }
@@ -1333,7 +1343,7 @@ router.patch("/admin/payout-rounds/:id/unconfirm-items", ...adminGuard, async (r
 });
 
 // ── PATCH 취소 — 회차 연결 해제 후 취소(수집건을 미배정으로 되돌림) ───────────────
-router.patch("/admin/payout-rounds/:id/cancel", ...adminGuard, async (req, res) => {
+router.patch("/admin/payout-rounds/:id/cancel", ...adminOnlyGuard, async (req, res) => {
   const id = Number(req.params.id);
   const [round] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
   if (!round) { res.status(404).json({ error: "지급회차를 찾을 수 없습니다." }); return; }

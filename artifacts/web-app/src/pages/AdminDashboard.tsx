@@ -1766,6 +1766,12 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
         <SettlementTabs
           view={adminTab === "settlement-statement" ? "statement" : adminTab === "settlement-tax" ? "tax" : "payout"}
           canOps={hasPerm("menu.payout_ops")}
+          payoutPerms={{
+            manage: user.role === "admin" || hasPerm("payout.manage"),
+            confirm: user.role === "admin" || hasPerm("payout.confirm"),
+            transfer: user.role === "admin" || hasPerm("payout.transfer"),
+            superAdmin: user.role === "admin" && !user.roleId,
+          }}
           token={token ?? ""}
           onToast={setToast}
         />
@@ -2927,9 +2933,11 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                 Excel 다운로드
               </GhostBtn>
               <GhostBtn onClick={fetchPrepaidAccounts} style={{ fontSize: 12, padding: "6px 14px" }}>새로고침</GhostBtn>
-              <PrimaryBtn onClick={() => setShowCreatePrepaidForm(true)} style={{ fontSize: 12, padding: "6px 14px" }}>
-                + 선입금 계정 등록
-              </PrimaryBtn>
+              {(user.role === "admin" || hasPerm("prepaid.manage")) && (
+                <PrimaryBtn onClick={() => setShowCreatePrepaidForm(true)} data-testid="btn-prepaid-create" aria-label="선입금 계정 등록" style={{ fontSize: 12, padding: "6px 14px" }}>
+                  + 선입금 계정 등록
+                </PrimaryBtn>
+              )}
             </div>
           }>
 
@@ -3058,6 +3066,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           authHeaders={authHeaders}
           onClose={() => setSelectedPrepaidAccountId(null)}
           onUpdate={fetchPrepaidAccounts}
+          canManage={user.role === "admin" || hasPerm("prepaid.manage")}
+          canDelete={user.role === "admin"}
         />
       )}
 

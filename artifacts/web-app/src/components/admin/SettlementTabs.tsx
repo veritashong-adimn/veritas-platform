@@ -9,7 +9,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useState } from 'react';
 import { BackToListButton } from './BackToListButton';
-import PayoutRoundsTab from './PayoutRoundsTab';
+import PayoutRoundsTab, { type PayoutPerms } from './PayoutRoundsTab';
 import PayoutStatementTab from './PayoutStatementTab';
 import TaxReportTab from './TaxReportTab';
 import { PayoutUnifiedTab } from './PayoutUnifiedTab';
@@ -19,11 +19,13 @@ interface Props {
   view: 'payout' | 'statement' | 'tax';
   /** 운영 지급확정·은행이체 화면 접근 권한(menu.payout_ops). 없으면 이동 버튼을 숨기고 통합 화면만 표시. */
   canOps?: boolean;
+  /** 지급회차 실행권한(작성·확정·송금·관리자) — 미전달 시 기존 동작. */
+  payoutPerms?: PayoutPerms;
   token: string;
   onToast: (m: string) => void;
 }
 
-export function SettlementTabs({ view, token, onToast, canOps = true }: Props) {
+export function SettlementTabs({ view, token, onToast, canOps = true, payoutPerms }: Props) {
   // 지급회차 관리 화면: 통합 조회(기본) ↔ 운영 지급확정·이체(보조). 다른 view(명세서·세무)는 영향 없음.
   const [mode, setMode] = useState<'unified' | 'operational'>('unified');
   // 지급명세서: 통합 검색(기본 — 지급회차 관리와 같은 통합 지급자료) ↔ 운영 지급회차 확정 스냅샷 명세서(기존 화면, 보조).
@@ -61,7 +63,7 @@ export function SettlementTabs({ view, token, onToast, canOps = true }: Props) {
       </div>
       {mode === 'unified' || !canOps
         ? <PayoutUnifiedTab token={token} onToast={onToast} />
-        : <PayoutRoundsTab token={token} onToast={onToast} />}
+        : <PayoutRoundsTab token={token} onToast={onToast} perms={payoutPerms} />}
     </div>
   );
 }

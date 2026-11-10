@@ -21,7 +21,7 @@
 import { Router, type IRouter } from "express";
 import { db, calcPayoutWithholding } from "@workspace/db";
 import { sql } from "drizzle-orm";
-import { requireAuth, requireRole } from "../middlewares/auth";
+import { requireAuth, requireRole, requireStaffPermission } from "../middlewares/auth";
 import { getPermissionsForRole } from "../lib/rbac";
 import { isLegacyPlaceholderEmail } from "../lib/mailer";
 import { LEGACY_PAID_DELIVERY_CUTOFF, LEGACY_PAID_BASIS, LEGACY_PAID_BY_ROUND_BASIS } from "../lib/legacyPayoutRule";
@@ -174,7 +174,7 @@ function rangeCond(basis: "payout" | "delivery", dFrom: string | null, dTo: stri
 }
 
 // ── GET 통합 회차 목록 ─────────────────────────────────────────────────────────
-router.get("/admin/payout-unified/rounds", ...adminGuard, async (req, res) => {
+router.get("/admin/payout-unified/rounds", ...adminGuard, requireStaffPermission(["payout.view", "payout.statement"], { allowStaffWithoutRole: true }), async (req, res) => {
   try {
     const qp = req.query as Record<string, string | undefined>;
     const basis = parseBasis(qp.basis);
@@ -412,7 +412,7 @@ export async function collectUnifiedItems(opts: {
 }
 
 // ── GET 건별 상세 + 통번역사(Master)별 통합 집계 ───────────────────────────────
-router.get("/admin/payout-unified/payees", ...adminGuard, async (req, res) => {
+router.get("/admin/payout-unified/payees", ...adminGuard, requireStaffPermission(["payout.view", "payout.statement"], { allowStaffWithoutRole: true }), async (req, res) => {
   try {
     const qp = req.query as Record<string, string | undefined>;
     const basis = parseBasis(qp.basis);

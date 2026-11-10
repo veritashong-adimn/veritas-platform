@@ -88,9 +88,11 @@ function suggestPeriod(paymentDate: string): { start: string; end: string } {
   return { start: `${py}-${p2(pm)}-16`, end: `${py}-${p2(pm)}-${p2(pLast)}` };
 }
 
-interface Props { token: string; onToast: (m: string) => void; }
+/** 실행권한 — 서버(requireStaffPermission)와 동일 키. 미전달 시 기존 동작(전체 표시) 유지. */
+export type PayoutPerms = { manage: boolean; confirm: boolean; transfer: boolean; superAdmin: boolean };
+interface Props { token: string; onToast: (m: string) => void; perms?: PayoutPerms; }
 
-export default function PayoutRoundsTab({ token, onToast }: Props) {
+export default function PayoutRoundsTab({ token, onToast, perms = { manage: true, confirm: true, transfer: true, superAdmin: true } }: Props) {
   const authH = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
   const [rounds, setRounds] = useState<any[]>([]);
   // 선택값(§6): 'all'(전체 지급대상·기본) | 'unassigned'(미배정) | 회차 id 문자열.
@@ -242,9 +244,9 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
   // 전체 지급대상(개요) 모드 — 회차가 선택되지 않았고 데이터가 로드된 상태(§1). 건별 조치는 회차 선택 시만 가능.
   const isOverview = !!detail && !round;
   const overviewInfo = detail?.overview ?? null;
-  const showActions = !!round && !locked;   // 제외/이월/보류는 특정 회차(편집가능)에서만
+  const showActions = !!round && !locked && perms.manage;   // 제외/이월/보류는 특정 회차(편집가능)·작성 권한(payout.manage)에서만
   // 건별(선택) 처리 가능 모드 — 지급확정(confirmed) 회차에서만. 부분 지급완료도 status는 confirmed 유지.
-  const perItemMode = !!round && round.status === 'confirmed';
+  const perItemMode = !!round && round.status === 'confirmed' && (perms.transfer || perms.superAdmin); // 선택 지급완료(transfer)·선택 확정취소(관리자)
   const payStats = detail?.payStats ?? { paid: 0, hold: 0, unpaid: 0, total: 0 };
   // 회차 상태 표시(§6) — 0완료=지급확정 / 일부=일부 지급완료(n/m) / 전체=지급완료(paid는 서버 status).
   const partialPaid = round?.status === 'confirmed' && payStats.paid > 0;
@@ -523,7 +525,7 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
             </div>
           </div>
           {/* 우측 끝: 지급회차 생성 (버튼 디자인·기능·이벤트 불변) */}
-          <PrimaryBtn onClick={() => setShowCreate(true)} style={{ fontSize: 12, padding: '8px 16px' }} data-testid="payout-create" aria-label="지급회차 생성">+ 지급회차 생성</PrimaryBtn>
+          {perms.manage && <PrimaryBtn onClick={() => setShowCreate(true)} style={{ fontSize: 12, padding: '8px 16px' }} data-testid="payout-create" aria-label="지급회차 생성">+ 지급회차 생성</PrimaryBtn>}
           {/* 지급명세서는 좌측 사이드바 정산→지급명세서 독립 메뉴로 분리(PayoutStatementTab). */}
         </div>
       </Card>
@@ -615,11 +617,11 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
                 {(round.status === 'confirmed' || round.status === 'paid') && (
                   <button type="button" onClick={() => setShowExec(true)} disabled={busy} data-testid="payout-execute-top" aria-label="지급 실행"
                     style={{ ...TYPO.helper, color: round.status === 'confirmed' ? '#fff' : C.primaryText, background: round.status === 'confirmed' ? C.primaryText : C.primaryBg, border: `1px solid ${C.primaryText}`, borderRadius: 6, padding: '5px 14px', cursor: busy ? 'not-allowed' : 'pointer', fontWeight: 800 }}>
-                    💳 {round.status === 'confirmed' ? '지급 실행' : '지급 실행 조회'}
+                    💳 {round.status === 'confirmed' && perms.transfer ? '지급 실행' : '지급 실행 조회'}
                   </button>
                 )}
                 {/* 전체 동기화 — Draft 회차에서만. 확정/완료/취소 회차는 숨김(§5). 개별 [포함]과 역할 분리(§6). */}
-                {round.status === 'draft' && (
+                {round.status === 'draft' && perms.manage && (
                   <button type="button" onClick={recollectRound} disabled={busy} data-testid="payout-recollect" aria-label="지급대상 다시 수집"
                     style={{ ...TYPO.helper, color: C.primaryText, background: C.primaryBg, border: `1px solid ${C.primaryBorder}`, borderRadius: 6, padding: '4px 10px', cursor: busy ? 'not-allowed' : 'pointer', fontWeight: 700 }}>
                     🔄 지급대상 다시 수집
@@ -721,10 +723,10 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
                 {perItemMode && (<>
                   <span style={{ ...TYPO.helper, fontWeight: 700 }}>선택 {selectedItems.size}건</span>
-                  <button type="button" onClick={payItemsSelected} disabled={busy || selectedItems.size === 0} data-testid="payout-pay-items" aria-label="선택 지급완료"
-                    style={{ fontSize: 12, padding: '6px 12px', borderRadius: 7, fontWeight: 700, cursor: (busy || selectedItems.size === 0) ? 'not-allowed' : 'pointer', color: '#fff', background: (busy || selectedItems.size === 0) ? C.g300 : C.primary, border: 'none' }}>선택 지급완료</button>
-                  <button type="button" onClick={unconfirmItemsSelected} disabled={busy || selectedItems.size === 0} data-testid="payout-unconfirm-items" aria-label="선택 확정취소"
-                    style={{ fontSize: 12, padding: '6px 12px', borderRadius: 7, fontWeight: 700, cursor: (busy || selectedItems.size === 0) ? 'not-allowed' : 'pointer', color: C.textSecondary, background: C.g50, border: `1px solid ${C.border}` }}>선택 확정취소</button>
+                  {perms.transfer && <button type="button" onClick={payItemsSelected} disabled={busy || selectedItems.size === 0} data-testid="payout-pay-items" aria-label="선택 지급완료"
+                    style={{ fontSize: 12, padding: '6px 12px', borderRadius: 7, fontWeight: 700, cursor: (busy || selectedItems.size === 0) ? 'not-allowed' : 'pointer', color: '#fff', background: (busy || selectedItems.size === 0) ? C.g300 : C.primary, border: 'none' }}>선택 지급완료</button>}
+                  {perms.superAdmin && <button type="button" onClick={unconfirmItemsSelected} disabled={busy || selectedItems.size === 0} data-testid="payout-unconfirm-items" aria-label="선택 확정취소"
+                    style={{ fontSize: 12, padding: '6px 12px', borderRadius: 7, fontWeight: 700, cursor: (busy || selectedItems.size === 0) ? 'not-allowed' : 'pointer', color: C.textSecondary, background: C.g50, border: `1px solid ${C.border}` }}>선택 확정취소</button>}
                   <span style={{ ...TYPO.helper, color: C.textSecondary }}>지급완료된 건은 선택할 수 없습니다.</span>
                 </>)}
                 <GhostBtn onClick={exportItemsExcel} disabled={itemRows.length === 0}
@@ -828,7 +830,7 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
       {!loading && !error && round && (
         <>
           {/* ── 재포함 가능 건(§5 포함) — 제외/이월했거나 새로 조건 충족된 미배정 건 ── */}
-          {!locked && collectable.length > 0 && (
+          {!locked && perms.manage && collectable.length > 0 && (
             <Card>
               <div style={{ ...TYPO.inputValue, fontWeight: 700, marginBottom: SP[2] }}>재포함 가능 <span style={{ color: C.primaryText }}>{collectable.length}건</span> <span style={{ ...TYPO.helper, fontWeight: 400 }}>— 대상기간 내 조건 충족·미배정 건. 「포함」으로 이 회차에 편입</span></div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 220, overflowY: 'auto' }}>
@@ -870,20 +872,22 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
                   ? <>
                       <span style={{ ...TYPO.helper, color: ROUND_STATUS.confirmed.color, fontWeight: 700, alignSelf: 'center' }}>지급 확정 — 관리자만 수정 가능</span>
                       {/* 확정취소 — 지급완료 전에만. 작성중으로 되돌려 재편입·재계산 후 다시 확정. */}
-                      <button type="button" onClick={unconfirmRound} disabled={busy} data-testid="payout-unconfirm" aria-label="확정취소"
+                      {perms.superAdmin && <button type="button" onClick={unconfirmRound} disabled={busy} data-testid="payout-unconfirm" aria-label="확정취소"
                         style={{ fontSize: 13, padding: '9px 16px', borderRadius: 8, cursor: busy ? 'not-allowed' : 'pointer', background: C.g50, border: `1px solid ${C.border}`, color: C.textSecondary, fontWeight: 700, alignSelf: 'center' }}>
                         확정취소
-                      </button>
+                      </button>}
                       {/* 지급 실행(§1) — 은행 송금 전 지급대상·계좌 최종 검토. 실제 지급 아님. */}
                       <button type="button" onClick={() => setShowExec(true)} disabled={busy} data-testid="payout-execute" aria-label="지급 실행"
                         style={{ fontSize: 13, padding: '9px 18px', borderRadius: 8, cursor: busy ? 'not-allowed' : 'pointer', background: C.primaryBg, border: `1px solid ${C.primaryBorder}`, color: C.primaryText, fontWeight: 700, alignSelf: 'center' }}>
-                        지급 실행
+                        {perms.transfer ? '지급 실행' : '지급 실행 조회'}
                       </button>
-                      <PrimaryBtn onClick={payRound} disabled={busy} style={{ fontSize: 13, padding: '9px 20px' }} data-testid="payout-pay" aria-label="지급완료">지급완료</PrimaryBtn>
+                      {perms.transfer && <PrimaryBtn onClick={payRound} disabled={busy} style={{ fontSize: 13, padding: '9px 20px' }} data-testid="payout-pay" aria-label="지급완료">지급완료</PrimaryBtn>}
                     </>
                   : round.status === 'cancelled'
                     ? <span style={{ ...TYPO.helper, color: ROUND_STATUS.cancelled.color, fontWeight: 700 }}>{ROUND_STATUS.cancelled.label} — 수정 불가</span>
-                    : <PrimaryBtn onClick={confirmRound} disabled={busy || (totals.assignments ?? 0) === 0} style={{ fontSize: 13, padding: '9px 20px' }} data-testid="payout-confirm" aria-label="지급확정">지급확정</PrimaryBtn>}
+                    : perms.confirm
+                      ? <PrimaryBtn onClick={confirmRound} disabled={busy || (totals.assignments ?? 0) === 0} style={{ fontSize: 13, padding: '9px 20px' }} data-testid="payout-confirm" aria-label="지급확정">지급확정</PrimaryBtn>
+                      : <span style={{ ...TYPO.helper, color: C.textSecondary, fontWeight: 700, alignSelf: 'center' }} data-testid="payout-confirm-locked">지급확정은 관리자 권한이 필요합니다</span>}
               </div>
             )}
           </Card>
@@ -891,10 +895,10 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
       )}
 
       {showExec && round && selId != null && (
-        <PayoutExecutionModal token={token} round={{ id: selId, batchNumber: round.batchNumber, paymentDate: round.paymentDate, status: round.status }} onToast={onToast} onClose={() => setShowExec(false)} />
+        <PayoutExecutionModal token={token} round={{ id: selId, batchNumber: round.batchNumber, paymentDate: round.paymentDate, status: round.status }} onToast={onToast} onClose={() => setShowExec(false)} canTransfer={perms.transfer} />
       )}
       {showCreate && <CreateDialog token={token} onToast={onToast} onClose={() => setShowCreate(false)} onCreated={async (d) => { setShowCreate(false); await loadRounds(); setSel(String(d.round.id)); setDetail(d); }} />}
-      {showWarn && <WarningsModal warnings={warnings} busy={busy} onUnhold={!locked ? unholdItem : undefined} onClose={() => setShowWarn(false)} />}
+      {showWarn && <WarningsModal warnings={warnings} busy={busy} onUnhold={!locked && perms.manage ? unholdItem : undefined} onClose={() => setShowWarn(false)} />}
       {holdFor && (
         <Modal title={`지급보류 — ${holdFor.name}`} onClose={() => setHoldFor(null)}>
           <p style={{ ...TYPO.helper, margin: '0 0 8px' }}>보류 사유를 선택하거나 입력하세요 (필수).</p>

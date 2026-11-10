@@ -19,7 +19,7 @@
 import { Router, type IRouter } from "express";
 import { db, paymentTransactionsTable } from "@workspace/db";
 import { inArray, asc, sql } from "drizzle-orm";
-import { requireAuth, requireRole } from "../middlewares/auth";
+import { requireAuth, requireRole, requireStaffPermission } from "../middlewares/auth";
 import { parseDepositAmounts } from "../services/legacySaleActivation";
 
 const router: IRouter = Router();
@@ -55,7 +55,7 @@ type MainRow = {
   last_paid_date: string | null;
 };
 
-router.get("/admin/collections", ...adminGuard, async (req, res) => {
+router.get("/admin/collections", ...adminGuard, requireStaffPermission(["payment.view", "menu.payment"], { allowStaffWithoutRole: true }), async (req, res) => {
   try {
     // ── 메인 쿼리(1회): 청구행 + 청구업체 + 프로젝트/담당PM + 현재견적번호 + 거래 집계(cnt/sum/최근입금일) ──
     //  · 선입/차감 견적행 제외: 현재견적(is_current) quote_type ∈ (b2c_prepaid, prepaid_deduction) → NOT EXISTS.

@@ -39,11 +39,15 @@ interface Props {
   authHeaders: Record<string, string>;
   onClose: () => void;
   onUpdate: () => void;
+  /** 입금·차감 등록(prepaid.manage) — 미전달 시 기존 동작(표시). */
+  canManage?: boolean;
+  /** 원장 항목 영구삭제(관리자 전용) — 미전달 시 기존 동작(표시). */
+  canDelete?: boolean;
 }
 
 const fmt = (n: number) => n.toLocaleString("ko-KR");
 
-export function PrepaidLedgerModal({ accountId, authHeaders, onClose, onUpdate }: Props) {
+export function PrepaidLedgerModal({ accountId, authHeaders, onClose, onUpdate, canManage = true, canDelete = true }: Props) {
   const [account, setAccount] = useState<PrepaidAccount | null>(null);
   const [loading, setLoading] = useState(true);
   const [showTxForm, setShowTxForm] = useState(false);
@@ -152,14 +156,14 @@ export function PrepaidLedgerModal({ accountId, authHeaders, onClose, onUpdate }
 
         <div style={{ padding: 24 }}>
           {/* 거래 추가 버튼 */}
-          <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+          {canManage && <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
             <PrimaryBtn onClick={() => { setTxType("deduction"); setShowTxForm(true); }} style={{ fontSize: 13, padding: "8px 16px" }}>
               ➖ 차감 추가
             </PrimaryBtn>
             <GhostBtn onClick={() => { setTxType("deposit"); setShowTxForm(true); }} style={{ fontSize: 13, padding: "8px 16px" }}>
               ➕ 추가 입금
             </GhostBtn>
-          </div>
+          </div>}
 
           {/* 거래 추가 폼 */}
           {showTxForm && (
@@ -258,11 +262,11 @@ export function PrepaidLedgerModal({ accountId, authHeaders, onClose, onUpdate }
                           {fmt(e.balanceAfter)}원
                         </td>
                         <td style={{ ...tdBase }}>
-                          <button onClick={() => handleDeleteEntry(e.id)} disabled={deleteId === e.id}
+                          {canDelete && <button onClick={() => handleDeleteEntry(e.id)} disabled={deleteId === e.id}
                             style={{ background: "none", border: "none", color: "#9ca3af", cursor: "pointer", fontSize: 12, padding: "2px 6px", borderRadius: 4 }}
                             title="이 항목 삭제">
                             {deleteId === e.id ? "..." : "🗑"}
-                          </button>
+                          </button>}
                         </td>
                       </tr>
                     );

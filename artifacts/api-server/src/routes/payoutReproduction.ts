@@ -22,13 +22,13 @@
 import { Router, type IRouter } from "express";
 import { db, calcPayoutWithholding } from "@workspace/db";
 import { sql } from "drizzle-orm";
-import { requireAuth, requireRole } from "../middlewares/auth";
+import { requireAuth, requireRole, requireStaffPermission } from "../middlewares/auth";
 import { getPermissionsForRole } from "../lib/rbac";
 import { logEvent } from "../lib/logEvent";
 import { isLegacyPlaceholderEmail } from "../lib/mailer";
 
 const router: IRouter = Router();
-const adminGuard = [requireAuth, requireRole("admin", "staff")];
+const adminGuard = [requireAuth, requireRole("admin", "staff"), requireStaffPermission(["payout.view", "payout.statement"], { allowStaffWithoutRole: true })];
 
 // 과거 세율 미확정 → 현재 기본 국내 원천세(3.3%)를 '참고 재계산'에만 사용. 단정 금지.
 const REFERENCE_TREATMENT = "domestic_3_3" as const;

@@ -130,3 +130,33 @@ export function requirePermission(key: string) {
     }
   };
 }
+
+/**
+ * 직원 실행권한 검증(업무 메뉴 공용).
+ *  · admin 계정: 기존과 동일하게 전체 허용.
+ *  · staff + 역할(roleId): keys 중 하나라도 역할에 있어야 허용, 없으면 403.
+ *  · staff + 역할 미지정: allowStaffWithoutRole 일 때만 허용(기존에 adminGuard 로 허용되던 조회·공용 업무 흐름 유지).
+ *  · 그 외 역할: 403.
+ */
+export function requireStaffPermission(keys: string | string[], opts: { allowStaffWithoutRole?: boolean } = {}) {
+  const list = Array.isArray(keys) ? keys : [keys];
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const u = req.user;
+    if (!u) { res.status(401).json({ error: "인증이 필요합니다." }); return; }
+    if (u.role === "admin") { next(); return; }
+    if (u.role !== "staff") { res.status(403).json({ error: "권한이 없습니다." }); return; }
+    if (!u.roleId) {
+      if (opts.allowStaffWithoutRole) { next(); return; }
+      res.status(403).json({ error: `권한이 없습니다: ${list[0]} (역할이 지정되지 않았습니다)`, code: "PERMISSION_DENIED", permission: list[0] }); return;
+    }
+    try {
+      const perms = await getPermissionsForRole(u.roleId);
+      if (!list.some(k => perms.has(k))) {
+        res.status(403).json({ error: `권한이 없습니다: ${list[0]}`, code: "PERMISSION_DENIED", permission: list[0] }); return;
+      }
+      next();
+    } catch {
+      res.status(500).json({ error: "권한 확인 중 오류가 발생했습니다." });
+    }
+  };
+}

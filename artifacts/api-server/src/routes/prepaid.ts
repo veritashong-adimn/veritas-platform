@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, prepaidAccountsTable, prepaidLedgerTable, projectsTable } from "@workspace/db";
 import { eq, and, desc, sql } from "drizzle-orm";
-import { requireAuth, requireRole } from "../middlewares/auth";
+import { requireAuth, requireRole, requireStaffPermission } from "../middlewares/auth";
 import { getCompanyPrepaidState } from "../services/prepaidDeductionQuote";
 
 const router = Router();
@@ -277,7 +277,7 @@ router.post("/prepaid/deduct", ...adminGuard, async (req, res) => {
 
 // ─── 선입금 계정 상태 변경 (활성/비활성) ────────────────────────────────────
 // PATCH /api/prepaid/accounts/:id/status
-router.patch("/prepaid/accounts/:id/status", ...adminGuard, async (req, res) => {
+router.patch("/prepaid/accounts/:id/status", ...adminGuard, requireStaffPermission("prepaid.manage"), async (req, res) => {
   const id = Number(req.params.id);
   const { status } = req.body as { status: "active" | "closed" };
   if (!["active", "closed"].includes(status)) {

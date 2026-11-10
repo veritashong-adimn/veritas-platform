@@ -45,9 +45,11 @@ interface Summary {
   fileGate: { canGenerateFile: boolean; activeCount: number; missing: number; invalid: number; notReady: number };
 }
 
-interface Props { token: string; round: { id: number; batchNumber?: string | null; paymentDate?: string | null; status: string }; onToast: (m: string) => void; onClose: () => void; }
+interface Props { token: string; round: { id: number; batchNumber?: string | null; paymentDate?: string | null; status: string }; onToast: (m: string) => void; onClose: () => void;
+  /** 송금 실행 권한(payout.transfer) — 없으면 조회 전용(송금건 생성·재검증·제외·은행파일 숨김). 기본 true(기존 동작). */
+  canTransfer?: boolean; }
 
-export default function PayoutExecutionModal({ token, round, onToast, onClose }: Props) {
+export default function PayoutExecutionModal({ token, round, onToast, onClose, canTransfer = true }: Props) {
   const authH = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
   const [summary, setSummary] = useState<Summary | null>(null);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
@@ -100,7 +102,7 @@ export default function PayoutExecutionModal({ token, round, onToast, onClose }:
     setLoading(true); setError(null);
     try {
       // confirmed면 송금건이 없을 수 있으므로 생성/동기화(idempotent — 기존건·paid 불변, snapshot 재검증 안 함).
-      if (round.status === 'confirmed') {
+      if (round.status === 'confirmed' && canTransfer) {
         await fetch(api(`/api/admin/payout-rounds/${round.id}/transfers/generate`), { method: 'POST', headers: authH }).catch(() => {});
       }
       const res = await fetch(api(`/api/admin/payout-rounds/${round.id}/transfers`), { headers: authH });
@@ -249,8 +251,8 @@ export default function PayoutExecutionModal({ token, round, onToast, onClose }:
               )}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              {!isPaid && <GhostBtn onClick={reverifyAll} disabled={busy || genBusy} data-testid="payout-reverify-all" style={{ fontSize: 12, padding: '7px 14px' }}>전체 재검증</GhostBtn>}
-              <PrimaryBtn
+              {!isPaid && canTransfer && <GhostBtn onClick={reverifyAll} disabled={busy || genBusy} data-testid="payout-reverify-all" style={{ fontSize: 12, padding: '7px 14px' }}>전체 재검증</GhostBtn>}
+              {canTransfer && <PrimaryBtn
                 onClick={generateIbkFile}
                 disabled={!gate?.canGenerateFile || busy || genBusy}
                 data-testid="payout-ibk-file"
@@ -258,7 +260,7 @@ export default function PayoutExecutionModal({ token, round, onToast, onClose }:
                 style={{ fontSize: 12, padding: '7px 16px' }}
               >
                 {genBusy ? '생성 중…' : '📥 IBK 대량이체 파일 생성'}
-              </PrimaryBtn>
+              </PrimaryBtn>}
             </div>
           </div>
 
@@ -288,7 +290,7 @@ export default function PayoutExecutionModal({ token, round, onToast, onClose }:
                       <td style={td}>{badge(STATUS[t.status], t.status)}</td>
                       <td style={{ ...td, whiteSpace: 'normal', maxWidth: 220, ...TYPO.helper, color: C.textSecondary }}>{note || '-'}</td>
                       <td style={td}>
-                        {isPaid || rowPaid ? <span style={{ color: C.textMuted }}>-</span>
+                        {isPaid || rowPaid || !canTransfer ? <span style={{ color: C.textMuted }}>-</span>
                           : isExcluded ? (
                             <button type="button" onClick={() => unexclude(t)} disabled={busy} data-testid={`payout-unexclude-${t.id}`}
                               style={{ border: '1px solid #86efac', borderRadius: 6, background: '#f0fdf4', color: '#15803d', cursor: busy ? 'not-allowed' : 'pointer', padding: '4px 10px', fontSize: 11, fontWeight: 700 }}>제외 해제</button>
