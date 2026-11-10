@@ -1784,6 +1784,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           onToast={setToast}
           onResetPassword={(userId) => { setResetPwUserId(userId); setResetPwInput(""); }}
           onTranslatorProfile={(userId, email) => setTranslatorProfileModal({ userId, email })}
+          canEditUsers={hasPerm("user.manage")}
         />
       )}
 

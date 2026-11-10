@@ -1,6 +1,8 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { getPermissionsForRole } from "../lib/rbac";
+import { db, usersTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 
 const JWT_SECRET = process.env.JWT_SECRET ?? "translation-platform-jwt-secret-dev";
 
@@ -18,7 +20,19 @@ export function signToken(payload: JwtPayload): string {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
 }
 
-export function requireAuth(req: Request, res: Response, next: NextFunction): void {
+// 계정 상태 검증 — 삭제(휴지통)·비활성·영구 비식별 처리된 계정은 이미 발급된 JWT 로도 API 접근을 차단한다.
+//   캐시를 두지 않는다: 차단 직후 첫 요청부터 거부되어야 하며(다중 인스턴스 포함), PK 조회 1회라 비용이 작다.
+//   영구 비식별 처리 계정은 deletedAt·isActive=false 가 함께 설정되므로 이 조건으로 함께 차단된다.
+async function loadAccountState(userId: number) {
+  const [row] = await db
+    .select({ isActive: usersTable.isActive, deletedAt: usersTable.deletedAt })
+    .from(usersTable)
+    .where(eq(usersTable.id, userId))
+    .limit(1);
+  return row;
+}
+
+export async function requireAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
   const authHeader = req.headers.authorization;
   const queryToken = typeof req.query?.token === "string" ? req.query.token : undefined;
   const raw = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : queryToken;
@@ -28,13 +42,31 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     return;
   }
 
+  let payload: JwtPayload;
   try {
-    const payload = jwt.verify(raw, JWT_SECRET) as JwtPayload;
-    req.user = { id: payload.id, email: payload.email, role: payload.role, roleId: payload.roleId ?? null, sessionId: payload.sessionId };
-    next();
+    payload = jwt.verify(raw, JWT_SECRET) as JwtPayload;
   } catch {
     res.status(401).json({ error: "토큰이 유효하지 않거나 만료되었습니다." });
+    return;
   }
+
+  let account: Awaited<ReturnType<typeof loadAccountState>>;
+  try {
+    account = await loadAccountState(payload.id);
+  } catch (err) {
+    // 상태를 확인할 수 없으면 허용하지 않는다(fail-closed).
+    req.log?.error?.({ err }, "requireAuth: account state lookup failed");
+    res.status(503).json({ error: "인증 상태를 확인할 수 없습니다. 잠시 후 다시 시도해 주세요." });
+    return;
+  }
+  if (!account || account.deletedAt || !account.isActive) {
+    req.log?.warn?.({ userId: payload.id, reason: !account ? "not_found" : account.deletedAt ? "deleted" : "inactive" }, "requireAuth: blocked account token");
+    res.status(401).json({ error: "사용할 수 없는 계정입니다. 다시 로그인하거나 관리자에게 문의하세요.", code: "ACCOUNT_BLOCKED" });
+    return;
+  }
+
+  req.user = { id: payload.id, email: payload.email, role: payload.role, roleId: payload.roleId ?? null, sessionId: payload.sessionId };
+  next();
 }
 
 export function requireRole(...roles: UserRole[]) {

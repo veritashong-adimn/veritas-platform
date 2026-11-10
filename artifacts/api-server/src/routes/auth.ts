@@ -1,3 +1,4 @@
+import { isReservedEmail } from "../lib/userPurge";
 import { Router, type IRouter } from "express";
 import bcrypt from "bcryptjs";
 import { randomUUID, randomBytes } from "crypto";
@@ -40,6 +41,10 @@ router.post("/auth/register", async (req, res) => {
   }
 
   const email = rawEmail.trim().toLowerCase();
+  if (isReservedEmail(email)) {
+    res.status(400).json({ error: "사용할 수 없는 이메일 도메인입니다." });
+    return;
+  }
 
   if (password.length < 6) {
     res.status(400).json({ error: "비밀번호는 최소 6자 이상이어야 합니다." });

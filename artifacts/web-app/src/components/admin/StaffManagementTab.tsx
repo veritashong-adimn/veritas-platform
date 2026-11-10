@@ -3,6 +3,7 @@ import { formatDisplayDate } from '../../lib/dateFormat';
 import { api, AdminUser, User } from '../../lib/constants';
 import { Card, PrimaryBtn, GhostBtn, RoleBadge, ClickSelect } from '../ui';
 import { useBulkSelection, useClientPagination, BulkSelectBar, bulkActionBtn, Pagination as ListPagination, trashRowStyle } from './bulkListShared';
+import { UserDetailModal } from './UserDetailModal';
 import './readTableView.css';
 
 function Section({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
@@ -52,6 +53,8 @@ interface Props {
   onToast: (msg: string) => void;
   onResetPassword: (userId: number) => void;
   onTranslatorProfile: (userId: number, email: string) => void;
+  /** user.manage 권한 보유 여부 — 상세정보 수정 버튼 노출(서버에서 재검증) */
+  canEditUsers?: boolean;
 }
 
 const ROLE_COLORS: Record<string, string> = {
@@ -64,7 +67,7 @@ const ROLE_NAMES: Record<string, string> = {
 };
 const PERIOD_LABELS: Record<string, string> = { today: "오늘", week: "이번 주", month: "이번 달", year: "올해" };
 
-export function StaffManagementTab({ token, currentUser, users, setUsers, rbacRoles, onToast, onResetPassword, onTranslatorProfile }: Props) {
+export function StaffManagementTab({ token, currentUser, users, setUsers, rbacRoles, onToast, onResetPassword, onTranslatorProfile, canEditUsers = false }: Props) {
   const authHeaders = { Authorization: `Bearer ${token}` };
 
   const [usersLoading, setUsersLoading] = useState(false);
@@ -88,6 +91,8 @@ export function StaffManagementTab({ token, currentUser, users, setUsers, rbacRo
   const [deleting, setDeleting] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
   const bulk = useBulkSelection<number>();
+  // 사용자 상세정보(등록정보 조회·수정) 모달 대상
+  const [detailUserId, setDetailUserId] = useState<number | null>(null);
 
   // 삭제 사용자는 서버에서 이미 제외되므로 전체(비필터) 조회 후 화면에서 필터·페이지네이션한다(§3 안전한 방식·§21).
   const fetchUsers = useCallback(async () => {
@@ -529,8 +534,20 @@ export function StaffManagementTab({ token, currentUser, users, setUsers, rbacRo
                     </td>
                     <td style={{ ...tableTd, color: "#9ca3af" }}>#{u.id}</td>
                     <td style={{ ...tableTd, fontWeight: 600, color: "#111827" }}>
-                      {u.name && <div style={{ fontWeight: 700, marginBottom: 2 }}>{u.name}</div>}
-                      <div style={{ fontSize: 12, color: u.name ? "#6b7280" : "#111827" }}>{u.email}</div>
+                      {/* 이메일/이름 클릭 → 사용자 상세정보 */}
+                      <button type="button" onClick={() => setDetailUserId(u.id)}
+                        data-testid={`btn-user-detail-${u.id}`} aria-label={`사용자 상세정보: ${u.name ?? u.email}`}
+                        title="상세정보 보기"
+                        style={{ background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer", font: "inherit", color: "inherit" }}>
+                        {u.name && <div style={{ fontWeight: 700, marginBottom: 2, display: "flex", alignItems: "center", gap: 4 }}>
+                          <span style={{ textDecoration: "underline", textDecorationColor: "#d1d5db", textUnderlineOffset: 3 }}>{u.name}</span>
+                          {canEditUsers && <span aria-hidden style={{ fontSize: 11, color: "#9ca3af" }}>✎</span>}
+                        </div>}
+                        <div style={{ fontSize: 12, color: u.name ? "#6b7280" : "#111827", display: "flex", alignItems: "center", gap: 4 }}>
+                          {u.email}
+                          {!u.name && canEditUsers && <span aria-hidden style={{ fontSize: 11, color: "#9ca3af" }}>✎</span>}
+                        </div>
+                      </button>
                     </td>
                     <td style={tableTd}><RoleBadge role={u.role} /></td>
                     <td style={tableTd}>
@@ -672,6 +689,20 @@ export function StaffManagementTab({ token, currentUser, users, setUsers, rbacRo
         <ListPagination
           total={total} totalPages={totalPages} page={page} pageSize={pageSize}
           rangeStart={rangeStart} rangeEnd={rangeEnd} setPage={setPage} setPageSize={setPageSize}
+        />
+      )}
+
+      {/* 사용자 상세정보(등록정보 조회·수정) 모달 — 저장 시 목록 즉시 반영 */}
+      {detailUserId !== null && (
+        <UserDetailModal
+          token={token}
+          userId={detailUserId}
+          currentUser={currentUser}
+          canEdit={canEditUsers}
+          onClose={() => setDetailUserId(null)}
+          onSaved={updated => setUsers(prev => prev.map(x => x.id === updated.id ? { ...x, ...updated } as AdminUser : x))}
+          onResetPassword={id => { setDetailUserId(null); onResetPassword(id); }}
+          onToast={onToast}
         />
       )}
 

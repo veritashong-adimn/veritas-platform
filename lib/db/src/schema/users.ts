@@ -23,6 +23,7 @@ export const usersTable = pgTable("users", {
   inviteToken: text("invite_token"),
   department: text("department"),
   jobTitle: text("job_title"),
+  phone: text("phone"),                      // 연락처(사용자 상세정보에서 관리자가 수정, nullable)
   companyId: integer("company_id"),
   lastLoginAt: timestamp("last_login_at"),
   lastActivityAt: timestamp("last_activity_at"),

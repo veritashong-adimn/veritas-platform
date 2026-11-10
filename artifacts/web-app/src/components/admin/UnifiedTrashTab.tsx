@@ -252,7 +252,9 @@ const DOMAINS: Record<TrashDomain, DomainMeta> = {
       };
     },
     restore: (id, authH, reason) => trashFetch(`/api/admin/users/${id}/restore`, 'POST', authH, reason),
-    // 사용자는 복구만 제공 — 영구삭제 없음(FK·업무이력 안전, §15). purge 미정의.
+    // 사용자 완전삭제 = 영구 비식별 처리(행·FK·업무이력 보존, 개인정보·인증정보 제거, 복원 불가).
+    //   관리자·직원·고객만 대상 — 통번역사 계정은 서버가 사유와 함께 차단한다.
+    purge: (id, authH, reason) => trashFetch(`/api/admin/users/${id}/permanent`, 'DELETE', authH, reason),
   },
   archive: {
     key: 'archive',
@@ -393,11 +395,11 @@ export function UnifiedTrashTab({ token, isAdmin, onToast }: {
   // ── 선택 완전삭제 — 유형별 기존 permanent/purge API를 병렬 호출(권한·FK 안전장치는 서버가 재검증). 사유(선택)를 함께 전달 ──
   const handleBulkPurge = async () => {
     const all = selectedItems();
-    // 복구전용 영역(사용자)은 purge 미정의 → 완전삭제 대상에서 제외(§15).
+    // 복구전용 영역(purge 미정의)은 완전삭제 대상에서 제외(§15).
     const items = all.filter(it => typeof DOMAINS[it.domain].purge === 'function');
     const excluded = all.length - items.length;
     if (items.length === 0) {
-      onToast(excluded > 0 ? '사용자는 영구삭제를 지원하지 않습니다. (복구만 가능)' : '완전삭제할 항목이 없습니다.');
+      onToast(excluded > 0 ? '선택한 항목은 완전삭제를 지원하지 않습니다. (복구만 가능)' : '완전삭제할 항목이 없습니다.');
       setPurgeConfirmOpen(false);
       return;
     }
@@ -415,7 +417,7 @@ export function UnifiedTrashTab({ token, isAdmin, onToast }: {
       }))).filter((f): f is string => f !== null);
       const ok = items.length - failures.length;
       setPurgeFailures(failures);
-      onToast(`${ok}건을 완전삭제했습니다.${ok < items.length ? ` (${items.length - ok}건 실패 — 연결 데이터/권한)` : ''}${excluded > 0 ? ` · 사용자 ${excluded}건 제외(복구만 가능)` : ''}`);
+      onToast(`${ok}건을 완전삭제했습니다.${ok < items.length ? ` (${items.length - ok}건 실패 — 연결 데이터/권한)` : ''}${excluded > 0 ? ` · ${excluded}건 제외(복구만 가능)` : ''}`);
       setPurgeConfirmOpen(false);
       setPurgeReason('');
       sel.clear();
@@ -609,6 +611,12 @@ export function UnifiedTrashTab({ token, isAdmin, onToast }: {
               완전삭제된 데이터는 <strong style={{ color: '#dc2626' }}>복구할 수 없습니다.</strong><br />
               각 유형의 기존 규칙에 따라 처리되며, 연결된 업무 데이터가 존재하면 해당 항목은 서버가 차단합니다.
             </p>
+            {selectedItems().some(it => it.domain === 'user') && (
+              <p data-testid="text-unified-purge-user-note" style={{ margin: '0 0 14px', padding: '8px 12px', fontSize: 12, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, lineHeight: 1.6 }}>
+                <strong>사용자 계정</strong>은 행을 지우지 않고 <strong>영구 비식별 처리</strong>합니다 — 이메일·연락처·비밀번호·인증토큰을 제거하고 로그인·API 접근을 영구 차단합니다.
+                과거 견적·판매·수금·정산의 담당자 이력(이름)은 업무기록으로 보존됩니다. 통번역사 계정은 대상이 아닙니다.
+              </p>
+            )}
             <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 6 }}>완전삭제 사유 <span style={{ color: '#9ca3af', fontWeight: 400 }}>(선택)</span></label>
             <textarea value={purgeReason} onChange={e => setPurgeReason(e.target.value)}
               placeholder="완전삭제 사유를 입력하면 감사로그에 함께 기록됩니다. (선택)"
