@@ -206,7 +206,52 @@ export type VirtualProduct = {
   relayLanguages?: RelayLanguages;
   reviewLanguageMode?: NativeReviewMode;
   reviewLanguage?: string;
+  /** 해외현지 통역 — 중분류(subCategory) = "해외현지 국가[ 도시]" */
+  subCategory?: string;
+  overseas?: OverseasLocation;
 };
+
+// ─── 해외현지 통역 ───────────────────────────────────────────────────────────
+//  · 기존 통역방식(lazy 서비스 타입)에 국가·도시(선택)를 더한 상품. 스키마 변경 없이
+//    subCategory = "해외현지 국가[ 도시]" 로 국내 상품·다른 지역 상품과 구분(컬럼 기반 중복 방지 그대로).
+//  · 상품명: "일본 오사카 현지 한국어-일본어 상담회통역" / 도시 미선택: "일본 현지 한국어-일본어 상담회통역"
+//  · 상품코드는 기존 규칙(IN-SRC-TGT-통역방식코드-SEQ) 그대로.
+export const OVERSEAS_SERVICE_TYPES = ["상담회통역", "순차통역", "동시통역", "위스퍼링통역", "수행통역"] as const;
+export type OverseasLocation = { country: string; city?: string };
+
+const LOCATION_RE = /^[\p{L}\p{N} .·()\-]{1,30}$/u;
+const cleanLoc = (v: unknown) => String(v ?? "").replace(/\s+/g, " ").trim();
+
+/** 입력 검증·정규화. 실패 시 오류 문구 반환. */
+export function normalizeOverseas(raw: unknown): { ok: true; value: OverseasLocation } | { ok: false; error: string } {
+  const o = (raw ?? {}) as { country?: unknown; city?: unknown };
+  const country = cleanLoc(o.country);
+  const city = cleanLoc(o.city);
+  if (!country) return { ok: false, error: "해외현지 통역은 국가가 필수입니다." };
+  if (!LOCATION_RE.test(country)) return { ok: false, error: "국가명은 30자 이내 문자로 입력하세요." };
+  if (city && !LOCATION_RE.test(city)) return { ok: false, error: "도시명은 30자 이내 문자로 입력하세요." };
+  return { ok: true, value: city ? { country, city } : { country } };
+}
+
+export function isOverseasServiceType(s: string): boolean {
+  return (OVERSEAS_SERVICE_TYPES as readonly string[]).includes(s);
+}
+
+export function overseasSubCategory(o: OverseasLocation): string {
+  return `해외현지 ${o.country}${o.city ? ` ${o.city}` : ""}`;
+}
+
+/** 기존 통역 VirtualProduct 에 해외현지 정보를 덧붙인다(이름·중분류·canonicalKey). */
+export function applyOverseas(v: VirtualProduct, o: OverseasLocation): VirtualProduct {
+  const slug = (x: string) => x.toLowerCase().replace(/\s+/g, "");
+  return {
+    ...v,
+    displayName: `${o.country}${o.city ? ` ${o.city}` : ""} 현지 ${v.displayName}`,
+    subCategory: overseasSubCategory(o),
+    canonicalKey: `${v.canonicalKey}:overseas:${slug(o.country)}${o.city ? `:${slug(o.city)}` : ""}`,
+    overseas: o,
+  };
+}
 
 export function buildVirtualProduct(
   serviceType: LazyServiceType,

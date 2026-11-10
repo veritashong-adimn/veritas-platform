@@ -19,6 +19,7 @@ import {
   normalizeRelayTargets,
   LAZY_SERVICE_CONFIG,
   type LazyServiceType, type RelayLanguages, type NativeReviewMode,
+  normalizeOverseas, isOverseasServiceType, applyOverseas, OVERSEAS_SERVICE_TYPES, type OverseasLocation,
 } from "../lib/product-parser/lazyProductGen";
 
 const router: IRouter = Router();
@@ -2184,7 +2185,8 @@ router.delete("/admin/product-requests/:id", ...adminOnly, async (req, res) => {
  * - 없으면: { found: false, candidate: VirtualProduct }
  */
 router.post("/admin/products/lazy-lookup", ...adminGuard, async (req, res) => {
-  const { serviceType, sourceLanguage, targetLanguage, targetLanguages, reviewLanguageMode, reviewLanguage } = req.body as {
+  const { serviceType, sourceLanguage, targetLanguage, targetLanguages, reviewLanguageMode, reviewLanguage, overseas } = req.body as {
+    overseas?: { country?: string; city?: string } | null;
     serviceType?: string;
     sourceLanguage?: string;
     targetLanguage?: string;
@@ -2227,6 +2229,26 @@ router.post("/admin/products/lazy-lookup", ...adminGuard, async (req, res) => {
   const src = sourceLanguage.trim().toLowerCase();
   const tgt = targetLanguage.trim().toLowerCase();
   const cfg = LAZY_SERVICE_CONFIG[serviceType as LazyServiceType];
+
+  // ── 해외현지 통역: 통역방식 + 국가·도시(선택). 컬럼 기반 중복 조회(중분류 = "해외현지 국가[ 도시]") ──
+  if (overseas != null) {
+    if (!isOverseasServiceType(serviceType)) {
+      res.status(400).json({ error: `해외현지 통역방식은 ${OVERSEAS_SERVICE_TYPES.join(" / ")} 중 하나여야 합니다.` }); return;
+    }
+    const ov = normalizeOverseas(overseas);
+    if (!ov.ok) { res.status(400).json({ error: ov.error }); return; }
+    if (src === tgt) { res.status(400).json({ error: "출발언어와 도착언어가 같습니다." }); return; }
+    try {
+      const candidate = applyOverseas(buildVirtualProduct(serviceType as LazyServiceType, src, tgt, ISO_LABEL), ov.value);
+      const dupes = await findDuplicate(cfg.productType, src, tgt, cfg.mainCategory, candidate.subCategory, undefined);
+      if (dupes.length > 0) { res.json({ found: true, product: dupes[0] }); return; }
+      res.json({ found: false, candidate });
+    } catch (err) {
+      req.log.error({ err }, "lazy-lookup (overseas) failed");
+      res.status(500).json({ error: "조회 실패." });
+    }
+    return;
+  }
 
   // 다국어 릴레이: 대상언어(복수) 필수. sourceLanguage=출발, targetLanguage=기준(Pivot).
   const isRelay = serviceType === "다국어릴레이";
@@ -2290,7 +2312,8 @@ router.post("/admin/products/lazy-lookup", ...adminGuard, async (req, res) => {
  * - 없으면 신규 생성 + logEvent audit
  */
 router.post("/admin/products/lazy-create", ...canCreate, async (req, res) => {
-  const { serviceType, sourceLanguage, targetLanguage, targetLanguages, reviewLanguageMode, reviewLanguage, createdBy } = req.body as {
+  const { serviceType, sourceLanguage, targetLanguage, targetLanguages, reviewLanguageMode, reviewLanguage, createdBy, overseas } = req.body as {
+    overseas?: { country?: string; city?: string } | null;
     serviceType?: string;
     sourceLanguage?: string;
     targetLanguage?: string;
@@ -2312,6 +2335,7 @@ router.post("/admin/products/lazy-create", ...canCreate, async (req, res) => {
   // 조회 대상별 virtual + getOrCreate 입력 구성
   let virtual: ReturnType<typeof buildVirtualProduct>;
   let gocInput: Parameters<typeof getOrCreateProduct>[0];
+  let overseasLoc: OverseasLocation | null = null;
 
   if (isNativeSingle) {
     // ── 원어민감수 단일언어: 감수언어 1개, 출발/도착 null ──
@@ -2352,17 +2376,31 @@ router.post("/admin/products/lazy-create", ...canCreate, async (req, res) => {
       return;
     }
 
-    virtual = isNativeReview
+    // 해외현지 통역 — lazy-lookup 과 동일 검증
+    if (overseas != null) {
+      if (!isOverseasServiceType(serviceType)) {
+        res.status(400).json({ error: `해외현지 통역방식은 ${OVERSEAS_SERVICE_TYPES.join(" / ")} 중 하나여야 합니다.` }); return;
+      }
+      const ov = normalizeOverseas(overseas);
+      if (!ov.ok) { res.status(400).json({ error: ov.error }); return; }
+      if (src === tgt) { res.status(400).json({ error: "출발언어와 도착언어가 같습니다." }); return; }
+      overseasLoc = ov.value;
+    }
+
+    virtual = overseasLoc
+      ? applyOverseas(buildVirtualProduct(serviceType as LazyServiceType, src, tgt, ISO_LABEL), overseasLoc)
+      : isNativeReview
       ? buildVirtualProduct(serviceType as LazyServiceType, src, tgt, ISO_LABEL, undefined, { mode: "pair" })
       : buildVirtualProduct(serviceType as LazyServiceType, src, tgt, ISO_LABEL, isRelay ? normTargets : undefined);
     gocInput = {
       productType: cfg.productType, sourceLanguage: src, targetLanguage: tgt,
-      mainCategory: cfg.mainCategory, subCategory: "",
+      // 해외현지: 중분류 = "해외현지 국가[ 도시]" — 컬럼 기반 dedup 으로 국내·타지역 상품과 구분
+      mainCategory: cfg.mainCategory, subCategory: virtual.subCategory ?? "",
       name: virtual.displayName, unit: virtual.unit,
       creationSource: "lazy_product_generation",
       relayLanguages: virtual.relayLanguages ?? null,
       // 원어민감수 언어쌍도 새 키(PR:native-review:ko:en) 저장. 단, dedup은 컬럼 기반(기존 호환).
-      canonicalKeyOverride: (isRelay || isNativeReview) ? virtual.canonicalKey : undefined,
+      canonicalKeyOverride: (isRelay || isNativeReview || overseasLoc) ? virtual.canonicalKey : undefined,
       ...(isNativeReview ? { reviewLanguageMode: "pair" as NativeReviewMode } : {}),
     };
   }
@@ -2375,6 +2413,14 @@ router.post("/admin/products/lazy-create", ...canCreate, async (req, res) => {
     if (!goc.created) {
       res.json({ created: false, product: goc.product, message: "이미 존재하는 상품입니다." });
       return;
+    }
+
+    // 해외현지: 국가·도시를 상품 옵션으로도 저장(조회·검색 활용). 상품 구조·코드 무변경.
+    if (overseasLoc) {
+      await db.insert(productOptionsTable).values([
+        { productId: goc.product.id, optionType: "국가", optionValue: overseasLoc.country, sortOrder: 0 },
+        ...(overseasLoc.city ? [{ productId: goc.product.id, optionType: "도시", optionValue: overseasLoc.city, sortOrder: 1 }] : []),
+      ]);
     }
 
     // lazy-create 전용 audit (buildAuditMetadata 정보 별도 기록)

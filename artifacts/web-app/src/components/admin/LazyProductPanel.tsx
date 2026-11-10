@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { OverseasInterpFields, EMPTY_OVERSEAS, resolveOverseas, overseasPrefix, type OverseasState } from './OverseasInterpFields';
 import { api, LANGUAGE_CODES, SUB_CATEGORIES_BY_MAIN, MAIN_CATEGORIES_BY_TYPE } from '../../lib/constants';
 import { Card, PrimaryBtn, GhostBtn } from '../ui';
 import { getZhExcludeCodes, normalizeZhForType } from '../../lib/zhLangPolicy';
@@ -30,6 +31,8 @@ type LangSubtypeEntry = {
   lazyService: string | null; // null = 기타 직접입력 → direct POST
   mainCategory: string;
   isCustom?: boolean;
+  /** 해외현지 통역 — 통역방식(기존 lazy 타입)+국가·도시. lazyService 는 선택한 통역방식으로 대체 */
+  isOverseas?: boolean;
 };
 
 const LANG_SUBTYPES: Record<LangPairType, LangSubtypeEntry[]> = {
@@ -49,6 +52,7 @@ const LANG_SUBTYPES: Record<LangPairType, LangSubtypeEntry[]> = {
     { label: "수행통역",    lazyService: "수행통역",    mainCategory: "수행통역" },
     { label: "상담회통역",  lazyService: "상담회통역",  mainCategory: "미팅통역" },
     { label: "다국어릴레이", lazyService: "다국어릴레이", mainCategory: "다국어릴레이" },
+    { label: "해외현지 통역", lazyService: null,         mainCategory: "",             isOverseas: true },
     { label: "기타통역",    lazyService: null,          mainCategory: "기타통역", isCustom: true },
     // 기타비용 — 통역 수행에 직접 연결되는 부대비용 상품(언어쌍 없음). 상품명=비용 항목명 자유입력.
     { label: "기타비용",    lazyService: null,          mainCategory: "기타비용", isCustom: true },
@@ -145,6 +149,7 @@ type QuickCandidate = {
   reviewLanguage?: string;                 // 원어민감수 단일언어 감수언어
   unit?: string;
   canonicalKey?: string;
+  overseas?: { country: string; city?: string }; // 해외현지 통역
 };
 
 type QuickResult =
@@ -224,6 +229,7 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated, quic
   const [reviewMode, setReviewMode]       = useState<"single" | "pair">("single"); // 원어민감수 언어 방식
   const [reviewLang, setReviewLang]       = useState("en");    // 원어민감수 단일언어 감수언어
   const [reviewLangCustom, setReviewLangCustom] = useState("");
+  const [overseas, setOverseas] = useState<OverseasState>(EMPTY_OVERSEAS); // 해외현지 통역 입력
 
   // ── 비언어 공통 ────────────────────────────────────────────────────────────
   const [nlItem, setNlItem]           = useState(qi?.itemLabel ?? "");  // 통역장비/편집/미디어
@@ -259,6 +265,8 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated, quic
 
   // 다국어 릴레이: 출발언어 → 기준언어(Pivot) → 대상언어(복수) 3단 입력
   const isRelay = quickType === "통역" && langSubtype === "다국어릴레이";
+  // 해외현지 통역: 통역방식 + 국가·도시(선택)
+  const isOverseas = quickType === "통역" && !!currentSubtypeCfg?.isOverseas;
 
   // 원어민감수: 단일언어(감수언어 1개) / 언어쌍(출발·도착) 방식 선택
   const isNativeReview = quickType === "감수" && langSubtype === "원어민감수";
@@ -285,6 +293,7 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated, quic
     setLangSubtypeCustom("");
     setRelayTargets([]);
     setReviewMode("single");
+    setOverseas(EMPTY_OVERSEAS);
     setNlItemCustom("");
     setNlSubCatCustom("");
     if (LANG_PAIR_SET.has(qt)) {
@@ -330,6 +339,7 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated, quic
         ? `${reviewLabel} 원어민감수`
         : `${srcLabel}→${tgtLabel} 원어민감수`;
     }
+    if (isOverseas) return `${overseasPrefix(overseas)} ${srcLabel}-${tgtLabel} ${overseas.method}`;
     if (isRelay) {
       const tgtLabels = relayTargets.map(c => LANG_LABEL[c] ?? c);
       const tail = tgtLabels.length ? tgtLabels.join("·") : "대상언어";
@@ -459,8 +469,12 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated, quic
       return;
     }
 
-    // 표준 lazy API (릴레이 포함 — 릴레이는 targetLanguages 추가 전송)
-    const serviceType = currentSubtypeCfg.lazyService!;
+    // 해외현지 통역: 국가 필수
+    const overseasLoc = isOverseas ? resolveOverseas(overseas) : null;
+    if (isOverseas && !overseasLoc) { setToast("국가를 선택하거나 입력해주세요."); return; }
+
+    // 표준 lazy API (릴레이 포함 — 릴레이는 targetLanguages 추가 전송, 해외현지는 overseas 추가 전송)
+    const serviceType = isOverseas ? overseas.method : currentSubtypeCfg.lazyService!;
     setLoading(true); resetResult();
     try {
       const res = await fetch(api("/api/admin/products/lazy-lookup"), {
@@ -470,6 +484,7 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated, quic
           serviceType, sourceLanguage: resolvedSrc, targetLanguage: resolvedTgt,
           ...(isRelay ? { targetLanguages: relayTargets } : {}),
           ...(isNativeReview ? { reviewLanguageMode: "pair" } : {}),
+          ...(overseasLoc ? { overseas: overseasLoc } : {}),
         }),
       });
       const data = await res.json();
@@ -480,9 +495,10 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated, quic
         const c = data.candidate;
         setResult({ found: false, candidate: {
           name: c.displayName, productType: c.productType,
-          mainCategory: c.mainCategory, subCategory: "",
+          mainCategory: c.mainCategory, subCategory: c.subCategory ?? "",
           isLangPair: true, isLazy: true,
           lazyServiceType: serviceType,
+          ...(c.overseas ? { overseas: c.overseas } : {}),
           sourceLanguage: resolvedSrc, targetLanguage: resolvedTgt,
           ...(isRelay ? { targetLanguages: c.relayLanguages?.targetLanguages ?? relayTargets } : {}),
           ...(isNativeReview ? { reviewLanguageMode: "pair" as const } : {}),
@@ -583,6 +599,7 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated, quic
             ...(c.targetLanguages?.length ? { targetLanguages: c.targetLanguages } : {}),
             ...(c.reviewLanguageMode ? { reviewLanguageMode: c.reviewLanguageMode } : {}),
             ...(c.reviewLanguage ? { reviewLanguage: c.reviewLanguage } : {}),
+            ...(c.overseas ? { overseas: c.overseas } : {}),
             createdBy: "admin",
           }),
         });
@@ -700,6 +717,12 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated, quic
                 )
               )}
             </div>
+
+            {/* ─── 해외현지 통역: 통역방식 · 국가 · 도시(선택) ─── */}
+            {isOverseas && (
+              <OverseasInterpFields value={overseas} chip={a => chipStyle(a, tc)}
+                onChange={p => { setOverseas(o => ({ ...o, ...p })); resetResult(); }} />
+            )}
 
             {/* ─── 원어민감수: 감수 언어 방식 (단일언어/언어쌍) ─── */}
             {isNativeReview && (
