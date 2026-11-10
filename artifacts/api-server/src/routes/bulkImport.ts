@@ -167,13 +167,16 @@ interface ImportDiagnostics {
   indivErrors: number;             // 오류
 }
 
-async function analyzeCompanies(buffer: Buffer, opts?: { forceCustomerType?: "INDIVIDUAL" }): Promise<{
+async function analyzeCompanies(buffer: Buffer, opts?: { forceCustomerType?: "INDIVIDUAL"; keepExisting?: boolean }): Promise<{
   sheetName: string; headerRowIndex: number; columnMap: Record<string, string | null>;
   rows: CompanyRow[]; diagnostics: ImportDiagnostics;
 }> {
   // 전용 '개인고객 대량등록' 모드: 파일에 거래처구분 컬럼이 없어도 모든 행을 INDIVIDUAL 로 처리한다(명시적 선택).
   //   사업자(홈택스) Import 에는 영향 없음 — 이 옵션이 없으면 기존과 100% 동일하게 동작한다.
   const forceIndividual = opts?.forceCustomerType === "INDIVIDUAL";
+  // 홈택스 최신화 보호 모드(거래처 대량등록 화면 전용): 기존 거래처와 일치하는 행은 어떤 필드도 수정하지 않고 유지,
+  //   신규 거래처만 등록한다. 옵션 미지정 호출(CRM 거래처 최신화 등)은 기존 동작 그대로.
+  const keepExisting = opts?.keepExisting === true;
   const parsed = parseWorkbook(buffer, COMPANY_COLUMN_SYNONYMS);
   const colMap = buildColumnMap(parsed.headers, COMPANY_COLUMN_SYNONYMS);
 
@@ -381,6 +384,10 @@ async function analyzeCompanies(buffer: Buffer, opts?: { forceCustomerType?: "IN
       ]);
       row.existingId = ex.id;
       if (Object.keys(changes).length === 0) { row.status = "identical"; row.reason = "기존 데이터 동일"; }
+      else if (keepExisting) {
+        // 보호 모드: 상호·대표자·업태·종목·주소·전화·이메일 모두 기존 값 유지(수정 안 함). 차이 항목은 참고로만 안내.
+        row.status = "identical"; row.reason = `기존 거래처 일치 — 기존 정보 유지(홈택스 값으로 수정 안 함 · 차이 ${Object.keys(changes).length}개 항목)`;
+      }
       else { row.status = "update"; row.reason = "기존 데이터 변경 예정"; row.changes = changes; }
     }
     // ── 파일 내부 동일 사업자번호 그룹 + DB Master 없음(§5·§6·§7) ──────────────
@@ -425,7 +432,21 @@ async function analyzeCompanies(buffer: Buffer, opts?: { forceCustomerType?: "IN
   });
 
   // 홈택스 최신화 보정: 개인 식별번호 보류·마스킹, 같은 거래처 여러 행 값 상이 → 확인 필요(임의 선택 금지)
-  refineCompanyRows(rows);
+  refineCompanyRows(rows, { keepExisting });
+  // 보호 모드: 신규 거래처의 대표전화·이메일이 기존 담당자 연락처와 같으면 저장은 기존 규칙대로 하되 확인 경고만 남긴다.
+  if (keepExisting) {
+    const ct = await db.select({ email: contactsTable.email, phone: contactsTable.phone, mobile: contactsTable.mobile, officePhone: contactsTable.officePhone })
+      .from(contactsTable).where(sql`${contactsTable.deletedAt} is null`);
+    const ctEmails = new Set(ct.map(c => normalizeEmail(c.email)).filter(Boolean));
+    const ctPhones = new Set(ct.flatMap(c => [c.phone, c.mobile, c.officePhone].map(v => normalizePhone(v))).filter(Boolean));
+    for (const r of rows) {
+      if (r.status !== "new") continue;
+      const hit: string[] = [];
+      if (r.email && ctEmails.has(normalizeEmail(r.email))) hit.push("이메일");
+      const p = normalizePhone(r.phone); if (p && ctPhones.has(p)) hit.push("전화번호");
+      if (hit.length) r.warning = [r.warning, `${hit.join("·")}이 기존 담당자 연락처와 같음 — 거래처 대표 연락처인지 확인`].filter(Boolean).join(" · ");
+    }
+  }
 
   // ── 진단 통계(읽기전용, 2단계 조사 §13) ─────────────────────────────────────
   // 사업자번호 canonical(10자리) 기준으로 grouping 하여 "행 수"와 "unique 거래처 수"를 분리한다.
@@ -513,8 +534,9 @@ router.post(
     if (!req.file) { res.status(400).json({ error: "파일을 첨부해주세요. (필드명: file)" }); return; }
     // importKind="individual" → 전용 개인고객 모드(모든 행 INDIVIDUAL). 미지정/기타 → 기존 사업자 거래처 처리.
     const forceCustomerType = (req.body as any)?.importKind === "individual" ? ("INDIVIDUAL" as const) : undefined;
+    const keepExisting = String((req.body as any)?.keepExisting ?? "") === "1";
     try {
-      const result = await analyzeCompanies(req.file.buffer, { forceCustomerType });
+      const result = await analyzeCompanies(req.file.buffer, { forceCustomerType, keepExisting });
       await attachCompanyReviewInfo(result.rows);   // 확인 필요 행: 기존 거래처 비교 정보·허용 동작(등록/수정)
       res.json({
         fileName: decodeFileName(req.file.originalname),
@@ -542,7 +564,9 @@ router.post(
   async (req, res) => {
     if (!req.file) { res.status(400).json({ error: "파일을 첨부해주세요. (필드명: file)" }); return; }
     const fileName = decodeFileName(req.file.originalname);
-    const mode = parseMode((req.body as any)?.mode);
+    const keepExisting = String((req.body as any)?.keepExisting ?? "") === "1";
+    // 보호 모드는 서버에서 신규 등록만 강제(기존 거래처 수정 경로 차단) — 화면 값과 무관.
+    const mode = keepExisting ? "new_only" : parseMode((req.body as any)?.mode);
     const forceCustomerType = (req.body as any)?.importKind === "individual" ? ("INDIVIDUAL" as const) : undefined;
     try {
       // 승인 토큰: 미리보기 이후 거래처 자료가 바뀌었으면 거부(미리보기 = 실제 저장)
@@ -551,7 +575,7 @@ router.post(
         res.status(409).json({ error: "미리보기 이후 거래처 자료가 바뀌었거나 승인 토큰이 없습니다. 다시 분석한 뒤 실행하세요.", code: "PLAN_CHANGED" }); return;
       }
       // 서버에서 재분석·재검증 후 상태별 저장 (analyze 와 동일 옵션으로 재검증 — §16 보안)
-      const result = await analyzeCompanies(req.file.buffer, { forceCustomerType });
+      const result = await analyzeCompanies(req.file.buffer, { forceCustomerType, keepExisting });
       // 확인 필요 행은 관리자 결정(등록/수정)이 있을 때만 반영. 결정이 없으면 보류.
       let reviewDecisions: Record<string, string> = {};
       try { const v = JSON.parse(String((req.body as any)?.reviewDecisions ?? "{}")); if (v && typeof v === "object") reviewDecisions = v; } catch { /* 결정 없음 = 전부 보류 */ }

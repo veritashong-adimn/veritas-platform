@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useRef } from 'react';
+import { CompanyChangeAnalysis } from './CompanyChangeAnalysis';
 import { TranslatorImportApprovalPanel } from './TranslatorImportApprovalPanel';
 import { PartyImportBatches } from './PartyImportBatches';
 import { CompanyReviewList } from './CompanyReviewList';
@@ -448,7 +449,9 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
   type ReviewCat = NonNullable<AnalyzedRow['reviewCategory']>;
   const [reviewFilter, setReviewFilter] = useState<'all' | ReviewCat>('all');
   // 거래처·담당자: 등록 방식은 '신규 등록 + 기존 정보 업데이트'로 통일(변경 항목만, 빈 셀 덮어쓰기 없음)
-  const [mode, setMode] = useState<ImportMode>(entity === 'company' || entity === 'contact' ? 'update' : 'new_only');
+  // 거래처(홈택스 최신화)는 신규 등록만 — 기존 거래처 정보는 유지(서버 keepExisting 보호 모드). 담당자는 기존 그대로.
+  const [mode, setMode] = useState<ImportMode>(entity === 'contact' ? 'update' : 'new_only');
+  const keepExisting = entity === 'company';
   const [rowStatsOpen, setRowStatsOpen] = useState(false);
   const [reviewDecisions, setReviewDecisions] = useState<Record<string, string>>({});
   const [catFilter, setCatFilter] = useState<'all' | 'same' | 'new' | 'update' | 'review' | 'individual' | 'excluded'>('all');   // 6개 카드 클릭 필터(고유 대상 분류)   // 거래처 '확인 필요' 관리자 결정(등록/수정/보류)
@@ -523,6 +526,7 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
       fd.append('file', file);
       // 전용 개인고객 모드: 파일 거래처구분 컬럼 없이도 모든 행 INDIVIDUAL 로 처리하도록 서버에 알림.
       if (entity === 'company' && companyKind === 'individual') fd.append('importKind', 'individual');
+      if (keepExisting) fd.append('keepExisting', '1');   // 기존 거래처 일치 행 = 기존 정보 유지(수정 안 함)
       const res = await fetch(api(cfg.analyzeUrl), {
         method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd,
       });
@@ -560,6 +564,7 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
       const fd = new FormData();
       fd.append('file', file);
       fd.append('mode', mode);
+      if (keepExisting) fd.append('keepExisting', '1');   // 서버도 신규 등록만 강제
       if (analysis.planToken) fd.append('planToken', analysis.planToken);   // 미리보기와 같은 기준일 때만 서버가 반영
       if (entity === 'company') fd.append('reviewDecisions', JSON.stringify(Object.fromEntries(Object.entries(reviewDecisions).filter(([, v]) => v !== 'hold'))));
       if (entity === 'company' && companyKind === 'individual') fd.append('importKind', 'individual');
@@ -943,9 +948,9 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
                       const u = analysis.uniqueSummary!;
                       return (<>
                         <SummaryCard label={`전체 고유 ${entity === 'contact' ? '담당자' : '거래처'}`} value={u.uniqueTotal} tone="default" active={catFilter === 'all'} onClick={pick('all')} />
-                        <SummaryCard label="기존 동일" value={u.counts.same} tone="gray" active={catFilter === 'same'} onClick={pick('same')} />
+                        <SummaryCard label={keepExisting ? '기존 정보 유지' : '기존 동일'} value={u.counts.same} tone="gray" active={catFilter === 'same'} onClick={pick('same')} />
                         <SummaryCard label="신규 등록" value={u.counts.new} tone="green" active={catFilter === 'new'} onClick={pick('new')} />
-                        <SummaryCard label="정보 수정" value={u.counts.update} tone="blue" active={catFilter === 'update'} onClick={pick('update')} />
+                        {!keepExisting && <SummaryCard label="정보 수정" value={u.counts.update} tone="blue" active={catFilter === 'update'} onClick={pick('update')} />}
                         <SummaryCard label="확인 필요" value={u.counts.review} tone="amber" active={catFilter === 'review'} onClick={pick('review')} />
                         {entity === 'company' && <SummaryCard label="개인 고객 분리" value={u.counts.individual ?? 0} tone="gray" active={catFilter === 'individual'} onClick={pick('individual')} />}
                         <SummaryCard label="등록 제외" value={u.counts.excluded} tone="red" active={catFilter === 'excluded'} onClick={pick('excluded')} />
@@ -979,9 +984,18 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
               </>)}
               {(entity === 'company' || entity === 'contact') && (
                 <div style={{ fontSize: 12, color: '#374151', background: '#f8fafc', border: '1px solid #eef2f7', borderRadius: 8, padding: '8px 12px', marginBottom: 12 }}>
+                  {keepExisting ? (<>
+                    등록 방식: <b>신규 거래처만 등록 · 기존 정보 유지</b> — 기존 거래처와 일치하는 행은 상호·대표자·업태·종목·주소·전화·이메일을 <b>수정하지 않습니다</b>. 거래처 ID·담당자 연결·업무 이력은 변경되지 않으며, 확인 필요·등록 제외는 반영하지 않습니다.
+                    <span data-testid="bulk-import-keep-existing-counts" style={{ display: 'block', marginTop: 4, fontWeight: 700, color: '#0f172a' }}>
+                      신규 등록 {safeNum(analysis.uniqueSummary?.counts.new ?? analysis.summary?.new).toLocaleString()}건 · 기존 정보 유지 {safeNum(analysis.uniqueSummary?.counts.same ?? analysis.summary?.identical).toLocaleString()}건
+                    </span>
+                  </>) : (<>
                   등록 방식: <b>신규 등록 + 기존 정보 업데이트</b> — 신규만 새로 만들고, 기존 {entity === 'contact' ? '담당자' : '거래처'}는 ID를 유지한 채 변경된 항목만 수정합니다(빈 셀은 덮어쓰지 않음). 확인 필요·등록 제외는 반영하지 않습니다.
+                  </>)}
                 </div>
               )}
+              {/* 변경 원인 분석(읽기 전용) — 이미 받은 analysis.rows 의 changes 만 집계. 서버 호출·등록 없음. */}
+              {entity === 'company' && <CompanyChangeAnalysis rows={analysis.rows as any} />}
 
               {/* ── 개인고객 진단(읽기전용) — 사업자번호 무관, 이름+연락처 기준(§11) ── */}
               {entity === 'company' && analysis.diagnostics && analysis.diagnostics.mode === 'individual' && (

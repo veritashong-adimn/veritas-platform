@@ -29,7 +29,7 @@ type AnyRow = { rowNumber: number; status: string; reason?: string; existingId?:
 // ── 거래처 ──────────────────────────────────────────────────────────────────
 const COMPANY_GROUP_FIELDS = ["name", "representativeName", "industry", "businessCategory", "address"] as const;
 
-export function refineCompanyRows<R extends AnyRow & Record<string, any>>(rows: R[]): R[] {
+export function refineCompanyRows<R extends AnyRow & Record<string, any>>(rows: R[], opts: { keepExisting?: boolean } = {}): R[] {
   // ① 개인 식별번호 형태 → 사업자번호로 처리하지 않음 + 마스킹.
   //    거래처명이 없으면 개인 고객 자료로 분리(사업자 거래처 등록 제외·기존 개인 고객 자동 연결 없음). 거래처명이 있으면 확인 필요.
   for (const r of rows) {
@@ -55,6 +55,11 @@ export function refineCompanyRows<R extends AnyRow & Record<string, any>>(rows: 
   }
   for (const [k, g] of groups) {
     if (g.length < 2) continue;
+    // 보호 모드: 기존 거래처(m:) 그룹은 어떤 값도 반영하지 않으므로 행 간 값 차이를 '확인 필요'로 올리지 않는다(기존 정보 유지).
+    if (opts.keepExisting && k.startsWith("m:")) {
+      g.slice(1).forEach(r => { if (r.status === "identical") { r.status = "duplicate_file"; r.reason = `같은 기존 거래처의 중복 행(${g[0].rowNumber}행과 같은 거래처 · 기존 정보 유지)`; } });
+      continue;
+    }
     // 최신 엑셀 내부에서 같은 사업자번호 행끼리 값이 실제로 다를 때만 충돌(표기 차이 — 공백·(주)·대소문자 — 는 같은 값)
     const nv = (f: string, v: unknown) => f === "name" ? normalizeCompanyNameKey(String(v ?? "")) : String(v ?? "").replace(/[\s,.()\-]/g, "").toLowerCase();
     const conflictFields = COMPANY_GROUP_FIELDS.filter(f => new Set(g.map(r => nv(f, r[f])).filter(Boolean)).size >= 2);
