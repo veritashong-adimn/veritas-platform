@@ -21,16 +21,16 @@
 // 실행 기록·근거: import_batches(module=legacy_company_restore) + import_row_sources. 배치 단위 되돌리기 지원.
 import { sql } from "drizzle-orm";
 import { normalizeCompanyName as N } from "../lib/normalizeCompany";
-import { personKey } from "./legacyContactRestore";
+import { personKey, normPhone, phoneType } from "./legacyContactRestore";
 
 export const COMPANY_RESTORE_MODULE = "legacy_company_restore";
 type Dbx = { execute: (q: any) => Promise<{ rows: unknown[]; rowCount?: number | null }> };
 const rows = async (dbx: Dbx, q: any) => (await dbx.execute(q)).rows as any[];
 
-export type AliasRelation = "notation" | "abbreviation" | "english" | "former_name" | "renamed" | "merger" | "misspelling" | "business_unit";
+export type AliasRelation = "notation" | "abbreviation" | "english" | "former_name" | "renamed" | "merger" | "misspelling" | "business_unit" | "brand";
 export const ALIAS_RELATION_LABEL: Record<AliasRelation, string> = {
   notation: "표기 차이", abbreviation: "약칭", english: "영문 명칭", former_name: "과거 상호", renamed: "상호 변경", merger: "합병 관계", misspelling: "오기",
-  business_unit: "사업부·지점(세금계산서 발행 사업자)",
+  business_unit: "사업부·지점(세금계산서 발행 사업자)", brand: "브랜드(법인명/브랜드명 표기)",
 };
 // 대상 거래처는 DB id 가 아니라 사업자등록번호(+확인용 이름)로 지정한다 — 개발·운영 DB 의 id 가 서로 달라도 같은 법인을 찾도록.
 //   실행 시 대상 DB 에서 사업자번호로 살아 있는 거래처를 찾고, 정확히 1곳이며 이름도 확인되면 그 DB 의 id 를 쓴다(resolveConfirmedTarget).
@@ -73,9 +73,11 @@ export const COMPANY_REVIEW_LABEL: Record<CompanyReviewReason, string> = {
   multi_candidate: "일치 거래처 Master 2곳 이상", deleted_master: "삭제된 거래처와만 일치", new_overlap: "신규 등록 대상끼리 이름 포함 관계(중복 등록 위험)",
   generic: "여러 고객을 묶은 이름(개인고객 등)", no_name: "거래처명 없음", confirmed_missing: "관리자 확인 대상 거래처를 이 DB 에서 확정할 수 없음(사업자번호·이름 불일치·없음·복수)",
 };
-export type LinkBasis = "confirmed" | "annotation" | "master_annotation" | "transliteration";
+export type LinkBasis = "confirmed" | "annotation" | "master_annotation" | "transliteration" | "former_name" | "brand_split" | "contact_evidence";
 export const LINK_BASIS_LABEL: Record<LinkBasis, string> = {
   confirmed: "관리자 확인", annotation: "과거 CRM 표기에 영문 약칭 병기", master_annotation: "Master 표기에 영문 병기", transliteration: "영문 약어 ↔ 한글 표기 동일",
+  former_name: "거래처 상호 변경 이력(과거 상호)과 정확히 일치", brand_split: "법인명/브랜드명 표기 — 법인명 부분이 Master 1곳과 정확히 일치",
+  contact_evidence: "유사 후보 중 고객 담당자(이름+휴대폰)가 그 거래처 담당자와 일치",
 };
 export type CreateKind = "individual" | "overseas" | "domestic" | "latin_unknown";
 export const CREATE_KIND_LABEL: Record<CreateKind, string> = {
@@ -173,6 +175,15 @@ export async function planCompanyLinks(dbx: Dbx): Promise<CompanyGroup[]> {
     const t = transliterateAcronyms(String(c.name)); if (t) add(translit, N(t), Number(c.id));
     add(translit, N(c.name), Number(c.id));
   }
+  // 과거 상호(company_name_history) — 살아 있는 거래처의 이전 이름. 현재 이름·별칭과 겹치면 제외(이미 위 색인에 있음)
+  const former = new Map<string, Set<number>>();
+  const liveIds = new Set(live.map(c => Number(c.id)));
+  for (const h of await rows(dbx, sql`SELECT company_id, company_name FROM company_name_history`))
+    if (liveIds.has(Number(h.company_id))) add(former, N(h.company_name), Number(h.company_id));
+  // 담당자 근거 — (담당자 이름 핵심값|휴대폰) → 소속 거래처(활성·미삭제 담당자만)
+  const contactCo = new Map<string, Set<number>>();
+  for (const c of await rows(dbx, sql`SELECT company_id, name, mobile, phone, office_phone FROM contacts WHERE deleted_at IS NULL AND is_active AND company_id IS NOT NULL`))
+    for (const t of [c.mobile, c.phone, c.office_phone].map(normPhone)) if (phoneType(t) === "mobile") add(contactCo, `${personKey(c.name)}|${t}`, Number(c.company_id));
   const dead = new Map<string, number[]>();
   for (const c of await rows(dbx, sql`SELECT id, name FROM companies WHERE deleted_at IS NOT NULL`)) { const k = N(c.name); if (k && !idx.has(k)) (dead.get(k) ?? dead.set(k, []).get(k)!).push(Number(c.id)); }
   const keys = [...idx.keys()].filter(k => k.length >= 2);
@@ -205,6 +216,19 @@ export async function planCompanyLinks(dbx: Dbx): Promise<CompanyGroup[]> {
     Object.assign(g, { decision: "review" as const, reason, candidates: candidates.slice(0, 8), detail: detail ?? (candidates.length > 8 ? `후보 ${candidates.length}곳(상위 8곳 표시)` : undefined) });
   const link = (g: CompanyGroup, id: number, basis: LinkBasis, relation: AliasRelation, detail?: string) =>
     Object.assign(g, { decision: "link" as const, companyId: id, companyName: nameOf.get(id), basis, relation, detail });
+  // 그룹 판매의 고객 담당자(이름+휴대폰)가 가리키는 거래처 집합 — R3 근거·R1 충돌 확인
+  //   hits: 거래처별 근거 판매 수 / withMobile: 고객명+휴대폰이 있는 판매 수(근거 비율 산정)
+  const contactEvidence = (g: CompanyGroup) => {
+    const hits = new Map<number, number>(); let withMobile = 0;
+    for (const id of g.saleRowIds) {
+      const es = (evid.get(id) ?? []).filter(e => e.cust && phoneType(normPhone(e.tel)) === "mobile");
+      if (!es.length) continue; withMobile++;
+      const cos = new Set<number>();
+      for (const e of es) for (const co of contactCo.get(`${personKey(e.cust)}|${normPhone(e.tel)}`) ?? []) cos.add(co);
+      for (const co of cos) hits.set(co, (hits.get(co) ?? 0) + 1);
+    }
+    return { cos: new Set(hits.keys()), hits, withMobile };
+  };
   for (const { rawCount, ...g } of groups.values()) {
     g.raws = [...rawCount.entries()].sort((a, b) => b[1] - a[1]).map(e => e[0]);
     g.name = g.raws[0];   // 가장 많이 쓰인 원문 표기(원문 보존 — 영문 법인표기 포함)
@@ -227,6 +251,9 @@ export async function planCompanyLinks(dbx: Dbx): Promise<CompanyGroup[]> {
     if (hit && hit.size > 1) { review(g, "multi_candidate", cand(hit, "정확 일치")); continue; }
     if (GENERIC.test(g.key)) { review(g, "generic"); continue; }
     if (dead.has(g.key)) { review(g, "deleted_master", [], `삭제된 거래처 #${dead.get(g.key)!.join(", #")}`); continue; }
+    // R2 과거 상호 — 상호 변경 이력의 이전 이름과 정확히 같은 거래처가 1곳
+    const fm = former.get(g.key);
+    if (fm?.size === 1) { link(g, [...fm][0], "former_name", "former_name", `과거 상호 '${g.name}' → 현재 '${nameOf.get([...fm][0])}'`); continue; }
     // A-2 과거 CRM 표기 = Master 이름 + 영문 병기(모든 표기에서 같은 1곳)
     const partHits = new Set<number>(); let allAnnotation = true;
     for (const raw of g.raws) {
@@ -244,8 +271,29 @@ export async function planCompanyLinks(dbx: Dbx): Promise<CompanyGroup[]> {
     const tr = g.raws.map(transliterateAcronyms).filter((x): x is string => !!x).map(N);
     const trHits = new Set(tr.flatMap(k => [...(translit.get(k) ?? [])]));
     if (!partHits.size && trHits.size === 1) { link(g, [...trHits][0], "transliteration", "english"); continue; }
+    // R1 법인명/브랜드명 — 모든 표기가 '법인명/브랜드…' 형태이고 '/' 앞 법인명이 Master 1곳과 정확히 일치(표기마다 같은 곳).
+    //   담당자 근거가 다른 거래처를 가리키면 연결하지 않는다(충돌 → 확인).
+    const ctAll = contactEvidence(g); const ctEv = ctAll.cos;
+    const slashHeads = g.raws.map(r => r.includes("/") ? idx.get(N(r.split("/")[0])) : undefined);
+    if (slashHeads.every(h => h?.size === 1) && new Set(slashHeads.map(h => [...h!][0])).size === 1) {
+      const target = [...slashHeads[0]!][0];
+      if (ctEv.size === 0 || (ctEv.size === 1 && ctEv.has(target))) {
+        link(g, target, "brand_split", "brand", `법인명 '${g.raws[0].split("/")[0].trim()}' 일치${ctEv.size ? " · 고객 담당자(이름+휴대폰)도 같은 거래처" : ""}`); continue;
+      }
+    }
+    // R3 담당자 근거 — 후보 중 고객 담당자(이름+휴대폰)가 정확히 1곳 담당자와 일치하고 다른 거래처 근거가 없을 때
+    // 근거 충분성: 근거 판매 2건 이상이면서 고객 휴대폰이 있는 판매의 50% 이상 / 판매 1건 그룹은 그 1건이 일치
+    const byEvidence = (cands: Iterable<number>) => {
+      const c = new Set(cands); if (ctEv.size !== 1 || !c.has([...ctEv][0])) return null;
+      const t = [...ctEv][0], h = ctAll.hits.get(t) ?? 0;
+      return (h >= 2 && h * 2 >= ctAll.withMobile) || (g.saleRowIds.length === 1 && h === 1) ? t : null;
+    };
     // B 후보 — 자동 연결하지 않는다
-    if (partHits.size >= 1) { review(g, "part_brand", cand(partHits, "부분 일치")); continue; }
+    if (partHits.size >= 1) {
+      const t = byEvidence(partHits);
+      if (t != null) { link(g, t, "contact_evidence", "business_unit", `부분 일치 + 고객 담당자(이름+휴대폰) 일치 ${ctAll.hits.get(t)}/${ctAll.withMobile}건`); continue; }
+      review(g, "part_brand", cand(partHits, "부분 일치"), ctEv.size > 1 ? `고객 담당자 근거가 거래처 ${ctEv.size}곳에 걸침` : ctEv.size === 1 ? `고객 담당자 근거 부족(${ctAll.hits.get([...ctEv][0])}/${ctAll.withMobile}건)` : undefined); continue;
+    }
     const sim = new Map<number, string>();
     for (const id of ma ?? []) sim.set(id, "Master 영문 병기(후보 복수)");
     for (const id of masterPart.get(g.key) ?? []) if (!sim.has(id)) sim.set(id, "Master 괄호 안 명칭");
@@ -257,7 +305,11 @@ export async function planCompanyLinks(dbx: Dbx): Promise<CompanyGroup[]> {
         : (abbreviationOf(g.key, k) || abbreviationOf(k, g.key)) ? "약칭 가능" : null;
       if (m) for (const id of idx.get(k)!) if (!sim.has(id)) sim.set(id, m);
     }
-    if (sim.size) { review(g, "similar", [...sim.entries()].map(([id, m]) => ({ id, name: nameOf.get(id) ?? "", match: m }))); continue; }
+    if (sim.size) {
+      const t = byEvidence(sim.keys());
+      if (t != null) { link(g, t, "contact_evidence", "notation", `유사 후보(${sim.get(t)}) + 고객 담당자(이름+휴대폰) 일치 ${ctAll.hits.get(t)}/${ctAll.withMobile}건`); continue; }
+      review(g, "similar", [...sim.entries()].map(([id, m]) => ({ id, name: nameOf.get(id) ?? "", match: m })), ctEv.size ? `고객 담당자 근거 ${ctEv.size > 1 ? `거래처 ${ctEv.size}곳에 걸침` : `부족(${ctAll.hits.get([...ctEv][0])}/${ctAll.withMobile}건)`}` : undefined); continue;
+    }
     // C 신규 등록 — 유형 판정(근거가 있을 때만 개인·해외로 분류, 확정 정보로 저장하지 않음)
     const ev = g.saleRowIds.flatMap(id => evid.get(id) ?? []);
     const named = g.saleRowIds.filter(id => (evid.get(id) ?? []).some(e => e.cust));
