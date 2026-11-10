@@ -1,6 +1,7 @@
 // ─── 과거 CRM 자료 최신화(업로드 즉시 반영) API ────────────────────────────────────
 //   GET  /admin/crm-refresh/status            5개 자료 현황(현재 건수·최근 업데이트·최근 처리 결과/오류)
 //   POST /admin/crm-refresh/sales-progress    판매목록+진행관리표 전체 교체(multipart: salesFile, progressFile) — 관리자
+//   POST /admin/crm-refresh/translators/preview 통번역사 명부 최신화 미리보기(읽기 전용 — 예상 신규·보완·제외·성명 누락) — 관리자
 //   POST /admin/crm-refresh/translators       통번역사 명부 최신화(multipart: file) — 관리자
 //   POST /admin/crm-refresh/log               거래처·담당자 최신화 결과 기록(화면이 기존 대량등록 API로 반영한 뒤 호출)
 // 건별 비교·승인 단계 없음. 안전장치·롤백·처리 로그는 services/crmRefresh.ts 참고.
@@ -9,7 +10,7 @@ import multer from "multer";
 import { db } from "@workspace/db";
 import { requireAuth, requireRole } from "../middlewares/auth";
 import { saveSnapshot, pruneExpired } from "../lib/importSnapshot";
-import { applySalesProgress, applyTranslatorList, refreshStatus, writeRefreshLog, errorInfo } from "../services/crmRefresh";
+import { applySalesProgress, applyTranslatorList, previewTranslatorList, refreshStatus, writeRefreshLog, errorInfo } from "../services/crmRefresh";
 
 const router: IRouter = Router();
 const staffGuard = [requireAuth, requireRole("admin", "staff")];
@@ -46,6 +47,18 @@ router.post("/admin/crm-refresh/sales-progress", ...adminGuard,
     await writeRefreshLog(db, { kind: "sales_progress", ok: false, fileNames: names, userId: uid(req), summary: {}, error: e.message, code: e.code }).catch(() => {});
     res.status(e.status).json({ error: e.message, code: e.code, detail: e.detail });
   } finally { running.delete("sales_progress"); }
+});
+
+// 미리보기 — 판정 엔진을 읽기 전용으로 실행해 예상 건수만 반환(스냅샷·로그·DB 변경 없음).
+router.post("/admin/crm-refresh/translators/preview", ...adminGuard, upload.single("file"), async (req, res) => {
+  if (!req.file?.buffer?.length) { res.status(400).json({ error: "통번역사 명부 파일이 필요합니다.", code: "FILE_MISSING" }); return; }
+  try {
+    res.json(await previewTranslatorList(db, { buffer: req.file.buffer }));
+  } catch (err) {
+    const e = errorInfo(err);
+    if (e.status >= 500) req.log.error({ err }, "crm-refresh translators preview failed");
+    res.status(e.status).json({ error: e.message, code: e.code, detail: e.detail });
+  }
 });
 
 router.post("/admin/crm-refresh/translators", ...adminGuard, upload.single("file"), async (req, res) => {

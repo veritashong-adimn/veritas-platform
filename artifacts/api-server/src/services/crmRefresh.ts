@@ -17,6 +17,7 @@ import {
 } from "./legacyArchiveSync";
 import { buildImportPlan, executeImportPlan, planSummary, loadSavedDecisions, PlanError, type ManualDecision } from "./translatorImportPlan";
 import { todayKst } from "../lib/legacyPayoutRule";
+import { parseWorkbook, buildColumnMap, TRANSLATOR_COLUMN_SYNONYMS } from "../lib/hometaxExcel";
 
 export type RefreshKind = "sales_progress" | "translator" | "company" | "contact";
 const LOG_MODULE = "crm_refresh";
@@ -90,10 +91,29 @@ export async function applySalesProgress(db: any, o: { salesBuffer: Buffer; prog
 // 자동 반영 = 판정 엔진의 NEW(등록 자격 충족 + 실제 이메일) · UPDATE(기존 공란 보완). 이전에 관리자가 저장한 수동 판정은 유지.
 // MANUAL(동일인 불확실)·HOLD(자격 미충족·이메일 없음 등)는 등록하지 않는다 — 임의 병합·근거 없는 생성 금지.
 // 기존 Master 는 삭제·비활성화하지 않는다(수행·지급이력 보존). 명부 포함 기준은 '파일 행의 신규 등록'에만 적용.
-export async function applyTranslatorList(db: any, o: { buffer: Buffer; fileName: string; userId: number | null; snapshotId: string }) {
-  const started = Date.now();
-  const plan0 = await buildImportPlan(db, o.buffer);
-  if (plan0.rows.length === 0) throw new RefreshError("EMPTY_FILE", 400, "통번역사 행이 없는 파일입니다(성명 열을 찾지 못했거나 빈 파일).");
+// ── 통번역사 명부 파일 검증 ──────────────────────────────────────────────────────
+// 2026-11-10 사례: '통번역사 목록' 칸에 판매목록(13,678행)이 올라가 전 행이 성명 누락(invalid_name)으로 보류됨.
+//   성명 열이 없거나 성명 누락 행이 과반이면 판정 전에 차단하고, 판매목록·진행관리표로 보이면 그 사실을 안내한다.
+const hk = (v: unknown) => String(v ?? "").toLowerCase().replace(/[\s _\-·./()]+/g, "");
+function validateTranslatorFile(buffer: Buffer): { headerRow: number; nameColumn: string } {
+  const parsed = parseWorkbook(buffer, TRANSLATOR_COLUMN_SYNONYMS);
+  const colMap = buildColumnMap(parsed.headers, TRANSLATOR_COLUMN_SYNONYMS);
+  const heads = new Set(parsed.headers.map(hk));
+  const looksSales = ["거래처명", "상품명"].every(h => heads.has(hk(h)));
+  const looksProgress = looksSales && ["통번역사납품일", "통번역사지급일"].some(h => heads.has(hk(h)));
+  if ((colMap.name ?? -1) < 0 || looksSales) {
+    const kind = looksProgress ? "진행관리표" : looksSales ? "판매목록" : null;
+    throw new RefreshError("NAME_COLUMN_NOT_FOUND", 400,
+      kind
+        ? `통번역사 목록 파일이 아닌 ${kind} 파일로 보입니다(거래처명·상품명 열 확인). 통번역사목록 파일을 올려 주세요. — 변경 없음`
+        : `통번역사 성명 열을 찾지 못했습니다(성명·이름·통번역사명 중 하나가 필요). 파일의 머리글 행을 확인해 주세요. — 변경 없음`,
+      { headerRow: parsed.headerRowIndex + 1, headers: parsed.headers.filter(Boolean).slice(0, 15), detected: kind });
+  }
+  return { headerRow: parsed.headerRowIndex + 1, nameColumn: parsed.headers[colMap.name] ?? "" };
+}
+
+// 판정 결과 → 자동 반영 대상(수행이력 본인 확인 건) · 미등록 사유 · 예상 건수. Preview·실행 공용(같은 기준).
+async function translatorPlanStats(db: any, plan0: Awaited<ReturnType<typeof buildImportPlan>>) {
   const s0 = planSummary(plan0);
   // 명부 포함 기준 ③(주민번호 없음 + 수행이력 있음): 진행관리표 수행이력이 이 성명으로만 확인되고, 같은 이름의 기존 Master 가 없으며
   //   그 이력이 다른 Master 에 연결되지 않은 경우(엔진 사유 history_name_only + allowOwnHistory)만 자동 등록한다.
@@ -106,12 +126,12 @@ export async function applyTranslatorList(db: any, o: { buffer: Buffer; fileName
     if (saved.has(r.personKey)) continue;
     decisions[String(r.rowNumber)] = "different_own_history"; autoHistoryOnly++;
   }
-  const result = await db.transaction(async (tx: any) => executeImportPlan(tx, {
-    buffer: o.buffer, fileName: o.fileName, snapshotId: o.snapshotId, planToken: plan0.planToken, decisions, performerId: o.userId,
-  }));
   const holdReasons: Record<string, number> = {};
+  let newCreatable = 0, invalidName = 0;
   for (const r of plan0.rows) {
     if (r.firstRowOfDuplicate) continue;
+    if (r.reasonCode === "invalid_name") invalidName++;
+    if (r.category === "NEW" && r.creatable) newCreatable++;
     const auto = decisions[String(r.rowNumber)] != null;
     if (r.category === "HOLD" || (r.category === "MANUAL" && !auto) || (r.category === "NEW" && !r.creatable)) {
       const k = r.category === "NEW" ? "no_email" : r.reasonCode; holdReasons[k] = (holdReasons[k] ?? 0) + 1;
@@ -119,10 +139,59 @@ export async function applyTranslatorList(db: any, o: { buffer: Buffer; fileName
   }
   const pc = s0.personCounts as Record<string, number>;
   const notEligible = Object.entries(s0.byReason as Record<string, number>).filter(([k]) => k.endsWith(":not_eligible")).reduce((a, [, n]) => a + n, 0);
+  return { decisions, autoHistoryOnly, holdReasons, notEligible, invalidName, newCreatable,
+    persons: { same: pc.SAME ?? 0, update: pc.UPDATE ?? 0, new: pc.NEW ?? 0, hold: pc.HOLD ?? 0, manual: pc.MANUAL ?? 0 } };
+}
+
+function assertNamesPresent(rows: number, invalidName: number) {
+  // 성명 열은 있으나 과반 행의 성명이 비어 있으면(병합 셀·머리글 위치 오류 등) 실행하지 않는다.
+  if (rows > 0 && invalidName * 2 > rows) {
+    throw new RefreshError("NAME_MOSTLY_EMPTY", 400, `성명이 비어 있는 행이 ${invalidName.toLocaleString()} / ${rows.toLocaleString()}행입니다. 파일의 성명 열·머리글 행을 확인해 주세요. — 변경 없음`);
+  }
+}
+
+// ── 통번역사 명부 최신화 Preview(읽기 전용 — DB 변경 없음) ─────────────────────────
+export async function previewTranslatorList(db: any, o: { buffer: Buffer }) {
+  const started = Date.now();
+  const file = validateTranslatorFile(o.buffer);
+  const plan0 = await buildImportPlan(db, o.buffer);     // 판정 엔진(읽기 전용)
+  if (plan0.rows.length === 0) throw new RefreshError("EMPTY_FILE", 400, "통번역사 행이 없는 파일입니다(성명 열을 찾지 못했거나 빈 파일).");
+  const st = await translatorPlanStats(db, plan0);
+  const notRegisteredTotal = Object.values(st.holdReasons).reduce((a, b) => a + b, 0);
+  return {
+    preview: true, elapsedMs: Date.now() - started, fileRows: plan0.rows.length, file,
+    persons: st.persons,
+    expected: {
+      created: st.newCreatable + st.autoHistoryOnly,           // 신규 등록 예정(주민번호 보유 + 본인 수행이력 확인)
+      updated: st.persons.update,                              // 기존 Master 공란 보완 예정
+      same: st.persons.same,
+      excludedNoRrnNoHistory: st.notEligible,                  // 명부 제외(주민번호·수행이력 모두 없음)
+      held: Math.max(0, notRegisteredTotal - st.notEligible),  // 보류(동일인 불확실·이메일 없음 등, 관리자 확인 대상)
+      invalidName: st.invalidName,
+    },
+    autoHistoryOnly: st.autoHistoryOnly, notRegistered: st.holdReasons,
+  };
+}
+
+// ── 통번역사 명부 최신화 ─────────────────────────────────────────────────────────
+// 자동 반영 = 판정 엔진의 NEW(등록 자격 충족 + 실제 이메일) · UPDATE(기존 공란 보완). 이전에 관리자가 저장한 수동 판정은 유지.
+// MANUAL(동일인 불확실)·HOLD(자격 미충족·이메일 없음 등)는 등록하지 않는다 — 임의 병합·근거 없는 생성 금지.
+// 기존 Master 는 삭제·비활성화하지 않는다(수행·지급이력 보존). 명부 포함 기준은 '파일 행의 신규 등록'에만 적용.
+export async function applyTranslatorList(db: any, o: { buffer: Buffer; fileName: string; userId: number | null; snapshotId: string }) {
+  const started = Date.now();
+  validateTranslatorFile(o.buffer);
+  const plan0 = await buildImportPlan(db, o.buffer);
+  if (plan0.rows.length === 0) throw new RefreshError("EMPTY_FILE", 400, "통번역사 행이 없는 파일입니다(성명 열을 찾지 못했거나 빈 파일).");
+  const st = await translatorPlanStats(db, plan0);
+  assertNamesPresent(plan0.rows.length, st.invalidName);
+  const { decisions, autoHistoryOnly, holdReasons, notEligible } = st;
+  const result = await db.transaction(async (tx: any) => executeImportPlan(tx, {
+    buffer: o.buffer, fileName: o.fileName, snapshotId: o.snapshotId, planToken: plan0.planToken, decisions, performerId: o.userId,
+  }));
   return {
     mode: result.mode as "applied" | "no_change", batchId: result.batchId as number | null, elapsedMs: Date.now() - started,
     fileRows: plan0.rows.length,
-    persons: { same: pc.SAME ?? 0, update: pc.UPDATE ?? 0, new: pc.NEW ?? 0, hold: pc.HOLD ?? 0, manual: pc.MANUAL ?? 0 },
+    persons: st.persons,
     applied: { created: result.created, updated: result.updated, manualApproved: result.manualApproved, manualHeld: result.manualHeld },
     excludedNoRrnNoHistory: notEligible, autoHistoryOnly, notRegistered: holdReasons,
     activeTranslators: { before: result.aliveBefore, after: result.aliveAfter },

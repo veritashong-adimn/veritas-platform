@@ -80,6 +80,8 @@ export function CrmRefreshPanel({ token, setToast, onApplied }: Props) {
   const [files, setFiles] = useState<{ sales: File | null; progress: File | null; translator: File | null; company: File | null; contact: File | null }>({ sales: null, progress: null, translator: null, company: null, contact: null });
   const [busy, setBusy] = useState<Kind | null>(null);
   const [result, setResult] = useState<Partial<Record<Kind, { ok: boolean; lines: string[]; error?: string }>>>({});
+  // 통번역사 명부: 미리보기(읽기 전용) → 관리자 확인 → 실행. 미리보기한 파일이 바뀌면 다시 미리보기.
+  const [tPreview, setTPreview] = useState<{ file: File; lines: string[]; blocked: boolean } | null>(null);
   const auth = { Authorization: `Bearer ${token}` };
 
   const load = useCallback(async () => {
@@ -114,15 +116,39 @@ export function CrmRefreshPanel({ token, setToast, onApplied }: Props) {
     finally { setBusy(null); }
   };
 
+  const previewTranslator = async () => {
+    const f = files.translator; if (!f) return;
+    setBusy('translator'); setResult(r => ({ ...r, translator: undefined })); setTPreview(null);
+    try {
+      const fd = new FormData(); fd.append('file', f);
+      const res = await fetch(api('/api/admin/crm-refresh/translators/preview'), { method: 'POST', headers: auth, body: fd });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { setResult(r => ({ ...r, translator: { ok: false, lines: [], error: d?.error || '미리보기 실패 — 변경 없음' } })); return; }
+      const e = d.expected ?? {};
+      const blocked = Number(e.invalidName ?? 0) * 2 > Number(d.fileRows ?? 0);
+      setTPreview({ file: f, blocked, lines: [
+        `미리보기(DB 변경 없음) · 파일 ${n(d.fileRows)}행 · 성명 열 '${d.file?.nameColumn ?? ''}'(${n(d.file?.headerRow)}행 머리글)`,
+        `신규 등록 예정 ${n(e.created)} · 정보 보완 예정 ${n(e.updated)} · 기존 동일 ${n(e.same)}`,
+        `명부 제외(주민번호·수행이력 모두 없음) ${n(e.excludedNoRrnNoHistory)} · 보류(동일인 불확실·이메일 없음 등) ${n(e.held)} · 성명 누락(invalid_name) ${n(e.invalidName)}`,
+        ...(blocked ? ['⚠ 성명 누락 행이 과반이라 실행할 수 없습니다. 파일을 확인해 주세요.'] : []),
+      ] });
+    } catch (e: any) { setResult(r => ({ ...r, translator: { ok: false, lines: [], error: e?.message || '미리보기 실패 — 변경 없음' } })); }
+    finally { setBusy(null); }
+  };
+
   const runTranslator = async () => {
     const f = files.translator; if (!f) return;
+    // 미리보기 전이거나 다른 파일이면 먼저 미리보기
+    if (!tPreview || tPreview.file !== f) { await previewTranslator(); return; }
+    if (tPreview.blocked) return;
+    if (!window.confirm('미리보기 결과대로 통번역사 명부 최신화를 실행합니다.\n기존 통번역사는 삭제하지 않으며 빈 정보만 보완합니다.\n진행할까요?')) return;
     setBusy('translator'); setResult(r => ({ ...r, translator: undefined }));
     try {
       const fd = new FormData(); fd.append('file', f);
       const res = await fetch(api('/api/admin/crm-refresh/translators'), { method: 'POST', headers: auth, body: fd });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) { finish('translator', false, [], d?.error || '통번역사 명부 최신화 실패 — 변경 없음'); return; }
-      setFiles(x => ({ ...x, translator: null }));
+      setFiles(x => ({ ...x, translator: null })); setTPreview(null);
       finish('translator', true, resultLines('translator', d));
     } catch (e: any) { finish('translator', false, [], e?.message || '통번역사 명부 최신화 실패 — 변경 없음'); }
     finally { setBusy(null); }
@@ -187,10 +213,22 @@ export function CrmRefreshPanel({ token, setToast, onApplied }: Props) {
     <div style={card} data-testid={`crm-refresh-card-${kind}`}>
       <div style={{ fontSize: 14.5, fontWeight: 800, color: '#111827' }}>{TITLE[kind]}</div>
       <div style={{ fontSize: 12, color: '#6b7280' }}>{DESC[kind]}</div>
-      <DropZone id={kind} label={TITLE[kind]} file={files[kind]} onFile={f => setFiles(x => ({ ...x, [kind]: f }))} disabled={!!busy} />
-      <button style={btn(!files[kind] || !!busy)} disabled={!files[kind] || !!busy} onClick={run} aria-label={`${TITLE[kind]} 최신화 실행`} data-testid={`crm-refresh-run-${kind}`}>
-        {busy === kind ? '처리 중…' : '최신화 실행'}
-      </button>
+      <DropZone id={kind} label={TITLE[kind]} file={files[kind]} onFile={f => { setFiles(x => ({ ...x, [kind]: f })); if (kind === 'translator') setTPreview(null); }} disabled={!!busy} />
+      {kind === 'translator' && tPreview && tPreview.file === files.translator && (
+        <div data-testid="crm-refresh-preview-translator" style={{ fontSize: 12, lineHeight: 1.6, color: tPreview.blocked ? '#b91c1c' : '#0f172a', background: tPreview.blocked ? '#fef2f2' : '#f1f5f9', border: `1px solid ${tPreview.blocked ? '#fecaca' : '#e2e8f0'}`, borderRadius: 8, padding: '8px 10px' }}>
+          {tPreview.lines.map((l, i) => <div key={i}>{l}</div>)}
+        </div>
+      )}
+      {(() => {
+        const tReady = kind === 'translator' && !!tPreview && tPreview.file === files.translator;
+        const dis = !files[kind] || !!busy || (tReady && !!tPreview?.blocked);
+        const label = busy === kind ? '처리 중…' : kind !== 'translator' ? '최신화 실행' : tReady ? '확인 후 최신화 실행' : '미리보기(Preview)';
+        return (
+          <button style={btn(dis)} disabled={dis} onClick={run} aria-label={`${TITLE[kind]} ${label}`} data-testid={`crm-refresh-run-${kind}`}>
+            {label}
+          </button>
+        );
+      })()}
       {info(kind)}
     </div>
   );
