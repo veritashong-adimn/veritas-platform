@@ -3153,10 +3153,14 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                     <span style={{ fontWeight: 700, fontSize: 13, color: "#111827" }}>사용자 역할 지정</span>
                   </div>
                   <div style={{ maxHeight: 280, overflowY: "auto" }}>
-                    {users.filter(u => u.role === "admin").map(u => (
-                      <div key={u.id} style={{ padding: "8px 16px", borderBottom: "1px solid #f9fafb", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                    {/* 관리자·직원 모두 역할 지정 가능(기존: 관리자만 표시 → 직원은 역할관리에서 지정 불가했음). */}
+                    {users.filter(u => u.role === "admin" || u.role === "staff").map(u => (
+                      <div key={u.id} data-testid={`rbac-assign-row-${u.id}`} style={{ padding: "8px 16px", borderBottom: "1px solid #f9fafb", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                         <div>
-                          <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: "#374151" }}>{u.name || u.email}</p>
+                          <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: "#374151" }}>
+                            {u.name || u.email}
+                            <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 8, background: u.role === "admin" ? "#f5f3ff" : "#ecfeff", color: u.role === "admin" ? "#7c3aed" : "#0891b2" }}>{u.role === "admin" ? "관리자" : "직원"}</span>
+                          </p>
                           <p style={{ margin: 0, fontSize: 11, color: "#9ca3af" }}>{u.email}</p>
                         </div>
                         <ClickSelect
@@ -3165,11 +3169,13 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                             const rid = v ? Number(v) : null;
                             const res = await fetch(api(`/api/admin/users/${u.id}/rbac-role`), { method: "PATCH", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ roleId: rid }) });
                             if (!res.ok) { setToast("역할 지정 실패"); return; }
+                            setUsers(prev => prev.map(x => x.id === u.id ? { ...x, roleId: rid } : x));
                             setToast(`${u.email} 역할 지정 완료`);
                           }}
                           triggerStyle={{ fontSize: 12, padding: "4px 8px", minWidth: 100, borderRadius: 7 }}
                           options={[
-                            { value: "", label: "전체 권한" },
+                            // 역할 미지정의 의미: 관리자 = 전체 권한, 직원 = 기본 메뉴만(역할 권한 없음).
+                            { value: "", label: u.role === "admin" ? "전체 권한" : "역할 없음(기본)" },
                             ...rbacRoles.map(r => ({ value: String(r.id), label: r.name, sub: r.description ?? undefined })),
                           ]}
                         />
