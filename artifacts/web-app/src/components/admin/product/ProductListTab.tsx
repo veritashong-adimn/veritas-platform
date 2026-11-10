@@ -33,7 +33,12 @@ const PAGE_SIZE_OPTIONS = [20, 50, 100];
 
 /** 상품목록 — 서버 페이지네이션 + 선택 기반 일괄 관리(수정/활성/비활성/선택삭제). */
 export function ProductListTab({ token, hasPerm, setToast, authHeaders, onNavigate }: Props) {
-  const canManage = hasPerm("product.manage");
+  // 실행권한별 표시 — 서버(requireProductAction)가 동일 키로 재검증한다.
+  const canView = hasPerm("product.view");
+  const canCreate = hasPerm("product.create");
+  const canUpdate = hasPerm("product.update");
+  const canDelete = hasPerm("product.delete");
+  const canSelect = canUpdate || canDelete;
 
   const [products, setProducts] = useState<Product[]>([]);
   const [productsLoading, setProductsLoading] = useState(false);
@@ -331,7 +336,7 @@ export function ProductListTab({ token, hasPerm, setToast, authHeaders, onNaviga
 
   return (
     <>
-      <Section title={`상품목록 (${total})`} action={
+      <Section title={canView ? `상품목록 (${total})` : "상품목록"} action={
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
           {/* 엑셀 다운로드 — 현재 검색/필터 결과 전체 다운로드(§2). Export 로직 무변경. */}
           <button onClick={() => handleProductExcelDownload("export")}
@@ -340,12 +345,14 @@ export function ProductListTab({ token, hasPerm, setToast, authHeaders, onNaviga
             ⬇ 엑셀 다운로드
           </button>
           {/* 대량등록 — 기존 Import 진입점(파일 업로드 → 분석 → 미리보기 → 확정, §3·§6). 템플릿 다운로드는 이 흐름 내부로 이동 예정(§1·8번 작업). */}
+          {canCreate && (
           <label data-testid="product-bulk-import"
             style={{ fontSize: 12, padding: "6px 12px", borderRadius: 7, border: "1px solid #bfdbfe", background: "#eff6ff", color: "#2563eb", cursor: productImporting ? "not-allowed" : "pointer", fontWeight: 600, opacity: productImporting ? 0.6 : 1 }}>
             {productImporting ? "분석 중..." : "⬆ 대량등록"}
             <input ref={productImportRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }}
               onChange={e => { const f = e.target.files?.[0]; if (f) handleProductImport(f); }} />
           </label>
+          )}
           {/* 검수 리포트 — 상품 표준화/품질검수용(로컬 UI 상태만, DB 무변경). 일반 운영 UI 비노출, 코드 유지(§4). */}
           {SHOW_REVIEW_REPORT && (
             <button
@@ -357,8 +364,8 @@ export function ProductListTab({ token, hasPerm, setToast, authHeaders, onNaviga
               🔍 검수 리포트
             </button>
           )}
-          {canManage && (
-            <PrimaryBtn onClick={() => onNavigate("product-register")} style={{ fontSize: 13, padding: "7px 14px" }}>
+          {canCreate && (
+            <PrimaryBtn onClick={() => onNavigate("product-register")} data-testid="btn-product-register" aria-label="상품 등록" style={{ fontSize: 13, padding: "7px 14px" }}>
               + 상품 등록
             </PrimaryBtn>
           )}
@@ -474,8 +481,8 @@ export function ProductListTab({ token, hasPerm, setToast, authHeaders, onNaviga
           )}
         </div>
 
-        {/* 선택 기반 일괄 관리 바 */}
-        {canManage && (
+        {/* 선택 기반 일괄 관리 바 — 수정·활성/비활성은 product.update, 선택삭제는 product.delete */}
+        {canSelect && canView && (
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12, padding: "10px 14px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, ...stickyBulkBarStyle }}>
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#374151", cursor: "pointer", fontWeight: 600 }}>
               <input type="checkbox" checked={allSelected} onChange={toggleSelectAll}
@@ -487,6 +494,7 @@ export function ProductListTab({ token, hasPerm, setToast, authHeaders, onNaviga
               선택 {selectedCount}건
             </span>
             <div style={{ flex: 1 }} />
+            {canUpdate && (<>
             <button
               onClick={handleEditSelected}
               disabled={selectedCount !== 1}
@@ -509,6 +517,8 @@ export function ProductListTab({ token, hasPerm, setToast, authHeaders, onNaviga
               style={bulkBtn(selectedCount >= 1, "#c2410c", "#fff7ed", "#fed7aa")}>
               비활성
             </button>
+            </>)}
+            {canDelete && (
             <button
               onClick={() => setBulkTrashOpen(true)}
               disabled={selectedCount < 1}
@@ -516,11 +526,16 @@ export function ProductListTab({ token, hasPerm, setToast, authHeaders, onNaviga
               style={bulkBtn(selectedCount >= 1, "#dc2626", "#fef2f2", "#fecaca")}>
               선택삭제
             </button>
+            )}
           </div>
         )}
 
-        {/* 상품 목록 */}
-        {productsLoading ? (
+        {/* 상품 목록 — product.view 권한이 있어야 표시 */}
+        {!canView ? (
+          <div data-testid="product-no-view-permission">
+            <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>상품 조회 권한이 없습니다.</Card>
+          </div>
+        ) : productsLoading ? (
           <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
         ) : products.length === 0 ? (
           <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>등록된 상품이 없습니다.</Card>
@@ -531,7 +546,7 @@ export function ProductListTab({ token, hasPerm, setToast, authHeaders, onNaviga
               <table className="veritas-read-table vz-sticky" style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr>
-                    {canManage && (
+                    {canSelect && (
                       <th style={{ textAlign: "center", width: 34 }}>
                         <input type="checkbox" checked={allSelected} onChange={toggleSelectAll}
                           aria-label="현재 페이지 전체 선택" data-testid="product-select-all"
@@ -547,8 +562,8 @@ export function ProductListTab({ token, hasPerm, setToast, authHeaders, onNaviga
                 </thead>
                 <tbody>
                   {products.map(p => (
-                    <ProductRow key={p.id} p={p} selectable={canManage}
-                      selected={selectedIds.has(p.id)} onToggleSelect={toggleSelect} onOpen={openEdit} />
+                    <ProductRow key={p.id} p={p} selectable={canSelect}
+                      selected={selectedIds.has(p.id)} onToggleSelect={toggleSelect} onOpen={canUpdate ? openEdit : () => {}} />
                   ))}
                 </tbody>
               </table>
@@ -557,7 +572,7 @@ export function ProductListTab({ token, hasPerm, setToast, authHeaders, onNaviga
         )}
 
         {/* 페이지네이션 */}
-        {total > 0 && (
+        {canView && total > 0 && (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginTop: 16 }}>
             <span data-testid="pagination-info" style={{ fontSize: 13, color: "#6b7280" }}>
               전체 {total}건 중 {rangeStart}–{rangeEnd}건 표시

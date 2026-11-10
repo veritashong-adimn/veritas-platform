@@ -19,7 +19,7 @@ interface Props {
  * 상품 생성·코드/이름 자동생성 로직은 LazyProductPanel(기존 빠른생성)을 그대로 재사용.
  */
 export function ProductRegisterTab({ token, user, hasPerm, setToast, authHeaders, onBack }: Props) {
-  const canManage = hasPerm("product.manage");
+  const canManage = hasPerm("product.create");
 
   return (
     <>

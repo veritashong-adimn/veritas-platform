@@ -1,7 +1,8 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { db, productsTable, productOptionsTable, productRequestsTable, quoteItemsTable, translatorProductsTable, performanceAssignmentsTable, usersTable, importBatchesTable, importRowSourcesTable } from "@workspace/db";
 import { eq, desc, sql, and, or, isNull, isNotNull } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
+import { getPermissionsForRole } from "../lib/rbac";
 import { logEvent } from "../lib/logEvent";
 import multer from "multer";
 import * as XLSX from "xlsx";
@@ -23,6 +24,33 @@ import {
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
 const adminOnly = [requireAuth, requireRole("admin")];
+
+// ─── 상품 실행권한(RBAC) ───────────────────────────────────────────────────────
+//  · admin 계정: 기존과 동일하게 전체 허용(기존 adminOnly 동작 유지).
+//  · staff 계정: 역할(roleId)에 해당 권한 키가 있어야 허용. 없으면 403.
+//  · allowStaffWithoutRole: 역할 미지정 직원을 기존처럼 허용(삭제·복원은 기존에 adminGuard 로 직원 전체 허용이었음).
+function requireProductAction(key: "product.create" | "product.update" | "product.delete", opts: { allowStaffWithoutRole?: boolean } = {}) {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const u = req.user;
+    if (!u) { res.status(401).json({ error: "인증이 필요합니다." }); return; }
+    if (u.role === "admin") { next(); return; }
+    if (u.role !== "staff") { res.status(403).json({ error: "권한이 없습니다." }); return; }
+    if (!u.roleId) {
+      if (opts.allowStaffWithoutRole) { next(); return; }
+      res.status(403).json({ error: `권한이 없습니다: ${key} (역할이 지정되지 않았습니다)`, code: "PERMISSION_DENIED", permission: key }); return;
+    }
+    try {
+      const perms = await getPermissionsForRole(u.roleId);
+      if (!perms.has(key)) { res.status(403).json({ error: `권한이 없습니다: ${key}`, code: "PERMISSION_DENIED", permission: key }); return; }
+      next();
+    } catch {
+      res.status(500).json({ error: "권한 확인 중 오류가 발생했습니다." });
+    }
+  };
+}
+const canCreate = [requireAuth, requireRole("admin", "staff"), requireProductAction("product.create")];
+const canUpdate = [requireAuth, requireRole("admin", "staff"), requireProductAction("product.update")];
+const canDelete = [requireAuth, requireRole("admin", "staff"), requireProductAction("product.delete", { allowStaffWithoutRole: true })];
 
 // ─── 상품유형 정의 ─────────────────────────────────────────────────────────────
 export const PRODUCT_TYPES: Record<string, { label: string; code: string; hasLanguage: boolean; languageOptional?: boolean }> = {
@@ -1309,7 +1337,7 @@ router.get("/admin/products/trash", ...adminGuard, async (req, res) => {
 });
 
 // ─── 상품 생성 ────────────────────────────────────────────────────────────────
-router.post("/admin/products", ...adminOnly, async (req, res) => {
+router.post("/admin/products", ...canCreate, async (req, res) => {
   const {
     productType, sourceLanguage, targetLanguage,
     mainCategory, subCategory,
@@ -1470,7 +1498,7 @@ router.get("/admin/products/export", ...adminGuard, async (req, res) => {
 });
 
 // ─── Import Preview (Dry-run) ─────────────────────────────────────────────────
-router.post("/admin/products/import/preview", ...adminOnly, excelUpload.single("file"), async (req, res) => {
+router.post("/admin/products/import/preview", ...canCreate, excelUpload.single("file"), async (req, res) => {
   if (!req.file) { res.status(400).json({ error: "파일이 없습니다." }); return; }
 
   type PreviewStatus = "new" | "duplicate" | "conflict" | "review";
@@ -1649,7 +1677,7 @@ router.post("/admin/products/import/preview", ...adminOnly, excelUpload.single("
 });
 
 // ─── Single Row Re-Parse (Review Fix Console) ─────────────────────────────────
-router.post("/admin/products/analyze-row", ...adminOnly, async (req, res) => {
+router.post("/admin/products/analyze-row", ...canCreate, async (req, res) => {
   const { name, productType, sourceLanguage, targetLanguage, mainCategory } = req.body as {
     name?: string; productType?: string; sourceLanguage?: string | null;
     targetLanguage?: string | null; mainCategory?: string;
@@ -1665,7 +1693,7 @@ router.post("/admin/products/analyze-row", ...adminOnly, async (req, res) => {
 });
 
 // ─── Import Execute ───────────────────────────────────────────────────────────
-router.post("/admin/products/import/execute", ...adminOnly, async (req, res) => {
+router.post("/admin/products/import/execute", ...canCreate, async (req, res) => {
   type ExecuteRow = {
     rowNum?: number; name: string; productType: string;
     mainCategory: string; subCategory?: string;
@@ -1848,7 +1876,7 @@ router.post("/admin/products/import/execute", ...adminOnly, async (req, res) => 
 });
 
 // ─── 엑셀 업로드 (레거시 direct-import) ──────────────────────────────────────
-router.post("/admin/products/import", ...adminOnly, excelUpload.single("file"), async (req, res) => {
+router.post("/admin/products/import", ...canCreate, excelUpload.single("file"), async (req, res) => {
   if (!req.file) { res.status(400).json({ error: "파일이 없습니다." }); return; }
 
   type ImportResult = { created: number; skipped: number; errors: { row: number; message: string }[] };
@@ -2261,7 +2289,7 @@ router.post("/admin/products/lazy-lookup", ...adminGuard, async (req, res) => {
  * - 이미 존재하면 기존 상품 반환 (멱등)
  * - 없으면 신규 생성 + logEvent audit
  */
-router.post("/admin/products/lazy-create", ...adminOnly, async (req, res) => {
+router.post("/admin/products/lazy-create", ...canCreate, async (req, res) => {
   const { serviceType, sourceLanguage, targetLanguage, targetLanguages, reviewLanguageMode, reviewLanguage, createdBy } = req.body as {
     serviceType?: string;
     sourceLanguage?: string;
@@ -2405,7 +2433,7 @@ router.get("/admin/products/:id", ...adminGuard, async (req, res) => {
 });
 
 // ─── 상품 수정 (code/productType/sourceLanguage/targetLanguage 변경 불가) ────
-router.patch("/admin/products/:id", ...adminOnly, async (req, res) => {
+router.patch("/admin/products/:id", ...canUpdate, async (req, res) => {
   const productId = Number(req.params.id);
   if (isNaN(productId) || productId <= 0) {
     res.status(400).json({ error: "유효하지 않은 product id." }); return;
@@ -2485,7 +2513,7 @@ router.patch("/admin/products/:id", ...adminOnly, async (req, res) => {
 });
 
 // ─── 상품 활성/비활성 토글 ────────────────────────────────────────────────────
-router.patch("/admin/products/:id/toggle", ...adminOnly, async (req, res) => {
+router.patch("/admin/products/:id/toggle", ...canUpdate, async (req, res) => {
   const productId = Number(req.params.id);
   if (isNaN(productId) || productId <= 0) {
     res.status(400).json({ error: "유효하지 않은 product id." }); return;
@@ -2526,7 +2554,7 @@ router.patch("/admin/products/:id/toggle", ...adminOnly, async (req, res) => {
 
 // ─── 상품 삭제 (휴지통 이동: deletedAt/deletedBy 설정) ────────────────────────
 // admin+staff(PM) 가능. 실제 DB 삭제가 아니라 휴지통으로 이동 → 복원 가능.
-router.delete("/admin/products/:id", ...adminGuard, async (req, res) => {
+router.delete("/admin/products/:id", ...canDelete, async (req, res) => {
   const productId = Number(req.params.id);
   if (isNaN(productId) || productId <= 0) {
     res.status(400).json({ error: "유효하지 않은 product id." }); return;
@@ -2555,7 +2583,7 @@ router.delete("/admin/products/:id", ...adminGuard, async (req, res) => {
 
 // ─── 상품 복원 (휴지통 → 일반 목록) ───────────────────────────────────────────
 // admin+staff(PM) 가능. 상품코드는 그대로 유지.
-router.post("/admin/products/:id/restore", ...adminGuard, async (req, res) => {
+router.post("/admin/products/:id/restore", ...canDelete, async (req, res) => {
   const productId = Number(req.params.id);
   if (isNaN(productId) || productId <= 0) {
     res.status(400).json({ error: "유효하지 않은 product id." }); return;

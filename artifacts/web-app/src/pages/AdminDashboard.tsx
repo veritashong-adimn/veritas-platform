@@ -2085,6 +2085,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
         <ProductTrashTab
           token={token}
           user={user}
+          hasPerm={hasPerm}
           setToast={setToast}
           authHeaders={authHeaders}
         />

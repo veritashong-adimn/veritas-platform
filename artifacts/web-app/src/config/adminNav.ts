@@ -43,6 +43,9 @@ export const STAFF_DEFAULT_PERMS: string[] = [
   "menu.customer",
   "menu.translator",
   "menu.product",
+  // 역할 미지정 직원의 상품 조회·삭제/복원 — 서버가 기존(adminGuard)대로 허용하는 범위와 동일하게 화면에 반영.
+  //   등록·수정은 기존처럼 관리자 또는 역할에 권한이 부여된 직원만 가능(서버 403).
+  "product.view", "product.delete",
   "menu.board",
 ];
 

@@ -12,10 +12,11 @@ interface Props {
   user: { role: string } | null;
   setToast: (msg: string) => void;
   authHeaders: Record<string, string>;
+  hasPerm?: (perm: string) => boolean;
 }
 
 /** 휴지통 — 삭제된 상품만 표시. 선택형 일괄관리: 복원(PM 가능) / 완전삭제(admin만). */
-export function ProductTrashTab({ token, user, setToast, authHeaders }: Props) {
+export function ProductTrashTab({ token, user, setToast, authHeaders, hasPerm }: Props) {
   const [trashProducts, setTrashProducts] = useState<Product[]>([]);
   const [trashLoading, setTrashLoading] = useState(false);
   const [trashSearch, setTrashSearch] = useState("");
@@ -25,6 +26,8 @@ export function ProductTrashTab({ token, user, setToast, authHeaders }: Props) {
   const [hoveredId, setHoveredId] = useState<number | null>(null);
 
   const canPurge = user?.role === "admin";
+  // 복원은 product.delete(삭제·복원) 권한 — 서버 동일 검증. hasPerm 미전달 시 기존 동작(표시) 유지.
+  const canRestore = hasPerm ? hasPerm("product.delete") : true;
 
   const sel = useBulkSelection<number>();
   const { paged, page, setPage, pageSize, setPageSize, total, totalPages, rangeStart, rangeEnd } =
@@ -105,6 +108,7 @@ export function ProductTrashTab({ token, user, setToast, authHeaders }: Props) {
           allSelected={allSelected}
           onToggleAll={() => sel.togglePage(pageIds)}
           selectedCount={selectedCount}>
+          {canRestore && (
           <button
             onClick={handleRestoreSelected}
             disabled={selectedCount < 1 || restoring}
@@ -112,6 +116,7 @@ export function ProductTrashTab({ token, user, setToast, authHeaders }: Props) {
             style={bulkActionBtn(selectedCount >= 1 && !restoring, "#059669", "#ecfdf5", "#a7f3d0")}>
             {restoring ? "복원 중..." : "복원"}
           </button>
+          )}
           {canPurge && (
             <button
               onClick={() => setPurgeConfirmOpen(true)}

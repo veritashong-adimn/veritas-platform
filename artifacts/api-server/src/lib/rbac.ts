@@ -53,6 +53,13 @@ export const ALL_PERMISSIONS: PermDef[] = [
   { key: "translator.sensitive", name: "통번역사 민감정보(주민번호·계좌) 열람", category: "action", group: "resource", enforce: "api" },
   // ⑤ 상품관리
   { key: "menu.product",    name: "상품관리 메뉴",                category: "menu",   group: "product", enforce: "menu" },
+  // 실행권한 — 직원(역할 지정)도 부여 가능. 관리자 계정은 기존과 동일하게 전체 허용(routes/products.ts requireProductAction).
+  //   조회·삭제/복원은 기존에 메뉴 보유자가 이미 가능했으므로 menu.product 보유 역할에 최초 1회 이어 부여(기존 범위 유지).
+  //   등록·수정은 기존에 관리자 전용이었으므로 자동 부여하지 않는다(직원은 관리자가 명시적으로 부여).
+  { key: "product.view",    name: "상품 조회",                    category: "action", group: "product", enforce: "menu", grantFrom: ["menu.product"] },
+  { key: "product.create",  name: "상품 등록(단건·대량·빠른생성)",   category: "action", group: "product", enforce: "api" },
+  { key: "product.update",  name: "상품 수정·활성/비활성",          category: "action", group: "product", enforce: "api" },
+  { key: "product.delete",  name: "상품 삭제·복원(휴지통)",         category: "action", group: "product", enforce: "api", grantFrom: ["menu.product"] },
   // ⑥ 정산
   { key: "menu.settlement", name: "정산 메뉴(공통·기존)",          category: "menu",   group: "settlement", enforce: "menu" },
   { key: "menu.payout",     name: "지급회차관리 메뉴",             category: "menu",   group: "settlement", enforce: "menu", grantFrom: ["menu.settlement"] },
