@@ -27,6 +27,7 @@ import { TranslatorDetailModal } from '../components/admin/TranslatorDetailModal
 import { TranslatorMergeCompareModal } from '../components/admin/TranslatorMergeCompareModal';
 import { TranslatorCreateModal } from '../components/admin/TranslatorCreateModal';
 import { ProjectDetailModal } from '../components/admin/ProjectDetailModal';
+import { SidebarAccountMenu } from '../components/shared/MyAccount';
 import { DateField } from '../components/admin/DatePickerShared';
 import '../components/admin/readTableView.css';
 import { PrepaidLedgerModal } from '../components/admin/PrepaidLedgerModal';
@@ -1271,10 +1272,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
           {/* 사용자 정보 + 로그아웃 */}
           <div style={{ padding: "14px 20px", borderTop: "1px solid #2d3547", flexShrink: 0 }}>
-            <div style={{ fontSize: 12, color: "#8892a4", marginBottom: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-              {user.email}
-            </div>
-            <div style={{ fontSize: 10, color: "#5a6478", marginBottom: 10 }}>관리자</div>
+            {/* 계정 영역 클릭 → 내 계정(비밀번호 변경·로그아웃) */}
+            <SidebarAccountMenu user={user} token={token} roleLabel={user.role === "staff" ? "직원" : "관리자"} onLogout={onLogout} />
             {onLogout && (
               <button onClick={onLogout} style={{
                 width: "100%", padding: "7px 0", background: "transparent",

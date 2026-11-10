@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { api, User } from "../lib/constants";
 import { Card, PrimaryBtn } from "../components/ui";
+import { takeReloginNotice } from "../components/shared/MyAccount";
 
 const inputStyle: React.CSSProperties = {
   width: "100%", padding: "9px 12px", borderRadius: 8,
@@ -32,6 +33,8 @@ export function AuthPage({ onAuth }: { onAuth: (token: string, user: User, permi
   const [role, setRole] = useState<"customer" | "translator">("customer");
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
+  // 비밀번호 변경 직후 재로그인 안내(1회)
+  const [notice] = useState(takeReloginNotice);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -97,6 +100,12 @@ export function AuthPage({ onAuth }: { onAuth: (token: string, user: User, permi
             ))}
           </div>
 
+          {notice && !msg && (
+            <div role="status" data-testid="relogin-notice" style={{
+              padding: "10px 14px", borderRadius: 8, marginBottom: 16,
+              background: "#f0fdf4", border: "1px solid #86efac", color: "#15803d", fontSize: 13,
+            }}>{notice}</div>
+          )}
           {msg && (
             <div style={{
               padding: "10px 14px", borderRadius: 8, marginBottom: 16,

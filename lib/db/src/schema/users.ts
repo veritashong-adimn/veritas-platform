@@ -35,6 +35,11 @@ export const usersTable = pgTable("users", {
   deletedAt: timestamp("deleted_at"),
   deletedBy: integer("deleted_by"),          // 삭제 처리 관리자 id
   deletionReason: text("deletion_reason"),   // 삭제 사유(선택)
+  // ── 비밀번호 보안(추가 컬럼, 기존 행 영향 없음) ─────────────────
+  // passwordChangedAt: 본인 비밀번호 변경 시각 — 이 시각 이전에 발급된 토큰은 거부(기존 세션 무효화). NULL = 변경 이력 없음.
+  // mustChangePassword: 관리자가 임시 비밀번호를 발급한 계정 — 로그인 후 비밀번호 변경 전까지 다른 기능 사용 불가. 기존 계정은 false.
+  passwordChangedAt: timestamp("password_changed_at"),
+  mustChangePassword: boolean("must_change_password").notNull().default(false),
 });
 
 export const insertUserSchema = createInsertSchema(usersTable).omit({ id: true, createdAt: true });

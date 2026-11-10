@@ -341,6 +341,7 @@ router.post("/admin/users/internal", ...adminGuard, requirePermission("user.mana
       .insert(usersTable)
       .values({
         email, password: hashed,
+        mustChangePassword: true,   // 관리자가 정한 임시 비밀번호 — 최초 로그인 후 본인 변경 필수
         role: role as "admin" | "staff",
         name: name?.trim() || null,
         department: department?.trim() || null,
@@ -408,7 +409,8 @@ router.patch("/admin/users/:id/reset-password", ...adminGuard, async (req, res) 
     }
 
     const hashed = await bcrypt.hash(newPassword, 10);
-    await db.update(usersTable).set({ password: hashed }).where(eq(usersTable.id, targetId));
+    // 관리자가 발급한 임시 비밀번호 — 대상자는 다음 로그인 후 본인 변경 필수(본인 재설정은 제외)
+    await db.update(usersTable).set({ password: hashed, ...(targetId !== req.user!.id ? { mustChangePassword: true } : {}) }).where(eq(usersTable.id, targetId));
     req.log.info({ adminId: req.user!.id, targetId }, "Admin reset password for user");
     res.json({ ok: true, message: "비밀번호가 재설정되었습니다." });
   } catch (err) {

@@ -13,6 +13,7 @@ export type User = {
   name?: string | null;
   roleId?: number | null;
   permissions?: string[];
+  mustChangePassword?: boolean;   // 관리자 발급 임시 비밀번호 — 본인 변경 전까지 변경 화면만 표시
 };
 export type NavPage = "dashboard" | "admin";
 

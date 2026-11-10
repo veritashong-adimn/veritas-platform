@@ -3,6 +3,7 @@ import { User, NavPage, saveSession, clearSession, loadSession, getDefaultPage, 
 import { Card, GhostBtn } from "./components/ui";
 import { ConfirmHost } from "./components/ui/confirmDialog";
 import { Navbar } from "./components/shared/Navbar";
+import { ForcePasswordChangePage } from "./components/shared/MyAccount";
 import { AuthPage } from "./pages/AuthPage";
 import { CustomerDashboard } from "./pages/CustomerDashboard";
 import { TranslatorDashboard } from "./pages/TranslatorDashboard";
@@ -67,8 +68,10 @@ function AppInner() {
         if (!d?.permissions) return;
         const current = loadSession();
         if (!current || current.token !== session.token) return; // 그 사이 로그아웃·재로그인된 경우 무시
-        const roleChanged = typeof d.role === "string" && (d.role !== current.user.role || (d.roleId ?? null) !== (current.user.roleId ?? null));
-        const nextUser = roleChanged ? { ...current.user, role: d.role, roleId: d.roleId ?? null } : current.user;
+        const mustChanged = typeof d.mustChangePassword === "boolean" && d.mustChangePassword !== !!current.user.mustChangePassword;
+        const roleChanged = mustChanged || (typeof d.role === "string" && (d.role !== current.user.role || (d.roleId ?? null) !== (current.user.roleId ?? null)));
+        const nextUser = roleChanged ? { ...current.user, role: d.role ?? current.user.role, roleId: d.roleId ?? null,
+          ...(typeof d.mustChangePassword === "boolean" ? { mustChangePassword: d.mustChangePassword } : {}) } : current.user;
         setPermissions(d.permissions);
         if (roleChanged) setUser(nextUser);
         saveSession(current.token, nextUser, d.permissions);
@@ -136,6 +139,11 @@ function AppInner() {
   }
 
   if (!token || !user) return <AuthPage onAuth={handleAuth} />;
+
+  // 임시 비밀번호 계정 — 본인 비밀번호 변경 전에는 변경 화면만(서버도 다른 API 를 403 으로 막는다)
+  if (user.mustChangePassword) {
+    return <ForcePasswordChangePage user={user} token={token} onLogout={handleLogout} />;
+  }
 
   const isAdmin = isInternalUser(user.role);
   const showAdminPage = page === "admin";

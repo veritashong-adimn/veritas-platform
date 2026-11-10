@@ -25,12 +25,15 @@ export function signToken(payload: JwtPayload): string {
 //   영구 비식별 처리 계정은 deletedAt·isActive=false 가 함께 설정되므로 이 조건으로 함께 차단된다.
 async function loadAccountState(userId: number) {
   const [row] = await db
-    .select({ isActive: usersTable.isActive, deletedAt: usersTable.deletedAt, role: usersTable.role, roleId: usersTable.roleId, email: usersTable.email })
+    .select({ isActive: usersTable.isActive, deletedAt: usersTable.deletedAt, role: usersTable.role, roleId: usersTable.roleId, email: usersTable.email,
+      passwordChangedAt: usersTable.passwordChangedAt, mustChangePassword: usersTable.mustChangePassword })
     .from(usersTable)
     .where(eq(usersTable.id, userId))
     .limit(1);
   return row;
 }
+
+const PASSWORD_CHANGE_ALLOWED = ["/api/auth/change-password", "/api/auth/permissions", "/api/auth/logout", "/api/auth/heartbeat"];
 
 export async function requireAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
   const authHeader = req.headers.authorization;
@@ -42,9 +45,9 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     return;
   }
 
-  let payload: JwtPayload;
+  let payload: JwtPayload & { iat?: number };
   try {
-    payload = jwt.verify(raw, JWT_SECRET) as JwtPayload;
+    payload = jwt.verify(raw, JWT_SECRET) as JwtPayload & { iat?: number };
   } catch {
     res.status(401).json({ error: "토큰이 유효하지 않거나 만료되었습니다." });
     return;
@@ -62,6 +65,17 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   if (!account || account.deletedAt || !account.isActive) {
     req.log?.warn?.({ userId: payload.id, reason: !account ? "not_found" : account.deletedAt ? "deleted" : "inactive" }, "requireAuth: blocked account token");
     res.status(401).json({ error: "사용할 수 없는 계정입니다. 다시 로그인하거나 관리자에게 문의하세요.", code: "ACCOUNT_BLOCKED" });
+    return;
+  }
+
+  // 비밀번호 변경 이전에 발급된 토큰 거부 — 본인 비밀번호 변경 시 다른 기기·탭의 기존 세션을 모두 무효화한다.
+  if (account.passwordChangedAt && typeof payload.iat === "number" && payload.iat < Math.floor(account.passwordChangedAt.getTime() / 1000)) {
+    res.status(401).json({ error: "비밀번호가 변경되어 다시 로그인해야 합니다.", code: "TOKEN_REVOKED" });
+    return;
+  }
+  // 임시 비밀번호 계정 — 비밀번호 변경 전에는 변경·권한 조회·로그아웃·활동 기록 외 API 사용 불가(서버 강제)
+  if (account.mustChangePassword && !PASSWORD_CHANGE_ALLOWED.some(p => (req.originalUrl ?? "").split("?")[0] === p)) {
+    res.status(403).json({ error: "임시 비밀번호로 로그인했습니다. 비밀번호를 먼저 변경해 주세요.", code: "PASSWORD_CHANGE_REQUIRED" });
     return;
   }
 
