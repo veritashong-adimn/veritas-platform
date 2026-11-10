@@ -11,9 +11,23 @@ const labelStyle: React.CSSProperties = {
   display: "block", fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 6,
 };
 
+// 아이디 기억하기 — 이메일만 저장한다(비밀번호·토큰 등 인증정보는 절대 저장하지 않음).
+//   로그아웃(clearAuth)은 인증 키만 지우므로 이 값은 유지된다. 저장소 접근 불가 시 기능만 비활성.
+const REMEMBER_EMAIL_KEY = "veritas_remembered_email";
+const readRememberedEmail = (): string => {
+  try { return localStorage.getItem(REMEMBER_EMAIL_KEY) ?? ""; } catch { return ""; }
+};
+const writeRememberedEmail = (value: string | null) => {
+  try {
+    if (value) localStorage.setItem(REMEMBER_EMAIL_KEY, value);
+    else localStorage.removeItem(REMEMBER_EMAIL_KEY);
+  } catch { /* 저장소 사용 불가 — 무시 */ }
+};
+
 export function AuthPage({ onAuth }: { onAuth: (token: string, user: User, permissions?: string[]) => void }) {
   const [mode, setMode] = useState<"login" | "register">("login");
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(readRememberedEmail);
+  const [rememberEmail, setRememberEmail] = useState(() => readRememberedEmail() !== "");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<"customer" | "translator">("customer");
   const [msg, setMsg] = useState("");
@@ -32,6 +46,8 @@ export function AuthPage({ onAuth }: { onAuth: (token: string, user: User, permi
       });
       const data = await res.json();
       if (!res.ok) { setMsg(data.error ?? "오류가 발생했습니다."); return; }
+      // 로그인 성공 시에만 저장/갱신(실패 시 저장하지 않음). 회원가입에는 적용하지 않는다.
+      if (mode === "login" && rememberEmail) writeRememberedEmail(email.trim());
       onAuth(data.token, data.user, data.user?.permissions ?? []);
     } catch { setMsg("서버에 연결할 수 없습니다."); }
     finally { setLoading(false); }
@@ -100,6 +116,19 @@ export function AuthPage({ onAuth }: { onAuth: (token: string, user: User, permi
               <input style={inputStyle} type="password" value={password}
                 onChange={e => setPassword(e.target.value)} placeholder={mode === "login" ? "비밀번호" : "최소 6자 이상"} />
             </div>
+
+            {mode === "login" && (
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#374151", cursor: "pointer", userSelect: "none", marginTop: -4 }}>
+                <input type="checkbox" checked={rememberEmail}
+                  onChange={e => {
+                    setRememberEmail(e.target.checked);
+                    if (!e.target.checked) writeRememberedEmail(null); // 해제 즉시 삭제
+                  }}
+                  data-testid="checkbox-remember-email" aria-label="아이디 기억하기"
+                  style={{ width: 15, height: 15, margin: 0, accentColor: "#2563eb", cursor: "pointer" }} />
+                아이디 기억하기
+              </label>
+            )}
 
             {mode === "register" && (
               <div>
