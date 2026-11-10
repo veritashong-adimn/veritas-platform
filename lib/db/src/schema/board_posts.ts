@@ -1,7 +1,7 @@
 import { pgTable, serial, integer, text, boolean, timestamp, pgEnum } from "drizzle-orm/pg-core";
 import { usersTable } from "./users";
 
-export const boardCategoryEnum = pgEnum("board_category", ["notice", "reference", "manual"]);
+export const boardCategoryEnum = pgEnum("board_category", ["notice", "reference", "manual", "other"]);
 
 export const boardPostsTable = pgTable("board_posts", {
   id: serial("id").primaryKey(),

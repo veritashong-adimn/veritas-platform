@@ -83,8 +83,9 @@ router.post("/admin/board", ...adminGuard, async (req, res) => {
     res.status(400).json({ error: "제목과 내용은 필수입니다." }); return;
   }
 
-  const validCategories = ["notice", "reference", "manual"];
-  const postCategory = validCategories.includes(category ?? "") ? category as "notice" | "reference" | "manual" : "notice";
+  // 분류: notice=공지사항, reference=회사자료, manual=내부매뉴얼, other=기타 (저장값 유지, 표시명만 화면에서 변경)
+  const validCategories = ["notice", "reference", "manual", "other"];
+  const postCategory = validCategories.includes(category ?? "") ? category as "notice" | "reference" | "manual" | "other" : "notice";
 
   try {
     const [post] = await db
@@ -118,7 +119,7 @@ router.patch("/admin/board/:id", ...adminGuard, async (req, res) => {
     const [existing] = await db.select().from(boardPostsTable).where(eq(boardPostsTable.id, postId));
     if (!existing) { res.status(404).json({ error: "게시글을 찾을 수 없습니다." }); return; }
 
-    const validCategories = ["notice", "reference", "manual"];
+    const validCategories = ["notice", "reference", "manual", "other"];
     const postCategory = validCategories.includes(category ?? "") ? category : existing.category;
 
     const [updated] = await db

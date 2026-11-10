@@ -597,7 +597,9 @@ export const ROLE_LABEL: Record<Role, string> = {
   customer:   "고객",
   translator: "통번역사",
 };
-export const BOARD_CATEGORY_LABEL: Record<string, string> = { notice: "공지", reference: "통역자료", manual: "내부매뉴얼" };
+// 게시판 분류 — 저장값(코드)은 유지하고 표시명만 사용: 공지→공지사항, 통역자료→회사자료.
+export const BOARD_CATEGORY_LABEL: Record<string, string> = { notice: "공지사항", reference: "회사자료", manual: "내부매뉴얼", other: "기타" };
+export const BOARD_CATEGORIES: { value: string; label: string }[] = Object.entries(BOARD_CATEGORY_LABEL).map(([value, label]) => ({ value, label }));
 export const AVAILABILITY_LABEL: Record<string, string> = { available: "가능", busy: "바쁨", unavailable: "불가" };
 export const ALL_PROJECT_STATUSES = ["created","quoted","approved","paid","matched","in_progress","completed","cancelled"] as const;
 export const ALL_FINANCIAL_STATUSES = ["unbilled","billed","receivable","paid"] as const;

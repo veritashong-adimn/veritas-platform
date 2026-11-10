@@ -7,7 +7,7 @@ import {
   TranslatorListItem, TranslatorRate, NoteEntry, Communication,
   normalizeLanguages,
   STATUS_LABEL, FEEDBACK_TAGS, COMM_TYPE_LABEL, COMM_TYPE_COLOR,
-  PROJECT_STATUS_TRANSITIONS, getActionLabel, BOARD_CATEGORY_LABEL, AVAILABILITY_LABEL,
+  PROJECT_STATUS_TRANSITIONS, getActionLabel, BOARD_CATEGORY_LABEL, BOARD_CATEGORIES, AVAILABILITY_LABEL,
   ALL_PROJECT_STATUSES, ALL_FINANCIAL_STATUSES, ALL_PAYMENT_STATUSES, ALL_SETTLEMENT_STATUSES,
   PRODUCT_MAIN_CATEGORIES, PRODUCT_SUB_CATEGORIES, PRODUCT_UNITS, PRODUCT_OPTION_TYPES,
   FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE,
@@ -323,7 +323,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
   const [boardPosts, setBoardPosts] = useState<BoardPost[]>([]);
   const [boardLoading, setBoardLoading] = useState(false);
-  const [boardCategory, setBoardCategory] = useState<string>("all");
+  const [boardCategory, setBoardCategory] = useState<string>("notice"); // 분류 필터(공지사항·회사자료·내부매뉴얼·기타)
   const [boardPostModal, setBoardPostModal] = useState<BoardPost | null>(null);
   const [showBoardForm, setShowBoardForm] = useState(false);
   const [boardForm, setBoardForm] = useState({ category: "notice", title: "", content: "", pinned: false, visibleToAll: false });
@@ -602,14 +602,13 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const fetchBoard = useCallback(async () => {
     setBoardLoading(true);
     try {
-      const params = new URLSearchParams();
-      if (boardCategory !== "all") params.set("category", boardCategory);
-      const res = await fetch(api(`/api/admin/board${params.toString() ? "?" + params.toString() : ""}`), { headers: authHeaders });
+      // 전체를 받아 상단 게시글 수(전체 기준)를 유지하고, 분류 필터는 화면에서 적용한다.
+      const res = await fetch(api(`/api/admin/board`), { headers: authHeaders });
       const data = await res.json();
       if (res.ok) setBoardPosts(Array.isArray(data) ? data : []);
     } catch { setToast("오류: 게시판 조회 실패"); }
     finally { setBoardLoading(false); }
-  }, [token, boardCategory]);
+  }, [token]);
 
   const fetchContacts = useCallback(async () => {
     setContactsLoading(true);
@@ -2224,11 +2223,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                     onChange={v => setBoardForm(p => ({ ...p, category: v }))}
                     style={{ width: "100%" }}
                     triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
-                    options={[
-                      { value: "notice", label: "공지" },
-                      { value: "reference", label: "통역자료" },
-                      { value: "manual", label: "내부매뉴얼" },
-                    ]}
+                    options={BOARD_CATEGORIES}
                   />
                 </div>
                 <div>
@@ -2262,8 +2257,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           )}
 
           <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-            {[{ v: "all", l: "전체" }, { v: "notice", l: "공지" }, { v: "reference", l: "통역자료" }, { v: "manual", l: "내부매뉴얼" }].map(({ v, l }) => (
-              <button key={v} onClick={() => setBoardCategory(v)}
+            {BOARD_CATEGORIES.map(({ value: v, label: l }) => (
+              <button key={v} onClick={() => setBoardCategory(v)} data-testid={`board-filter-${v}`} aria-label={`${l} 분류 보기`}
                 style={{ padding: "6px 14px", borderRadius: 20, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600,
                   background: boardCategory === v ? "#2563eb" : "#f3f4f6", color: boardCategory === v ? "#fff" : "#374151" }}>
                 {l}
@@ -2273,7 +2268,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
           {boardLoading ? (
             <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
-          ) : boardPosts.length === 0 ? (
+          ) : boardPosts.filter(p => p.category === boardCategory).length === 0 ? (
             <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>게시물이 없습니다.</Card>
           ) : (
             <Card style={{ padding: 0, overflow: "hidden" }}>
@@ -2283,7 +2278,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                     <tr>{["","분류","제목","작성자","등록일"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
                   </thead>
                   <tbody>
-                    {boardPosts.map(post => (
+                    {boardPosts.filter(p => p.category === boardCategory).map(post => (
                       <tr key={post.id} onClick={() => setBoardPostModal(post)} style={{ cursor: "pointer" }}>
                         <td style={{ ...tableTd, width: 30 }}>
                           {post.pinned && <span style={{ fontSize: 14 }}>📌</span>}
