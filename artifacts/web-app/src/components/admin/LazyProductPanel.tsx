@@ -76,7 +76,7 @@ const DEFAULT_LANG_SUBTYPE: Record<LangPairType, string> = {
 
 // ─── 비언어 타입 항목 설정 ─────────────────────────────────────────────────────
 
-type NonLangItem = { label: string; mainCategory: string; subCategory: string; isCustom?: boolean };
+type NonLangItem = { label: string; mainCategory: string; subCategory: string; isCustom?: boolean; /** 항목 설명(툴팁·선택 시 안내) — 표시 전용, 분류·코드 무관 */ desc?: string };
 
 const EQUIP_ITEMS: NonLangItem[] = [
   { label: "동시통역장비", mainCategory: "동시통역장비", subCategory: ""           },
@@ -90,21 +90,21 @@ const EQUIP_ITEMS: NonLangItem[] = [
 ];
 
 const EDITING_ITEMS: NonLangItem[] = [
-  { label: "편집",    mainCategory: "편집/DTP", subCategory: "편집"     },
-  { label: "DTP",     mainCategory: "편집/DTP", subCategory: "DTP"      },
-  { label: "인쇄",    mainCategory: "편집/DTP", subCategory: "인쇄"     },
-  { label: "디자인",  mainCategory: "편집/DTP", subCategory: "디자인"   },
-  { label: "PPT작업", mainCategory: "편집/DTP", subCategory: "PPT작업"  },
-  { label: "기타편집", mainCategory: "편집/DTP", subCategory: "기타편집", isCustom: true },
+  { label: "편집",    mainCategory: "편집/DTP", subCategory: "편집", desc: "문서 수정, 서식 및 표 정리" },
+  { label: "DTP",     mainCategory: "편집/DTP", subCategory: "DTP", desc: "번역문을 원본 디자인에 맞춰 편집·조판" },
+  { label: "인쇄",    mainCategory: "편집/DTP", subCategory: "인쇄", desc: "문서·책자·홍보물 인쇄 및 출력" },
+  { label: "디자인",  mainCategory: "편집/DTP", subCategory: "디자인", desc: "브로슈어·카탈로그 등 시각 디자인" },
+  { label: "PPT작업", mainCategory: "편집/DTP", subCategory: "PPT작업", desc: "발표자료 제작·편집·디자인" },
+  { label: "기타편집", mainCategory: "편집/DTP", subCategory: "기타편집", isCustom: true, desc: "위 항목에 해당하지 않는 편집 작업" },
 ];
 
 const MEDIA_ITEMS: NonLangItem[] = [
-  { label: "STT",      mainCategory: "미디어", subCategory: "STT"       },
-  { label: "TTS",      mainCategory: "미디어", subCategory: "TTS"       },
-  { label: "자막",     mainCategory: "미디어", subCategory: "자막작업"   },
-  { label: "녹취록",   mainCategory: "미디어", subCategory: "녹취록"    },
-  { label: "영상편집", mainCategory: "미디어", subCategory: "영상편집"  },
-  { label: "기타미디어", mainCategory: "미디어", subCategory: "기타미디어", isCustom: true },
+  { label: "STT",      mainCategory: "미디어", subCategory: "STT", desc: "Speech-to-Text · 음성을 문자로 변환 (음성→텍스트)" },
+  { label: "TTS",      mainCategory: "미디어", subCategory: "TTS", desc: "Text-to-Speech · 문자를 음성으로 변환 (텍스트→음성)" },
+  { label: "자막",     mainCategory: "미디어", subCategory: "자막작업", desc: "영상 자막 제작·번역·삽입" },
+  { label: "녹취록",   mainCategory: "미디어", subCategory: "녹취록", desc: "회의·인터뷰 등 음성 내용 문서화" },
+  { label: "영상편집", mainCategory: "미디어", subCategory: "영상편집", desc: "영상 컷 편집, 자막·효과 적용" },
+  { label: "기타미디어", mainCategory: "미디어", subCategory: "기타미디어", isCustom: true, desc: "그 밖의 음성·영상 관련 작업" },
 ];
 
 // 운영/실비 — 대분류별 "기타*" subcat 레이블
@@ -228,6 +228,7 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated, quic
   // ── 비언어 공통 ────────────────────────────────────────────────────────────
   const [nlItem, setNlItem]           = useState(qi?.itemLabel ?? "");  // 통역장비/편집/미디어
   const [nlItemCustom, setNlItemCustom] = useState(qi?.itemCustom ?? ""); // 기타* item
+  const [nlHover, setNlHover] = useState<string | null>(null);              // PC 마우스 오버 툴팁 대상(항목 label)
   const [nlMainCat, setNlMainCat]     = useState(() =>
     MAIN_CATEGORIES_BY_TYPE["operations"]?.[0]?.label ?? "교통비"
   );
@@ -835,15 +836,35 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated, quic
             <div style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af", marginBottom: 4 }}>항목 선택</div>
             <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
               {nlItems.map(item => (
-                <button key={item.label}
-                  onClick={() => { setNlItem(item.label); setNlItemCustom(""); resetResult(); }}
-                  style={chipStyle(nlItem === item.label, tc)}
-                  aria-label={item.label}
-                >
-                  {item.label}
-                </button>
+                <span key={item.label} style={{ position: "relative", display: "inline-block" }}
+                  onPointerEnter={e => { if (e.pointerType === "mouse" && item.desc) setNlHover(item.label); }}
+                  onPointerLeave={() => setNlHover(h => (h === item.label ? null : h))}>
+                  <button
+                    onClick={() => { setNlItem(item.label); setNlItemCustom(""); resetResult(); }}
+                    style={chipStyle(nlItem === item.label, tc)}
+                    aria-label={item.desc ? `${item.label} — ${item.desc}` : item.label}
+                    data-testid={`nl-item-${item.label}`}
+                  >
+                    {item.label}
+                  </button>
+                  {/* PC 툴팁 — 버튼 위에 겹쳐 표시(레이아웃 높이 변화 없음) */}
+                  {nlHover === item.label && item.desc && (
+                    <span role="tooltip" data-testid={`nl-item-tooltip-${item.label}`}
+                      style={{ position: "absolute", bottom: "calc(100% + 6px)", left: 0, zIndex: 30, pointerEvents: "none",
+                        background: "#111827", color: "#fff", fontSize: 11, fontWeight: 500, lineHeight: 1.4,
+                        padding: "5px 9px", borderRadius: 6, whiteSpace: "nowrap", boxShadow: "0 4px 12px rgba(0,0,0,0.18)" }}>
+                      {item.desc}
+                    </span>
+                  )}
+                </span>
               ))}
             </div>
+            {/* 선택 항목 설명 — 모바일·터치에서도 확인 가능(선택 시 한 줄). 설명 없는 항목(통역장비)은 표시 안 함. */}
+            {nlItemCfg?.desc && (
+              <div data-testid="nl-item-desc" style={{ marginTop: 5, fontSize: 11, color: "#6b7280", lineHeight: 1.4 }}>
+                <span style={{ fontWeight: 700, color: tc.color }}>{nlItemCfg.label}</span> · {nlItemCfg.desc}
+              </div>
+            )}
             {nlItemCfg?.isCustom && (
               <input
                 value={nlItemCustom}
