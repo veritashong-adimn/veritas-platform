@@ -16,6 +16,8 @@ interface Props {
   setToast: (msg: string) => void;
   authHeaders: Record<string, string>;
   onProductCreated?: () => void;
+  /** 등록 요청 제출 버튼·폼 표시 여부 — 직접등록 권한(product.create)이 있는 직원은 요청 대신 직접등록(기본 true). */
+  canRequest?: boolean;
 }
 
 type StatusFilter = "all" | "pending" | "approved" | "rejected";
@@ -26,7 +28,7 @@ const EMPTY_COUNTS = { all: 0, pending: 0, approved: 0, rejected: 0 };
  * 상품 등록 요청 관리 — 선택 기반 일괄 승인/거절/삭제 + 페이지네이션.
  * 승인/거절/삭제 API·권한·상태 로직은 기존 그대로 사용한다(승인·거절은 대기 상태만 가능).
  */
-export function ProductRequestSection({ token, user, setToast, authHeaders, onProductCreated }: Props) {
+export function ProductRequestSection({ token, user, setToast, authHeaders, onProductCreated, canRequest = true }: Props) {
   const isAdmin = user?.role === "admin";
 
   const [requests, setRequests] = useState<ProductRequest[]>([]);
@@ -237,16 +239,19 @@ export function ProductRequestSection({ token, user, setToast, authHeaders, onPr
                 {s === "all" ? "전체" : s === "pending" ? "⏳ 대기" : s === "approved" ? "✅ 승인" : "❌ 거절"} {countOf(s)}
               </button>
             ))}
+            {canRequest && (
             <button onClick={() => { setShowRequestForm(v => !v); setRequestForm({ ...emptyProductForm }); setRequestNameCustom(false); }}
+              data-testid="btn-product-request-toggle" aria-label="상품 등록 요청"
               style={{ fontSize: 12, padding: "5px 12px", borderRadius: 7, cursor: "pointer", fontWeight: 700, background: showRequestForm ? "#f3f4f6" : "#faf5ff", color: showRequestForm ? "#6b7280" : "#7c3aed", border: "1px solid #e9d5ff" }}>
               {showRequestForm ? "취소" : "+ 등록 요청"}
             </button>
+            )}
           </div>
         }>
 
         {/* 요청 폼 */}
         <div style={{ overflow: "hidden", maxHeight: showRequestForm ? "900px" : "0", transition: "max-height 320ms cubic-bezier(0.22, 1, 0.36, 1)" }}>
-        {showRequestForm && (
+        {canRequest && showRequestForm && (
           <Card style={{ marginBottom: 14, padding: "18px 22px", border: "1px solid #e9d5ff", background: "#faf5ff" }}>
             <p style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700, color: "#6d28d9" }}>
               상품 등록 요청 <span style={{ fontSize: 12, fontWeight: 400, color: "#9ca3af" }}>— 관리자 승인 후 자동 코드 부여</span>

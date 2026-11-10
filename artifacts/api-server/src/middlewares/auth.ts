@@ -25,7 +25,7 @@ export function signToken(payload: JwtPayload): string {
 //   영구 비식별 처리 계정은 deletedAt·isActive=false 가 함께 설정되므로 이 조건으로 함께 차단된다.
 async function loadAccountState(userId: number) {
   const [row] = await db
-    .select({ isActive: usersTable.isActive, deletedAt: usersTable.deletedAt })
+    .select({ isActive: usersTable.isActive, deletedAt: usersTable.deletedAt, role: usersTable.role, roleId: usersTable.roleId, email: usersTable.email })
     .from(usersTable)
     .where(eq(usersTable.id, userId))
     .limit(1);
@@ -65,7 +65,9 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     return;
   }
 
-  req.user = { id: payload.id, email: payload.email, role: payload.role, roleId: payload.roleId ?? null, sessionId: payload.sessionId };
+  // 역할·RBAC 역할(roleId)·이메일은 토큰 발급 시점 값이 아니라 현재 DB 값을 쓴다.
+  //   로그인 이후 관리자가 역할을 지정·변경해도 재로그인 없이 다음 요청부터 화면(/auth/permissions)과 API 권한에 함께 반영된다.
+  req.user = { id: payload.id, email: account.email, role: account.role as UserRole, roleId: account.roleId ?? null, sessionId: payload.sessionId };
   next();
 }
 

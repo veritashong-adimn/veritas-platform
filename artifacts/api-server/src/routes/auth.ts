@@ -166,7 +166,8 @@ router.post("/auth/login", async (req, res) => {
 router.get("/auth/permissions", requireAuth, async (req, res) => {
   const user = req.user!;
   const permissions = await resolvePermissions(user);
-  res.json({ permissions });
+  // 기존 응답(permissions) 유지 + 현재 역할 정보 추가 — 화면이 저장된 사용자 정보(role/roleId)를 최신으로 맞춘다.
+  res.json({ permissions, role: user.role, roleId: user.roleId ?? null });
 });
 
 router.patch("/auth/change-password", requireAuth, async (req, res) => {

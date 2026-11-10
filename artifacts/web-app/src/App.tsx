@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { User, NavPage, saveSession, clearSession, loadSession, getDefaultPage, api } from "./lib/constants";
 import { Card, GhostBtn } from "./components/ui";
 import { ConfirmHost } from "./components/ui/confirmDialog";
@@ -43,6 +43,39 @@ function AppInner() {
   const [permissions, setPermissions] = useState<string[]>([]);
   const [page, setPage] = useState<NavPage>("dashboard");
 
+  // 최신 권한·역할을 서버에서 새로고침 — 역할관리에서 권한을 바꾸거나 사용자에게 역할을 지정한 뒤
+  //   재로그인 없이도 화면에 반영되도록 최초 로드 + 창으로 돌아올 때(visibility) 다시 확인한다.
+  //   401이면 토큰 만료·계정 차단 → 자동 로그아웃.
+  const refreshPermissions = useCallback(() => {
+    const session = loadSession();
+    if (!session) return;
+    fetch(api("/api/auth/permissions"), {
+      headers: { Authorization: `Bearer ${session.token}` },
+    })
+      .then(r => {
+        if (r.status === 401) {
+          clearSession();
+          setToken(null);
+          setUser(null);
+          setPermissions([]);
+          setPage("dashboard");
+          return null;
+        }
+        return r.ok ? r.json() : null;
+      })
+      .then(d => {
+        if (!d?.permissions) return;
+        const current = loadSession();
+        if (!current || current.token !== session.token) return; // 그 사이 로그아웃·재로그인된 경우 무시
+        const roleChanged = typeof d.role === "string" && (d.role !== current.user.role || (d.roleId ?? null) !== (current.user.roleId ?? null));
+        const nextUser = roleChanged ? { ...current.user, role: d.role, roleId: d.roleId ?? null } : current.user;
+        setPermissions(d.permissions);
+        if (roleChanged) setUser(nextUser);
+        saveSession(current.token, nextUser, d.permissions);
+      })
+      .catch(() => {});
+  }, []);
+
   useEffect(() => {
     const session = loadSession();
     if (session) {
@@ -50,31 +83,12 @@ function AppInner() {
       setUser(session.user);
       setPermissions(session.permissions);
       setPage(getDefaultPage(session.user.role));
-      // 최신 권한 목록을 서버에서 새로고침 (캐시 불일치 방지)
-      // 401이면 토큰 만료 → 자동 로그아웃
-      fetch(api("/api/auth/permissions"), {
-        headers: { Authorization: `Bearer ${session.token}` },
-      })
-        .then(r => {
-          if (r.status === 401) {
-            clearSession();
-            setToken(null);
-            setUser(null);
-            setPermissions([]);
-            setPage("dashboard");
-            return null;
-          }
-          return r.ok ? r.json() : null;
-        })
-        .then(d => {
-          if (d?.permissions) {
-            setPermissions(d.permissions);
-            saveSession(session.token, session.user, d.permissions);
-          }
-        })
-        .catch(() => {});
+      refreshPermissions();
     }
-  }, []);
+    const onVisible = () => { if (document.visibilityState === "visible") refreshPermissions(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [refreshPermissions]);
 
   const handleAuth = (t: string, u: User, perms?: string[]) => {
     const p = perms ?? u.permissions ?? [];

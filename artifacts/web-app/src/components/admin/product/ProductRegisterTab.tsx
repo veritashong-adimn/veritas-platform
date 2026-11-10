@@ -19,7 +19,9 @@ interface Props {
  * 상품 생성·코드/이름 자동생성 로직은 LazyProductPanel(기존 빠른생성)을 그대로 재사용.
  */
 export function ProductRegisterTab({ token, user, hasPerm, setToast, authHeaders, onBack }: Props) {
+  // 직접등록 = product.create(서버 requireProductAction 과 동일 기준). 관리자 화면은 기존과 동일.
   const canManage = hasPerm("product.create");
+  const isAdmin = user?.role === "admin";
 
   return (
     <>
@@ -38,14 +40,18 @@ export function ProductRegisterTab({ token, user, hasPerm, setToast, authHeaders
             onProductCreated={() => { /* 생성 후 목록 방문 시 자동 반영 (목록은 마운트 시 재조회) */ }}
           />
         ) : (
-          <Card style={{ padding: "20px 24px", color: "#9ca3af", fontSize: 13 }}>
-            상품 등록 권한이 없습니다. 아래에서 등록 요청을 제출할 수 있습니다.
-          </Card>
+          <div data-testid="product-register-no-permission">
+            <Card style={{ padding: "20px 24px", color: "#9ca3af", fontSize: 13 }}>
+              상품 등록 권한이 없습니다. 아래에서 등록 요청을 제출할 수 있습니다.
+              <span style={{ display: "block", marginTop: 4, fontSize: 12 }}>직접등록이 필요하면 관리자에게 역할(시스템 권한)에 '상품 등록' 권한 부여를 요청하세요.</span>
+            </Card>
+          </div>
         )}
       </div>
 
       {/* 등록요청 관리 — 상품 등록 업무와 승인 업무를 한 화면에서 처리 */}
-      <ProductRequestSection token={token} user={user} setToast={setToast} authHeaders={authHeaders} />
+      {/* 직접등록 권한이 있는 직원은 요청 제출 없이 직접등록(요청·승인 이력 목록은 유지). 관리자는 기존 화면 그대로. */}
+      <ProductRequestSection token={token} user={user} setToast={setToast} authHeaders={authHeaders} canRequest={isAdmin || !canManage} />
     </>
   );
 }
