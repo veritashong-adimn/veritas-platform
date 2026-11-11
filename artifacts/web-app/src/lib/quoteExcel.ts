@@ -119,6 +119,12 @@ export function formatServiceDetail(item: ExportItem, products: Product[]): stri
     }
     case 'expense': {
       if (item.expenseType) parts.push(item.expenseType);
+      // 문서형 기타(감수·텍스트 편집) — 값이 있을 때만
+      if (item.fileName)   parts.push(item.fileName);
+      if (item.fileFormat) parts.push(item.fileFormat);
+      const wc = fmtN(item.wordCount), cc = fmtN(item.charCount);
+      if (wc > 0) parts.push(`${wc.toLocaleString()}단어`);
+      if (cc > 0) parts.push(`${cc.toLocaleString()}글자`);
       break;
     }
   }

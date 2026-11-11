@@ -463,6 +463,11 @@ function buildDetailText(item: QuoteDetailItem): string {
     if (days > 0) lines.push(`${days}일 사용`);
   } else if (type === 'expense') {
     if (item.interpretType) lines.push(item.interpretType);
+    // 문서형 기타(감수·텍스트 편집) — 저장된 문서 정보가 있을 때만 번역과 같은 형식으로 추가(없으면 기존 출력 그대로)
+    if (fields['파일']) lines.push(fields['파일'] + (fields['형식'] ? ` (${fields['형식']})` : ''));
+    else if (fields['형식']) lines.push(fields['형식']);
+    if (fields['단어수']) lines.push(`${Number(fields['단어수']).toLocaleString()}단어`);
+    if (fields['글자수']) lines.push(`${Number(fields['글자수']).toLocaleString()}글자`);
   }
 
   return lines.join('\n');

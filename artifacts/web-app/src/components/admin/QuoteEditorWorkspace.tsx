@@ -19,7 +19,7 @@ import { priceStatusOf, isPriceBlank, isHeadcountBlank } from '../../lib/quoteIt
 import { Card, DsButton, ClickSelect, NumericInput, confirmDialog, promptDialog, alertDialog } from '../ui';
 import { LegacyVatNotice, confirmLegacyVatChange } from './LegacyVatNotice';
 import { dsInput, dsInputStd, dsField, dsAmount, dsStickyPageHeader, C, BD, TBL, TYPO, SP, FORM, FIELD, CRM_FIELD_COLS } from '../../lib/ds';
-import { SVC_CFG, COL_H, SVC_FIELD_HINTS, tblRow } from './quoteItemsShared';
+import { SVC_CFG, COL_H, SVC_FIELD_HINTS, tblRow, isDocumentInputProduct, hasDocumentFields } from './quoteItemsShared';
 import RowControls from './RowControls';
 import {
   getPolicy, validateCounts, calcPagesFromStr,
@@ -342,12 +342,16 @@ function toApiItem(it: QuoteItemForm, vat: VatType) {
         memo:           it.memo           || undefined,
       };
     }
-    case 'expense':
+    case 'expense': {
+      // 문서형 기타(감수·텍스트 편집) — 번역과 같은 memo 규약으로 파일명·형식·단어수·글자수를 저장(스키마 무변경).
+      //   값이 없으면 ref 가 비어 기존 기타 품목의 memo 는 그대로다. 서버 수행정보 스냅샷이 같은 규약을 파싱한다.
+      const ref = [it.fileName && `파일: ${it.fileName}`, it.fileFormat && `형식: ${it.fileFormat}`, it.wordCount && `단어수: ${it.wordCount}`, it.charCount && `글자수: ${it.charCount}`].filter(Boolean).join(' | ');
       return {
         ...base,
-        interpretType: it.expenseType || undefined,  // 서비스 유형 (interpretType 컬럼 재활용)
-        memo:          it.memo        || undefined,
+        interpretType: it.expenseType || undefined,  // 서비스 유형 (interpretType 컬럼 재활용) — 문서형도 기존 값 보존
+        memo:          [it.memo, ref].filter(Boolean).join(' / ') || undefined,
       };
+    }
     case 'discount':
       // 할인 항목 — 서버가 discountType/discountValue로 음수 공급가를 재계산한다.
       return {
@@ -1149,6 +1153,54 @@ function InstallDateTimeField({ value, onChange, boxStyle, prefix }: {
   );
 }
 
+// ─── 문서형 입력란(파일명·파일형식·단어수·글자수) ─────────────────────────────────
+// 번역 행과 문서형 '기타' 상품(감수·텍스트 편집 — isDocumentInputProduct)이 같은 입력란을 쓴다.
+//   단어수·글자수 → 수량 자동환산은 번역 행만(onWordChange/onCharChange 로 주입). 문서형 기타는 값만 기록한다.
+function DocumentInputs({ it, update, onWordChange, onCharChange }: {
+  it: QuoteItemForm;
+  update: (p: Partial<QuoteItemForm>) => void;
+  onWordChange?: (v: string) => void;
+  onCharChange?: (v: string) => void;
+}) {
+  const handleWordChange = onWordChange ?? ((v: string) => update({ wordCount: v }));
+  const handleCharChange = onCharChange ?? ((v: string) => update({ charCount: v }));
+  return (
+    <>
+          {/* 파일명 — 확장자 감지 시 파일형식 자동 설정 */}
+          <input value={it.fileName}
+            onChange={e => {
+              const name = e.target.value;
+              const upd: Partial<QuoteItemForm> = { fileName: name };
+              if (!it.fileFormat) {
+                const detected = detectFormatFromExt(name);
+                if (detected) upd.fileFormat = detected;
+              }
+              update(upd);
+            }}
+            placeholder="파일명" style={{ ...rinp('auto'), flex: 1, minWidth: 60 }} title="원본 파일명" />
+          {/* 파일형식 선택 (Popover) */}
+          <FileFormatSelect value={it.fileFormat} onChange={v => update({ fileFormat: v })} />
+          {/* 기타(직접입력) 모드일 때 텍스트 입력 */}
+          {(it.fileFormat === FILE_FORMAT_CUSTOM ||
+            (it.fileFormat !== '' && !(FILE_FORMATS as readonly string[]).includes(it.fileFormat))) && (
+            <input
+              value={it.fileFormat === FILE_FORMAT_CUSTOM ? '' : it.fileFormat}
+              onChange={e => update({ fileFormat: e.target.value || FILE_FORMAT_CUSTOM })}
+              placeholder="형식 입력 (예: InDesign, CAD)"
+              style={{ ...rinp(90), flexShrink: 0 }}
+              autoFocus={it.fileFormat === FILE_FORMAT_CUSTOM}
+            />
+          )}
+          {/* 단어수 — 천 단위 콤마 + "단어". word 기준 언어 시 수량 자동 갱신 */}
+          <CountInput value={it.wordCount} onChange={handleWordChange}
+            unit="단어" placeholder="단어수" style={rinp(88)} />
+          {/* 글자수 — 천 단위 콤마 + "글자". char 기준 언어 시 수량 자동 갱신 */}
+          <CountInput value={it.charCount} onChange={handleCharChange}
+            unit="글자" placeholder="글자수" style={rinp(88, { color: C.textSecondary })} />
+    </>
+  );
+}
+
 // ─── 서비스 유형별 동적 필드 ─────────────────────────────────────────────────
 
 function ServiceFields({ it, update, products }: {
@@ -1196,37 +1248,7 @@ function ServiceFields({ it, update, products }: {
             onChange={(s, e) => update({ eventStartDate: s, eventEndDate: e })}
             boxStyle={{ ...rinp(200), height: 32 }}
             title="번역 작업기간" startTitle="작업 시작일" endTitle="작업 종료일 (당일은 비워두세요)" />
-          {/* 파일명 — 확장자 감지 시 파일형식 자동 설정 */}
-          <input value={it.fileName}
-            onChange={e => {
-              const name = e.target.value;
-              const upd: Partial<QuoteItemForm> = { fileName: name };
-              if (!it.fileFormat) {
-                const detected = detectFormatFromExt(name);
-                if (detected) upd.fileFormat = detected;
-              }
-              update(upd);
-            }}
-            placeholder="파일명" style={{ ...rinp('auto'), flex: 1, minWidth: 60 }} title="원본 파일명" />
-          {/* 파일형식 선택 (Popover) */}
-          <FileFormatSelect value={it.fileFormat} onChange={v => update({ fileFormat: v })} />
-          {/* 기타(직접입력) 모드일 때 텍스트 입력 */}
-          {(it.fileFormat === FILE_FORMAT_CUSTOM ||
-            (it.fileFormat !== '' && !(FILE_FORMATS as readonly string[]).includes(it.fileFormat))) && (
-            <input
-              value={it.fileFormat === FILE_FORMAT_CUSTOM ? '' : it.fileFormat}
-              onChange={e => update({ fileFormat: e.target.value || FILE_FORMAT_CUSTOM })}
-              placeholder="형식 입력 (예: InDesign, CAD)"
-              style={{ ...rinp(90), flexShrink: 0 }}
-              autoFocus={it.fileFormat === FILE_FORMAT_CUSTOM}
-            />
-          )}
-          {/* 단어수 — 천 단위 콤마 + "단어". word 기준 언어 시 수량 자동 갱신 */}
-          <CountInput value={it.wordCount} onChange={handleWordChange}
-            unit="단어" placeholder="단어수" style={rinp(88)} />
-          {/* 글자수 — 천 단위 콤마 + "글자". char 기준 언어 시 수량 자동 갱신 */}
-          <CountInput value={it.charCount} onChange={handleCharChange}
-            unit="글자" placeholder="글자수" style={rinp(88, { color: C.textSecondary })} />
+          <DocumentInputs it={it} update={update} onWordChange={handleWordChange} onCharChange={handleCharChange} />
         </div>
       );
     }
@@ -1332,6 +1354,16 @@ function ServiceFields({ it, update, products }: {
       );
     }
     case 'expense': {
+      // 문서형 상품(감수·텍스트 편집) 또는 이미 문서 정보가 저장된 품목 → 번역과 같은 입력란.
+      //   품목 유형(기타)·서비스사양(expenseType) 저장값은 그대로 유지한다(화면에서만 숨김, 저장 시 기존 값 그대로 전송).
+      const prod = it.productId != null ? products.find(p => p.id === it.productId) ?? null : null;
+      if (isDocumentInputProduct(prod) || hasDocumentFields(it)) {
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }} data-testid="qe-document-fields">
+            <DocumentInputs it={it} update={update} />
+          </div>
+        );
+      }
       // EXPENSE_CUSTOM sentinel 또는 미리 정의 목록 외 값 = 직접 입력 모드
       const isCustomInput = it.expenseType === EXPENSE_CUSTOM ||
         (it.expenseType !== '' && !(EXPENSE_TYPES as readonly string[]).includes(it.expenseType));

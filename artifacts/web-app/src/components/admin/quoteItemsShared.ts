@@ -47,3 +47,20 @@ export const SVC_FIELD_HINTS: Record<ServiceType, string> = {
   expense:        '서비스유형 (공증·속기·녹취·더빙·편집·감수·DTP 등)',
   discount:       '할인방식 / 할인값 / 할인사유',
 };
+
+// ─── 상품 입력 방식(업무 유형과 분리) ──────────────────────────────────────────
+// 견적 품목의 유형(itemType: 번역/통역/장비/기타)은 그대로 두고, ④ 동적필드의 '입력 방식'만 상품 마스터로 결정한다.
+//   · 문서형(document) = 번역과 같은 파일명·파일형식·단어수·글자수 입력
+//       - 상품 마스터 유형 proofreading(감수 — 대조감수·원어민감수 등)
+//       - 상품 마스터 유형 editing 중 텍스트 편집 코드(ED-EDT-*). DTP·인쇄·디자인·PPT 등은 기존 방식 유지.
+//   · 상품명 문자열로 판별하지 않는다(상품 유형·코드 기준). DB 스키마·저장 유형은 변경하지 않는다.
+export function isDocumentInputProduct(p: { productType?: string | null; code?: string | null } | null | undefined): boolean {
+  if (!p) return false;
+  const pt = String(p.productType ?? '').toLowerCase();
+  if (pt === 'proofreading') return true;
+  return pt === 'editing' && /^ED-EDT-/i.test(String(p.code ?? ''));
+}
+/** 품목에 이미 저장된 문서 정보(파일명·형식·단어수·글자수)가 있는지 — 있으면 상품과 무관하게 입력란을 보여 값이 숨거나 지워지지 않게 한다 */
+export function hasDocumentFields(f: { fileName?: string; fileFormat?: string; wordCount?: string; charCount?: string }): boolean {
+  return !!(f.fileName || f.fileFormat || f.wordCount || f.charCount);
+}

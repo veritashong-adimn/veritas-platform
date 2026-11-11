@@ -15,7 +15,7 @@ import { C, TYPO, BD, dsAmount } from '../../lib/ds';
 import { displayUnit, type QuoteDetailItem } from '../../lib/quotePdf';
 import { convertToFormItem } from '../../lib/quoteItemForm';
 import type { QuoteItemForm } from './QuoteEditorWorkspace';
-import { tblRow, COL_H, SVC_CFG, SVC_FIELD_HINTS } from './quoteItemsShared';
+import { tblRow, COL_H, SVC_CFG, SVC_FIELD_HINTS, hasDocumentFields } from './quoteItemsShared';
 import { formatScheduleRange } from '../../lib/dateFormat';
 import './readTableView.css';
 
@@ -100,6 +100,15 @@ function ReadOnlyServiceFields({ f }: { f: QuoteItemForm }) {
       );
     }
     case 'expense':
+      // 문서형 기타(감수·텍스트 편집) — 저장된 파일명·형식·단어수·글자수가 있으면 번역과 같은 형태로 표시
+      if (hasDocumentFields(f)) return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <RoCell flex={1} value={f.fileName} title="원본 파일명" />
+          <RoCell w={90} value={f.fileFormat} />
+          <RoCell w={108} value={f.wordCount ? Number(f.wordCount).toLocaleString() : ''} suffix="단어" align="right" />
+          <RoCell w={108} value={f.charCount ? Number(f.charCount).toLocaleString() : ''} suffix="글자" align="right" />
+        </div>
+      );
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <RoCell flex={1} value={f.expenseType} title="서비스 유형" />
