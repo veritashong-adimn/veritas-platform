@@ -50,6 +50,14 @@ const WORKFLOW_FILTERS: WorkflowFilter[] = [
 ];
 
 // ─── "다음 해야 할 일" 계산 ────────────────────────────────────────────────────
+// 청구·입금·정산 단계(기존 완료 건 규칙) — 완료 건과 수행정보 배정·납품확인이 끝난 건이 공용으로 사용
+function financialNextAction(p: AdminProject): { text: string; color: string; bg: string } {
+  if (p.financialStatus === "receivable") return { text: "결제 확인 필요", color: "#dc2626", bg: "#fef2f2" };
+  if (p.financialStatus === "unbilled")   return { text: "청구 필요", color: "#b45309", bg: "#fef3c7" };
+  if (p.financialStatus === "billed")     return { text: "입금 대기", color: "#2563eb", bg: "#eff6ff" };
+  return { text: "정산 처리 필요", color: "#6b7280", bg: "#f3f4f6" };
+}
+
 function getNextAction(p: AdminProject): { text: string; color: string; bg: string } {
   const urgentStyle = { color: "#dc2626", bg: "#fef2f2" };
   const warningStyle = { color: "#b45309", bg: "#fef3c7" };
@@ -65,22 +73,20 @@ function getNextAction(p: AdminProject): { text: string; color: string; bg: stri
     case "quoted":
       return { text: "고객 회신 대기", ...infoStyle };
     case "approved":
-      return (p.taskCount ?? 0) === 0
-        ? { text: "통번역사 배정 필요", ...urgentStyle }
-        : { text: "작업 준비 중", ...neutralStyle };
     case "paid":
-      return (p.taskCount ?? 0) === 0
-        ? { text: "통번역사 배정 필요", ...urgentStyle }
-        : { text: "작업 준비 중", ...neutralStyle };
+      // 기존 작업(task) 기준 — 작업이 있으면 기존대로 '작업 준비 중'
+      if ((p.taskCount ?? 0) > 0) return { text: "작업 준비 중", ...neutralStyle };
+      // 수행정보 기준 — 수행자(Master 연결) 전원 배정 전이면 배정 필요(미지정·이름만 입력 포함)
+      if (!p.performerAssigned) return { text: "통번역사 배정 필요", ...urgentStyle };
+      // 배정 완료 후 후속 업무 — 납품확인 → (완료 건과 같은 규칙) 결제·청구·입금·정산
+      if ((p.undeliveredAssignedCount ?? 0) > 0) return { text: "납품 확인 필요", ...warningStyle };
+      return financialNextAction(p);
     case "matched":
       return { text: "작업 시작 대기", ...warningStyle };
     case "in_progress":
       return { text: "납품 대기", ...infoStyle };
     case "completed":
-      if (p.financialStatus === "receivable") return { text: "결제 확인 필요", ...urgentStyle };
-      if (p.financialStatus === "unbilled")   return { text: "청구 필요", ...warningStyle };
-      if (p.financialStatus === "billed")     return { text: "입금 대기", ...infoStyle };
-      return { text: "정산 처리 필요", ...neutralStyle };
+      return financialNextAction(p);
     case "cancelled":
       return { text: "—", ...neutralStyle };
     default:

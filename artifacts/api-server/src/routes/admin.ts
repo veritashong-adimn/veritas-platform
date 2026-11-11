@@ -160,6 +160,21 @@ export async function buildFilteredSalesProjectList(query: Record<string, string
     }).from(tasksTable).where(eq(tasksTable.status, "done")).groupBy(tasksTable.projectId);
     const doneTaskCountByProject = new Map(doneTaskCountRows.map(r => [r.projectId, r.cnt]));
 
+    // 수행정보(performance_assignments) 기준 배정 집계 — 신규 판매·과거 CRM 전환 공통.
+    //   수행자 행(개인·외주, 삭제·취소 제외) 중 통번역사/외주업체 Master 가 연결된 행만 '배정'으로 본다
+    //   (이름만 입력된 미연결 행은 배정 아님). 수행자 행이 있고 전부 배정이면 배정 완료.
+    const perfRows = await db.execute(sql`SELECT project_id,
+        count(*)::int AS performers,
+        count(*) FILTER (WHERE individual_user_id IS NOT NULL OR vendor_company_id IS NOT NULL)::int AS assigned,
+        count(*) FILTER (WHERE (individual_user_id IS NOT NULL OR vendor_company_id IS NOT NULL) AND NOT delivery_confirmed)::int AS undelivered
+      FROM performance_assignments
+      WHERE deleted_at IS NULL AND status <> 'cancelled' AND performer_category IN ('individual', 'vendor')
+      GROUP BY project_id`);
+    const perfByProject = new Map((perfRows.rows as any[]).map(r => [Number(r.project_id), { performers: Number(r.performers), assigned: Number(r.assigned), undelivered: Number(r.undelivered) }]));
+    const isPerfAssigned = (id: number) => { const x = perfByProject.get(id); return !!x && x.performers > 0 && x.assigned === x.performers; };
+    // 배정 완료 = 기존 작업(task) 존재 또는 수행정보 수행자 전원 배정
+    const isAssigned = (id: number) => (taskCountByProject.get(id) ?? 0) > 0 || isPerfAssigned(id);
+
     // 프로젝트 + 견적 + 결제 + 작업 데이터 병합
     let result = rows.reverse().map(p => ({
       ...p,
@@ -171,6 +186,11 @@ export async function buildFilteredSalesProjectList(query: Record<string, string
       hasQuote: latestQuoteByProject.has(p.id),
       hasPaid: paidProjectIds.has(p.id),
       taskCount: taskCountByProject.get(p.id) ?? 0,
+      // 수행정보 기준 배정·납품확인 상태(추가 필드 — 다음 해야 할 일 판정용)
+      performerCount: perfByProject.get(p.id)?.performers ?? 0,
+      assignedPerformerCount: perfByProject.get(p.id)?.assigned ?? 0,
+      undeliveredAssignedCount: perfByProject.get(p.id)?.undelivered ?? 0,
+      performerAssigned: isPerfAssigned(p.id),
     }));
 
     // ── 판매관리 전용 필터 (승인 전 견적 단계만 제외) ──
@@ -263,7 +283,8 @@ export async function buildFilteredSalesProjectList(query: Record<string, string
     if (quickFilter === "needs_assignment") {
       // 배정필요 — 판매 확정(approved) 상태에서 아직 수행자 task가 생성되지 않은 건. (legacy paid 의존 제거)
       //  · 업무상태 SSOT: approved=확정. 배정 완료 시 approved→matched 로 전이되어 이 목록에서 빠진다.
-      result = result.filter(p => p.status === "approved" && (taskCountByProject.get(p.id) ?? 0) === 0);
+      //  · 수행정보에 Master 연결된 수행자가 전원 배정된 건도 배정 완료로 본다(과거 CRM 전환·신규 공통).
+      result = result.filter(p => p.status === "approved" && !isAssigned(p.id));
     } else if (quickFilter === "delivered") {
       result = result.filter(p => {
         const total = taskCountByProject.get(p.id) ?? 0;

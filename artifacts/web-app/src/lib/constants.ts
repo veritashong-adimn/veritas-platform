@@ -66,6 +66,11 @@ export type AdminProject = {
   hasQuote?: boolean;
   hasPaid?: boolean;
   taskCount?: number;
+  /** 수행정보 기준: 수행자 행 수 / Master 연결(배정) 행 수 / 배정됐으나 납품확인 전 행 수 / 전원 배정 여부 */
+  performerCount?: number;
+  assignedPerformerCount?: number;
+  undeliveredAssignedCount?: number;
+  performerAssigned?: boolean;
   quotePrice?: string | number | null;
   quoteStatus?: string | null;
   quoteType?: string | null;
