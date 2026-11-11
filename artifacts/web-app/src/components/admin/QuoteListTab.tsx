@@ -394,8 +394,8 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
             method: 'DELETE', headers: { ...authH, 'Content-Type': 'application/json' }, body: JSON.stringify({ reason }),
           });
           const d = await res.json().catch(() => null);
-          return { q, ok: res.ok, error: d?.error as string | undefined };
-        } catch { return { q, ok: false, error: '네트워크 오류' }; }
+          return { q, ok: res.ok, error: d?.error as string | undefined, orphanProjectId: (d?.projectCancelSuggested ? d.projectId : null) as number | null };
+        } catch { return { q, ok: false, error: '네트워크 오류', orphanProjectId: null }; }
       }));
       const ok = results.filter(r => r.ok).length;
       const fails = results.filter(r => !r.ok);
@@ -403,6 +403,9 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
       setBulkDeleteReason('');
       let msg = `${ok}건의 견적을 삭제했습니다.`;
       if (fails.length) msg += ` ${fails.length}건 실패 — ` + fails.map(f => `${f.q.quoteNumber ?? f.q.id}: ${f.error ?? '실패'}`).join(' / ');
+      // 일괄 삭제는 안내만(자동 취소 없음) — 빈 프로젝트가 남으면 번호를 알려 취소 여부를 판단하도록 한다
+      const orphans = results.map(r => r.orphanProjectId).filter((x): x is number => x != null);
+      if (orphans.length) msg += ` ※ 유효 견적·판매 기록이 없는 프로젝트가 남았습니다: ${orphans.map(id => `#${id}`).join(', ')} — 필요 시 프로젝트 취소로 정리해 주세요.`;
       onToast(msg);
       fetchQuotes();
     } finally { setBulkDeleting(false); }

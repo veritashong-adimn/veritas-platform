@@ -5,7 +5,7 @@ import { requireAuth, requireRole, requirePermission } from "../middlewares/auth
 import { logEvent } from "../lib/logEvent";
 import { deleterNameSql } from "../lib/deleterName";
 import { evaluateQuoteDependencies, buildGuardMessage } from "../services/saleDependency";
-import { checkQuoteDeletable, deleteQuoteAndRevert, QuoteDeleteError } from "../services/quoteDeletion";
+import { checkQuoteDeletable, deleteQuoteAndRevert, QuoteDeleteError, isProjectCancelSuggestable } from "../services/quoteDeletion";
 
 // 견적 삭제(Soft Delete) 전용 라우터.
 // admin.ts(초대형 파일)의 타입 추론 부하를 늘리지 않도록 별도 파일로 분리한다.
@@ -59,7 +59,11 @@ router.delete("/admin/quotes/:id", ...adminGuard, requirePermission("quote.updat
     }
     req.log.info({ quoteId, quoteNumber: r.quoteNumber, deletedBy: req.user?.id }, "Admin: quote soft-deleted");
     const reverted = r.otherActiveQuoteIds.length === 0;
+    // 남은 프로젝트가 비어 있으면 '취소 안내'만 표시하도록 플래그 제공(additive). 자동 취소하지 않는다. 판정 실패 시 안내 생략.
+    const projectCancelSuggested = r.projectId != null && reverted
+      ? await isProjectCancelSuggestable(r.projectId).catch(() => false) : false;
     res.json({
+      projectCancelSuggested,
       success: true, deletedQuoteId: quoteId, projectId: r.projectId,
       projectStatusBefore: r.projectStatusBefore, projectStatusAfter: r.projectStatusAfter,
       inquiryId: r.inquiries[0]?.id ?? null, relinkedQuoteId: r.inquiries[0]?.relinkedQuoteId ?? null,

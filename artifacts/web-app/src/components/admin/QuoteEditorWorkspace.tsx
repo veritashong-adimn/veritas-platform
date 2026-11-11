@@ -2251,6 +2251,27 @@ export function QuoteEditorWorkspace({
       if (projectId === null) {
         const t = title.trim();
         if (!t) { onToast('견적서명을 입력하세요.'); return null; }
+        // 중복 가능성 안내 — 같은 거래처·같은 프로젝트명의 기존(취소 제외) 프로젝트가 있으면 확인만 받는다(차단 아님, 조회 실패 시 그대로 진행)
+        //  의뢰건 견적: 입력란 거래처가 비어 있어도 서버가 연결할 기존 거래처(customer-plan 'link')가 있으면 그 거래처로 확인
+        const dupCompanyId = companyId ?? (inqPrefill?.inquiryId && inqCustomer.plan?.company.action === 'link' ? inqCustomer.plan.company.id ?? null : null);
+        if (dupCompanyId) {
+          try {
+            const dr = await fetch(api(`/api/admin/quote-duplicate-check?companyId=${dupCompanyId}&title=${encodeURIComponent(t)}`), { headers: authH });
+            const dd = dr.ok ? await dr.json() : null;
+            const cands = (dd?.candidates ?? []) as Array<{ id: number; status: string; createdAt: string; quoteNumbers: string | null }>;
+            if (cands.length > 0) {
+              const ST: Record<string, string> = { created: '접수', quoted: '견적', approved: '판매확정', paid: '입금', matched: '배정', in_progress: '진행중', completed: '완료' };
+              const go = await confirmDialog({
+                title: '중복 가능성 확인',
+                message: '같은 거래처에 같은 프로젝트명이 이미 있습니다.\n\n'
+                  + cands.map(c => `· 프로젝트 #${c.id} (${ST[c.status] ?? c.status}, ${String(c.createdAt).slice(0, 10)})${c.quoteNumbers ? ` — 견적 ${c.quoteNumbers}` : ''}`).join('\n')
+                  + '\n\n별도 의뢰라면 그대로 생성하세요. 같은 건이라면 기존 견적을 이용해 주세요.',
+                confirmLabel: '그래도 생성', cancelLabel: '취소',
+              });
+              if (!go) return null;
+            }
+          } catch { /* 안내용 조회 — 실패해도 생성은 진행 */ }
+        }
         const res = await fetch(api('/api/admin/quotes'), {
           method: 'POST', headers: { ...authH, 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -2289,7 +2310,7 @@ export function QuoteEditorWorkspace({
       return { quoteId: data.id, projectId };
     } catch { onToast('견적 저장 중 오류가 발생했습니다.'); return null; }
     finally { setSaving(false); }
-  }, [items, projectId, savedQuoteId, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note, versionReason, token, prepaidLines, isPrepaidQuote]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [items, projectId, savedQuoteId, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note, versionReason, token, prepaidLines, isPrepaidQuote, inqCustomer.plan, inqCustomer.choice]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSave = useCallback(async () => {
     if (batchClosed) { onToast('마감완료된 누적 견적서는 수정할 수 없습니다.'); return; }
@@ -2937,6 +2958,21 @@ export function QuoteEditorWorkspace({
         return;
       }
       onToast(d.message ?? '견적서가 삭제 처리되었습니다.');
+      // 남은 프로젝트가 비어 있으면(유효 견적·판매·수행·지급 기록 없음) 취소 여부만 묻는다 — 자동 취소하지 않음
+      if (d.projectCancelSuggested && d.projectId) {
+        const yes = await confirmDialog({
+          title: '연결 프로젝트 정리',
+          message: `견적서가 삭제되어 프로젝트 #${d.projectId}에 유효한 견적·판매·수행·지급 기록이 없습니다.\n\n이 프로젝트를 취소하시겠습니까?\n(취소 프로젝트는 삭제되지 않으며 거래처 상세에서 '취소 프로젝트 포함'으로 조회할 수 있습니다.)`,
+          confirmLabel: '프로젝트 취소', cancelLabel: '그대로 두기',
+        });
+        if (yes) {
+          const cr = await fetch(api(`/api/admin/projects/${d.projectId}/cancel`), {
+            method: 'PATCH', headers: { ...authH, 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: '견적 삭제 후 남은 프로젝트' }),
+          });
+          const cd = await cr.json().catch(() => ({}));
+          onToast(cr.ok ? `프로젝트 #${d.projectId}를 취소했습니다.` : `프로젝트 취소 실패: ${cd.error ?? cr.status}`);
+        }
+      }
       onDeleted?.({ inquiryId: d.inquiryId ?? null, message: d.message ?? '' });
     } finally { deletingRef.current = false; setDeleting(false); }
   };

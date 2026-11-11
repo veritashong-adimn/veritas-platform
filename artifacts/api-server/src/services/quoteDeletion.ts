@@ -157,3 +157,22 @@ export async function findReusableProjectForInquiry(tx: Parameters<Parameters<ty
   }
   return null;
 }
+
+/**
+ * 견적 삭제 후 남은 프로젝트가 '빈 프로젝트'인지(읽기 전용) — 사용자에게 프로젝트 취소를 '안내'만 하기 위한 판정.
+ *  · 자동 취소·삭제하지 않는다. true 는 "취소를 제안해도 안전함"의 의미일 뿐이다.
+ *  · 조건: 접수/견적 단계 + 유효 견적 없음 + 판매·수행·입금·지급·정산·작업 기록 없음.
+ */
+export async function isProjectCancelSuggestable(projectId: number): Promise<boolean> {
+  const [p] = await db.select({ status: projectsTable.status }).from(projectsTable).where(eq(projectsTable.id, projectId));
+  if (!p || !["created", "quoted"].includes(p.status)) return false;
+  const n = await count(sql`SELECT
+      (SELECT count(*) FROM quotes WHERE project_id = ${projectId} AND deleted_at IS NULL)
+    + (SELECT count(*) FROM performance_assignments WHERE project_id = ${projectId} AND deleted_at IS NULL)
+    + (SELECT count(*) FROM project_payments WHERE project_id = ${projectId})
+    + (SELECT count(*) FROM payout_round_items WHERE project_id = ${projectId})
+    + (SELECT count(*) FROM payments WHERE project_id = ${projectId})
+    + (SELECT count(*) FROM settlements WHERE project_id = ${projectId})
+    + (SELECT count(*) FROM tasks WHERE project_id = ${projectId}) AS n`);
+  return n === 0;
+}

@@ -44,6 +44,8 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
 }) {
   const [detail, setDetail] = useState<CompanyDetail | null>(null);
   const [loading, setLoading] = useState(true);
+  // 프로젝트 목록: 취소(cancelled) 프로젝트는 기본 제외, 토글로 조회 가능(데이터는 그대로 — 표시 전용)
+  const [showCancelledProjects, setShowCancelledProjects] = useState(false);
   const [deleting, setDeleting] = useState(false);
   type DeleteReason = { type: string; label: string; count: number };
   const [deleteCheckModal, setDeleteCheckModal] = useState<{ show: boolean; reasons: DeleteReason[]; checking: boolean }>({ show: false, reasons: [], checking: false });
@@ -459,7 +461,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                 </span>
                 <span style={{ color: "#94a3b8", fontSize: 13 }}>|</span>
                 <span style={{ fontSize: 13, color: "#0369a1", fontWeight: 600 }}>
-                  프로젝트 {detail.projects.length}건
+                  프로젝트 {detail.projects.filter(p => p.status !== "cancelled").length}건
                 </span>
                 <span style={{ color: "#94a3b8", fontSize: 13 }}>|</span>
                 <span style={{ fontSize: 13, color: "#059669", fontWeight: 700 }}>
@@ -667,7 +669,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
               {[
                 { label: "담당자 수", value: `활성 ${detail.contacts.filter((c: Contact) => c.isActive).length}명 / 비활성 ${detail.contacts.filter((c: Contact) => !c.isActive).length}명`, color: "#6b7280", bg: "#f3f4f6" },
-                { label: "프로젝트 수", value: `${detail.projects.length}건`, color: "#2563eb", bg: "#eff6ff" },
+                { label: "프로젝트 수", value: `${detail.projects.filter(p => p.status !== "cancelled").length}건`, color: "#2563eb", bg: "#eff6ff" },
                 { label: "총 견적 금액", value: `${formatWon(Number(detail.totalQuote))}`, color: "#0891b2", bg: "#f0f9ff" },
                 { label: "총 결제 금액", value: `${formatWon(Number(detail.totalPayment))}`, color: "#059669", bg: "#f0fdf4" },
                 { label: "총 정산 금액", value: `${formatWon(Number(detail.totalSettlement))}`, color: "#7c3aed", bg: "#faf5ff" },
@@ -1041,10 +1043,19 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
               )
             }
 
-            {secRow(`프로젝트 목록 (${detail.projects.length})`)}
-            {detail.projects.length === 0 ? <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "10px 0" }}>등록된 프로젝트가 없습니다.</p> : (
+            {(() => {
+              const cancelledCnt = detail.projects.filter(p => p.status === "cancelled").length;
+              return secRow(`프로젝트 목록 (${detail.projects.length - cancelledCnt})`, cancelledCnt > 0 ? (
+                <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "#6b7280", cursor: "pointer" }}>
+                  <input type="checkbox" checked={showCancelledProjects} onChange={e => setShowCancelledProjects(e.target.checked)}
+                    data-testid="company-projects-show-cancelled" aria-label="취소된 프로젝트 포함 보기" />
+                  취소 프로젝트 포함 ({cancelledCnt})
+                </label>
+              ) : undefined);
+            })()}
+            {(() => { const visibleProjects = showCancelledProjects ? detail.projects : detail.projects.filter(p => p.status !== "cancelled"); return visibleProjects.length === 0 ? <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "10px 0" }}>등록된 프로젝트가 없습니다.</p> : (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {detail.projects.map(p => (
+                {visibleProjects.map(p => (
                   <div key={p.id} onClick={() => { onClose(); onOpenProject(p.id); }}
                     style={{ display: "flex", gap: 16, padding: "10px 14px", background: "#f9fafb", borderRadius: 8, fontSize: 13, cursor: "pointer", alignItems: "center", border: "1px solid transparent" }}
                     onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = "#eff6ff"; (e.currentTarget as HTMLDivElement).style.borderColor = "#bfdbfe"; }}
@@ -1059,7 +1070,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                   </div>
                 ))}
               </div>
-            )}
+            ); })()}
 
             {secRow(`메모 (${compNotes.length})`)}
             <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
