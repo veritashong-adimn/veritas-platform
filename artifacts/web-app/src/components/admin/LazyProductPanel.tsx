@@ -8,7 +8,7 @@ import { LanguageSearchSelect, LangCustomInput } from './LanguageSearchSelect';
 // ─── 상품유형 정의 (표시 순서 통일) ───────────────────────────────────────────
 
 const QUICK_TYPES = [
-  "번역", "통역", "통번역", "감수",
+  "번역", "통역", "통번역", "감수", "공증/인증",
   "통역장비", "편집/DTP", "미디어", "운영/실비", "프로젝트",
 ] as const;
 type QuickType = typeof QUICK_TYPES[number];
@@ -22,6 +22,7 @@ const QUICK_TO_PRODUCT_TYPE: Record<QuickType, string> = {
   "통역장비": "equipment", "편집/DTP": "editing",
   "미디어": "media",       "운영/실비": "operations",
   "프로젝트": "project",
+  "공증/인증": "certification",   // 언어 조합 없는 단일 상품(공증·아포스티유)
 };
 
 // ─── 하위유형 설정 ─────────────────────────────────────────────────────────────
@@ -111,6 +112,13 @@ const MEDIA_ITEMS: NonLangItem[] = [
   { label: "기타미디어", mainCategory: "미디어", subCategory: "기타미디어", isCustom: true, desc: "그 밖의 음성·영상 관련 작업" },
 ];
 
+// 공증/인증 — 언어 조합 없이 상품명 단위로 조회·등록(출발·도착언어 입력 없음, 언어값 저장 안 함)
+const CERT_ITEMS: NonLangItem[] = [
+  { label: "공증",          mainCategory: "공증",          subCategory: "", desc: "공증사무소 공증(번역 없는 단일 공증)" },
+  { label: "아포스티유",    mainCategory: "아포스티유",    subCategory: "", desc: "외교부 아포스티유 확인" },
+  { label: "기타공증/인증", mainCategory: "기타공증/인증", subCategory: "", isCustom: true, desc: "영사확인 등 그 밖의 공증·인증" },
+];
+
 // 운영/실비 — 대분류별 "기타*" subcat 레이블
 const OPS_CUSTOM_SUBCAT: Record<string, string> = {
   "교통비": "기타교통", "식대": "기타식대", "숙박": "기타숙박", "기타실비": "기타실비",
@@ -128,6 +136,7 @@ const TYPE_COLOR: Record<QuickType, { bg: string; color: string; border: string;
   "미디어":   { bg: "#fdf2f8", color: "#db2777", border: "#fbcfe8", icon: "🎬" },
   "운영/실비":{ bg: "#f0fdf4", color: "#059669", border: "#bbf7d0", icon: "🏃" },
   "프로젝트": { bg: "#f8fafc", color: "#334155", border: "#e2e8f0", icon: "📋" },
+  "공증/인증": { bg: "#fefce8", color: "#a16207", border: "#fde68a", icon: "📜" },
 };
 
 // ─── 타입 ─────────────────────────────────────────────────────────────────────
@@ -303,7 +312,7 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated, quic
       setTgtLang(prev => normalizeZhForType(prev, newPt));
       setLangSubtype(DEFAULT_LANG_SUBTYPE[qt as LangPairType]);
     } else {
-      setNlItem("");
+      setNlItem(qt === "공증/인증" ? "공증" : "");   // 공증/인증 기본 상품 = 공증
       if (qt === "운영/실비") {
         setNlMainCat(MAIN_CATEGORIES_BY_TYPE["operations"]?.[0]?.label ?? "교통비");
         setNlSubCat("");
@@ -321,6 +330,7 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated, quic
     if (quickType === "통역장비") return EQUIP_ITEMS;
     if (quickType === "편집/DTP") return EDITING_ITEMS;
     if (quickType === "미디어")   return MEDIA_ITEMS;
+    if (quickType === "공증/인증") return CERT_ITEMS;
     return [];
   };
   const nlItems = getNlItems();
@@ -527,7 +537,7 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated, quic
       mainCat = nlProjectCat;
       displayName = searchName = nlProjectName.trim() || nlProjectCat;
     } else {
-      // 통역장비 / 편집/DTP / 미디어
+      // 통역장비 / 편집/DTP / 미디어 / 공증/인증
       if (!nlItemCfg) { setToast("항목을 선택해주세요."); return; }
       mainCat = nlItemCfg.mainCategory;
       subCat  = nlItemCfg.subCategory;
@@ -546,6 +556,21 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated, quic
       const res = await fetch(api(`/api/admin/products?${params}`), { headers: authHeaders });
       if (!res.ok) { setToast("조회 실패"); return; }
       const products = await res.json();
+
+      // 공증/인증: 언어 조건 없이 상품명으로만 판정. 다른 유형에 같은 이름의 상품(예: 기존에 다른 유형으로 등록한 '공증')이 있으면
+      //   새로 만들지 않고 그 상품을 보여준다(중복 생성 방지). 번역+공증 결합 상품(번역공증·공증번역)은 이름이 달라 해당 없음.
+      if (quickType === "공증/인증") {
+        const key = searchName.replace(/\s+/g, "").toLowerCase();
+        const same = (p: any) => String(p.name ?? "").replace(/\s+/g, "").toLowerCase() === key;
+        let hit = products.find(same);
+        if (!hit) {
+          const r2 = await fetch(api(`/api/admin/products?${new URLSearchParams({ search: searchName })}`), { headers: authHeaders });
+          if (r2.ok) hit = (await r2.json()).find(same);
+        }
+        if (hit) setResult({ found: true, product: hit });
+        else setResult({ found: false, candidate: { name: displayName, productType, mainCategory: mainCat, subCategory: "", isLangPair: false, isLazy: false } });
+        return;
+      }
 
       const match = products.find((p: any) => {
         if (nlItemCfg?.isCustom || quickType === "프로젝트" || isOpsSubCatCustom) {
@@ -664,7 +689,7 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated, quic
         {QUICK_TYPES.map(qt => (
           <button key={qt} onClick={() => handleTypeChange(qt)}
             style={chipStyle(quickType === qt, TYPE_COLOR[qt])}
-            aria-label={`${qt} 선택`}
+            aria-label={`${qt} 선택`} data-testid={`quick-type-${qt}`}
           >
             {TYPE_COLOR[qt].icon} {qt}
           </button>
@@ -853,8 +878,8 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated, quic
           </>
         )}
 
-        {/* ─── 통역장비 / 편집/DTP / 미디어 ─── */}
-        {(quickType === "통역장비" || quickType === "편집/DTP" || quickType === "미디어") && (
+        {/* ─── 통역장비 / 편집/DTP / 미디어 / 공증/인증(언어 입력 없음) ─── */}
+        {(quickType === "통역장비" || quickType === "편집/DTP" || quickType === "미디어" || quickType === "공증/인증") && (
           <div>
             <div style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af", marginBottom: 4 }}>항목 선택</div>
             <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
@@ -1144,5 +1169,8 @@ export function buildQuickInitial(rowType: string, text: string, opts: { unit?: 
     // 통역 견적 행 단위는 항상 '일'(견적 정책) — 상품 기본 단위로 넘기지 않고 서비스 기본 단위를 쓴다
     return { quickType, srcLang: found[0] ?? opts.sourceLanguage, tgtLang: found[1], subtype: sub, unit: rowType === "translation" ? (opts.unit || undefined) : undefined };
   }
+  // 기타 행의 공증·아포스티유 → 공증/인증(언어 없음). 그 외는 기존대로 운영/실비 직접입력.
+  const cert = CERT_ITEMS.find(i => !i.isCustom && norm(t) === norm(i.label));
+  if (cert) return { quickType: "공증/인증", itemLabel: cert.label, unit: opts.unit };
   return { quickType: "운영/실비", opsCustom: t, unit: opts.unit };
 }

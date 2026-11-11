@@ -697,6 +697,7 @@ export const PRODUCT_TYPES_META: Record<string, { label: string; code: string; h
   media:          { label: "미디어",    code: "MD", hasLanguage: true, languageOptional: true },
   operations:     { label: "운영/실비", code: "OP", hasLanguage: false },
   project:        { label: "프로젝트",  code: "PJ", hasLanguage: false },
+  certification:  { label: "공증/인증", code: "CT", hasLanguage: false },   // 공증·아포스티유 — 언어 조합 없음
 };
 
 /** 언어 선택이 필수인 유형인지 여부 (media는 optional이므로 false) */
@@ -777,6 +778,11 @@ export const MAIN_CATEGORIES_BY_TYPE: Record<string, { label: string; code: stri
     { label: "통역프로젝트",   code: "IN"   },
     { label: "종합언어서비스", code: "COMP" },
     { label: "기타프로젝트",   code: "ETC"  },
+  ],
+  certification: [
+    { label: "공증",          code: "NOT" },
+    { label: "아포스티유",    code: "APO" },
+    { label: "기타공증/인증", code: "ETC" },
   ],
 };
 
@@ -951,6 +957,7 @@ export const UNITS_BY_PRODUCT_TYPE: Record<string, string[]> = {
   media:          ["분", "초", "건"],
   operations:     ["건", "인"],
   project:        ["건", "식"],
+  certification:  ["건", "부"],
 };
 
 export const EQUIPMENT_ITEMS: string[] = [

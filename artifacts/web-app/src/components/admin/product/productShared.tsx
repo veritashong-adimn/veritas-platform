@@ -68,6 +68,7 @@ export const TYPE_COLORS: Record<string, { bg: string; color: string; icon: stri
   editing:        { bg: "#fdf4ff", color: "#9333ea", icon: "🖨️" },
   operations:     { bg: "#f0fdfa", color: "#0f766e", icon: "🏃" },
   project:        { bg: "#f8fafc", color: "#334155", icon: "📋" },
+  certification:  { bg: "#fefce8", color: "#a16207", icon: "📜" },
 };
 
 // ─── 장비 대분류별 기본 수량단위 ─────────────────────────────────────────────

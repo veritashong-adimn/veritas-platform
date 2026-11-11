@@ -213,7 +213,7 @@ export const STATUS_LABEL: Record<string, string> = Object.fromEntries(STATUS_OP
 export const PAYMENT_STATUS_LABEL: Record<string, string> = Object.fromEntries(PAYMENT_STATUS_OPTS.map(o => [o.value, o.label]));
 export const SERVICE_LABEL: Record<string, string> = {
   translation: '번역', interpretation: '통역', equipment: '장비', expense: '기타',
-  proofreading: '감수', editing: '편집/DTP', media: '미디어', operations: '운영/실비', combined: '통번역',
+  proofreading: '감수', editing: '편집/DTP', media: '미디어', operations: '운영/실비', combined: '통번역', certification: '공증/인증',
 };
 export const VENDOR_TYPE_LABEL: Record<string, string> = {
   interpretation_equipment: '장비', editing: '편집/자막', translation_agency: '통번역업체',

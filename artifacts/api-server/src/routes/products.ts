@@ -64,6 +64,9 @@ export const PRODUCT_TYPES: Record<string, { label: string; code: string; hasLan
   editing:        { label: "편집/DTP",  code: "ED", hasLanguage: false },
   operations:     { label: "운영/실비", code: "OP", hasLanguage: false },
   project:        { label: "프로젝트",  code: "PJ", hasLanguage: false },
+  // 공증/인증 — 언어 조합이 없는 단일 상품(공증·아포스티유 등). 기존 코드 접두어와 겹치지 않는 CT 사용.
+  //   (번역+공증 결합 상품은 기존 번역 > '번역공증' 언어쌍 상품 그대로 — 이 유형과 별개)
+  certification:  { label: "공증/인증", code: "CT", hasLanguage: false },
   // 하위호환: DB에 저장된 구 타입 레이블 표시용 (신규 등록 불가)
   transport:      { label: "교통비",    code: "TX", hasLanguage: false },
   meal:           { label: "식대",      code: "ML", hasLanguage: false },
@@ -145,6 +148,11 @@ export const MAIN_CATEGORIES_BY_TYPE: Record<string, { label: string; code: stri
     { label: "통역프로젝트",   code: "IN" },
     { label: "종합언어서비스", code: "COMP" },
     { label: "기타프로젝트",   code: "ETC" },
+  ],
+  certification: [
+    { label: "공증",           code: "NOT" },
+    { label: "아포스티유",     code: "APO" },
+    { label: "기타공증/인증",  code: "ETC" },
   ],
 };
 
@@ -300,6 +308,7 @@ export const UNITS_BY_TYPE: Record<string, string[]> = {
   editing:        ["페이지", "건", "시간"],
   operations:     ["건", "인"],
   project:        ["건", "식"],
+  certification:  ["건", "부"],
 };
 
 // ─── 헬퍼 함수 ────────────────────────────────────────────────────────────────
