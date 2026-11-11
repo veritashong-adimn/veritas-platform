@@ -68,9 +68,13 @@ export default function TransactionStatementModal({ data, quoteTitle, onClose }:
     const content = contentRef.current;
     if (!content) return;
 
-    const printWin = window.open('', '_blank', 'width=900,height=700');
+    // 문서가 표시된 창(독립 창 또는 본창)에서 인쇄 창을 연다 — 독립 창의 클릭으로 본창 window.open 을 부르면 차단될 수 있다
+    const view = content.ownerDocument.defaultView ?? window;
+    const printWin = view.open('', '_blank', 'width=900,height=700');
     if (!printWin) {
-      void alertDialog({ title: '팝업 차단됨', message: '팝업 차단이 활성화되어 있습니다.\n브라우저 설정에서 팝업을 허용해 주세요.', variant: 'warning' });
+      const msg = '팝업 차단이 활성화되어 있습니다.\n브라우저 설정에서 팝업을 허용해 주세요.';
+      if (view !== window) view.alert(msg);   // 독립 창에서는 그 창에 안내(본창 대화상자는 보이지 않음)
+      else void alertDialog({ title: '팝업 차단됨', message: msg, variant: 'warning' });
       return;
     }
 
@@ -98,9 +102,10 @@ export default function TransactionStatementModal({ data, quoteTitle, onClose }:
         #statement-print-only { display: none; }
       `}</style>
 
-      {/* 공통 팝업창 — 드래그 이동·크기 조절·내부 스크롤·ESC/X 닫기 */}
+      {/* 공통 미리보기 창 — 독립 브라우저 창(팝업 차단·모바일은 화면 내부 팝업으로 대체) */}
       <DocPreviewWindow
         testIdPrefix="statement-preview" closeTestId="btn-statement-close" ariaLabel="거래명세서 미리보기"
+        windowTitle={`거래명세서 ${statementNo}`}
         onClose={onClose}
         title="거래명세서 미리보기"
         subtitle={<>{statementNo} · {renderQuoteTitle(quoteTitle)}</>}

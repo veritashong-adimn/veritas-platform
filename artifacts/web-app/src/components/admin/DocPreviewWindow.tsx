@@ -1,13 +1,20 @@
 /**
- * DocPreviewWindow — 문서 미리보기 공통 팝업창(견적서·거래명세서)
+ * DocPreviewWindow — 문서 미리보기 공통 창(견적서·거래명세서)
  *
+ * [기본] 독립 브라우저 창 — window.open 으로 별도 창(900×900)을 열고 같은 문서(children)를 React portal 로 그린다.
+ *   본창 밖·다른 모니터로 이동, OS 기본 크기 조절, 창 내부 스크롤. 창을 닫으면 onClose(원래 작업 화면은 그대로).
+ *   문서 디자인·금액·인쇄 로직은 각 모달 그대로(인쇄는 문서가 있는 창에서 별도 인쇄 창을 연다).
+ * [대체] 팝업 차단·좁은 화면(모바일)이면 아래 화면 내부 팝업으로 표시하고 차단 안내를 띄운다.
+ *
+ * 화면 내부 팝업:
  * - 최초 화면 중앙, 제목 표시줄 드래그로 이동, 테두리·모서리 드래그로 크기 조절.
  * - 최대 높이는 화면 높이 기준, 문서가 길면 팝업 내부(본문 영역)에서 스크롤.
  * - 우측 상단 닫기(X), ESC 닫기, 바깥(어두운 배경) 클릭 닫기(드래그 중 바깥에서 놓은 경우는 닫지 않음).
  * - 위치·크기는 컴포넌트 상태로만 관리(저장하지 않음). 모바일(좁은 화면)은 전체 화면 고정.
  * - 문서 본문(children)은 그대로 렌더한다 — 인쇄/PDF 는 각 모달이 본문 ref 의 innerHTML 로 별도 창에서 처리.
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 type Rect = { x: number; y: number; w: number; h: number };
 type Dir = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
@@ -60,10 +67,139 @@ export interface DocPreviewWindowProps {
   /** 닫기 버튼 data-testid — 기존 테스트 식별자 유지용 */
   closeTestId?: string;
   ariaLabel: string;
+  /** 독립 창의 브라우저 제목(작업표시줄·탭) — 없으면 ariaLabel */
+  windowTitle?: string;
   children: React.ReactNode;
 }
 
-export function DocPreviewWindow({ title, subtitle, actions, onClose, testIdPrefix, closeTestId, ariaLabel, children }: DocPreviewWindowProps) {
+// ─── 공통 제목 표시줄(제목·부제·동작 버튼·닫기 X) ─────────────────────────────────
+function TitleBar({ title, subtitle, actions, onClose, testIdPrefix, closeTestId, onPointerDown, draggable, sticky }: Pick<DocPreviewWindowProps, 'title' | 'subtitle' | 'actions' | 'onClose' | 'testIdPrefix' | 'closeTestId'> & {
+  onPointerDown?: (e: React.PointerEvent) => void; draggable: boolean; sticky?: boolean;
+}) {
+  return (
+    <div
+      onPointerDown={onPointerDown}
+      data-testid={`${testIdPrefix}-titlebar`}
+      style={{
+        flexShrink: 0, background: '#1e293b', padding: '10px 12px 10px 20px', minHeight: TITLE_H, boxSizing: 'border-box',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+        cursor: draggable ? 'move' : 'default', touchAction: draggable ? 'none' : undefined,
+        ...(sticky ? { position: 'sticky', top: 0, zIndex: 10, boxShadow: '0 2px 8px rgba(0,0,0,0.3)' } : {}),
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0, overflow: 'hidden' }}>
+        <span style={{ color: '#fff', fontWeight: 700, fontSize: 14, whiteSpace: 'nowrap' }}>{title}</span>
+        {subtitle && <span style={{ color: '#94a3b8', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{subtitle}</span>}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+        {actions}
+        <button type="button" onClick={onClose}
+          data-testid={closeTestId ?? `${testIdPrefix}-close`} aria-label="미리보기 닫기" title="닫기 (ESC)"
+          style={{ width: 34, height: 34, borderRadius: 7, border: '1px solid #475569', background: 'transparent', color: '#cbd5e1', fontSize: 16, lineHeight: 1, cursor: 'pointer' }}>
+          ✕
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── 독립 브라우저 창 ─────────────────────────────────────────────────────────────
+const EXT_W = 900, EXT_H = 900;
+type ExtWin = { win: Window; root: HTMLElement };
+
+// 사용자 클릭 직후(문서 조회 직후) 호출된다. 차단되면 null.
+function openExternalWindow(docTitle: string): ExtWin | null {
+  if (window.innerWidth < MOBILE_BP) return null;                       // 모바일 — 화면 내부 표시
+  const left = Math.max(0, Math.round(window.screenX + (window.outerWidth - EXT_W) / 2));
+  const top  = Math.max(0, Math.round(window.screenY + (window.outerHeight - EXT_H) / 2));
+  let win: Window | null = null;
+  try { win = window.open('', '', `popup=yes,width=${EXT_W},height=${EXT_H},left=${left},top=${top},resizable=yes,scrollbars=yes`); }
+  catch { win = null; }
+  if (!win) return null;
+  try {
+    const d = win.document;
+    d.open();
+    d.write('<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title></title></head><body></body></html>');
+    d.close();
+    const base = d.createElement('base'); base.href = window.location.origin + '/'; d.head.appendChild(base);
+    d.title = docTitle;
+    // 본창의 스타일(폰트·공통 CSS)을 그대로 복사 — 문서는 인라인 스타일 위주라 표시가 같다
+    document.querySelectorAll('style, link[rel="stylesheet"]').forEach(n => d.head.appendChild(n.cloneNode(true)));
+    d.body.style.margin = '0';
+    d.body.style.background = '#e2e8f0';
+    const root = d.createElement('div');
+    d.body.appendChild(root);
+    win.focus();
+    return { win, root };
+  } catch {
+    try { win.close(); } catch { /* 무시 */ }
+    return null;
+  }
+}
+
+/** 견적서·거래명세서 미리보기 — 독립 창(기본) 또는 화면 내부 팝업(팝업 차단·모바일) */
+export function DocPreviewWindow(props: DocPreviewWindowProps) {
+  const { onClose, ariaLabel, windowTitle, testIdPrefix, children } = props;
+  const [mode, setMode] = useState<'pending' | 'external' | 'inpage'>('pending');
+  const [blocked, setBlocked] = useState(false);
+  const ext = useRef<ExtWin | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  // 마운트 시 1회 — 독립 창 열기 시도
+  useLayoutEffect(() => {
+    const opened = openExternalWindow(windowTitle || ariaLabel);
+    if (!opened) {
+      setBlocked(window.innerWidth >= MOBILE_BP);   // 모바일은 원래 화면 내부 표시라 차단 안내 없음
+      setMode('inpage');
+      return;
+    }
+    ext.current = opened;
+    setMode('external');
+    const { win } = opened;
+    let done = false;
+    const closedByUser = () => { if (done) return; done = true; onCloseRef.current(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closedByUser(); };
+    win.addEventListener('keydown', onKey);
+    win.addEventListener('pagehide', closedByUser);                    // 창 닫기(OS 닫기 버튼 포함)
+    const poll = window.setInterval(() => { if (win.closed) closedByUser(); }, 500);   // pagehide 미발생 대비
+    const closeChild = () => { try { if (!win.closed) win.close(); } catch { /* 무시 */ } };
+    window.addEventListener('pagehide', closeChild);                    // 본창 새로고침·이동 시 함께 닫기
+    return () => {
+      done = true;
+      window.clearInterval(poll);
+      window.removeEventListener('pagehide', closeChild);
+      try { win.removeEventListener('keydown', onKey); win.removeEventListener('pagehide', closedByUser); } catch { /* 무시 */ }
+      closeChild();
+      ext.current = null;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 제목이 바뀌면 독립 창 제목도 갱신
+  useEffect(() => { if (ext.current) ext.current.win.document.title = windowTitle || ariaLabel; }, [windowTitle, ariaLabel]);
+
+  if (mode === 'pending') return null;
+  if (mode === 'external' && ext.current) {
+    return createPortal(
+      <div data-testid={`${testIdPrefix}-external`} role="document" aria-label={ariaLabel} style={{ minHeight: '100vh', background: '#e2e8f0' }}>
+        <TitleBar {...props} draggable={false} sticky />
+        {children}
+      </div>,
+      ext.current.root,
+    );
+  }
+  return (
+    <InPageDocWindow {...props} notice={blocked ? (
+      <div data-testid={`${testIdPrefix}-popup-blocked`} role="status"
+        style={{ margin: '12px 24px 0', padding: '8px 12px', background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 6, fontSize: 12, color: '#92400e' }}>
+        브라우저가 팝업을 차단해 화면 안 미리보기로 표시합니다. 주소창의 팝업 차단 표시에서 이 사이트의 팝업을 허용하면 다음부터 별도 창으로 열립니다.
+      </div>
+    ) : null} />
+  );
+}
+
+function InPageDocWindow({ title, subtitle, actions, onClose, testIdPrefix, closeTestId, ariaLabel, children, notice }: DocPreviewWindowProps & { notice?: React.ReactNode }) {
   const [rect, setRect] = useState<Rect>(initialRect);
   const [mobile, setMobile] = useState(() => vw() < MOBILE_BP);
   const [busy, setBusy] = useState(false);              // 이동·크기 조절 중(텍스트 선택 방지)
@@ -134,31 +270,12 @@ export function DocPreviewWindow({ title, subtitle, actions, onClose, testIdPref
         style={{ ...box, display: 'flex', flexDirection: 'column', background: '#e2e8f0', boxShadow: '0 24px 64px rgba(0,0,0,0.45)', overflow: 'hidden' }}
       >
         {/* 제목 표시줄 — 드래그로 이동 */}
-        <div
-          onPointerDown={startDrag('move')}
-          data-testid={`${testIdPrefix}-titlebar`}
-          style={{
-            flexShrink: 0, background: '#1e293b', padding: '10px 12px 10px 20px', minHeight: TITLE_H, boxSizing: 'border-box',
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
-            cursor: mobile ? 'default' : 'move', touchAction: 'none',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0, overflow: 'hidden' }}>
-            <span style={{ color: '#fff', fontWeight: 700, fontSize: 14, whiteSpace: 'nowrap' }}>{title}</span>
-            {subtitle && <span style={{ color: '#94a3b8', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{subtitle}</span>}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-            {actions}
-            <button type="button" onClick={onClose}
-              data-testid={closeTestId ?? `${testIdPrefix}-close`} aria-label="미리보기 닫기" title="닫기 (ESC)"
-              style={{ width: 34, height: 34, borderRadius: 7, border: '1px solid #475569', background: 'transparent', color: '#cbd5e1', fontSize: 16, lineHeight: 1, cursor: 'pointer' }}>
-              ✕
-            </button>
-          </div>
-        </div>
+        <TitleBar title={title} subtitle={subtitle} actions={actions} onClose={onClose} testIdPrefix={testIdPrefix} closeTestId={closeTestId}
+          onPointerDown={startDrag('move')} draggable={!mobile} />
 
         {/* 문서 본문 — 팝업 내부 스크롤(가로·세로). 문서 폭은 고정(A4)이라 창을 줄여도 레이아웃이 깨지지 않고 스크롤된다 */}
         <div data-testid={`${testIdPrefix}-body`} style={{ flex: 1, minHeight: 0, overflow: 'auto', background: '#e2e8f0' }}>
+          {notice}
           {children}
         </div>
 
