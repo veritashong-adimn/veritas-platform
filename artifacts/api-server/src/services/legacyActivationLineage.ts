@@ -58,9 +58,34 @@ export async function legacySaleSupplyByAssignment(dbx: any, assignmentIds: numb
     WHERE l.module = ${ACTIVATION_MODULE} AND l.row_key LIKE 'progress:%'
       AND l.entity_id IN (${sql.join(assignmentIds.map(i => sql`${i}`), sql`, `)})`)).rows as any[];
   for (const x of r) {
-    const sup = legacyNum(x.sup), vat = legacyNum(x.vat) ?? 0, total = legacyNum(x.item_total);
-    if (sup == null || sup <= 0 || total == null) continue;
-    if (Math.abs(sup + vat - total) <= 1) out.set(Number(x.aid), sup);
+    const sup = verifiedCrmSupply(legacyNum(x.sup), legacyNum(x.vat), legacyNum(x.item_total));
+    if (sup != null) out.set(Number(x.aid), sup);
   }
   return out;
+}
+
+// CRM 원본 공급가액 검증 공통 규칙 — 공급가액+부가세 = 판매 총액(1원 이내)이고, 부가세가 0원 또는 공급가액×10%(1원 이내)일 때만.
+//   그 외 비율·불일치는 확인 대상(null) — 임의 계산 금지.
+export function verifiedCrmSupply(sup: number | null, vat: number | null, total: number | null): number | null {
+  if (sup == null || sup <= 0 || total == null) return null;
+  const v = vat ?? 0;
+  if (Math.abs(sup + v - total) > 1) return null;
+  if (!(v === 0 || Math.abs(v - sup * 0.1) <= 1)) return null;
+  return sup;
+}
+
+// ── 과거 CRM 전환 판매의 손익 요약용 공급가액(조회 전용) ─────────────────────────────
+//   전환 시 공급가·부가세를 나누지 못한(품목 부가세 0) 판매만 대상. 전환 계보의 원본 진행관리 행들의 (공급가액, 부가세)가
+//   단일 값이고 위 검증 규칙을 통과하면 원본 공급가액을 돌려준다. 아니면 null(기존 품목 공급가액 그대로 사용).
+export async function legacyVerifiedSaleSupply(dbx: any, projectId: number, itemsTotal: number, itemsTax: number): Promise<{ supply: number | null; isLegacy: boolean }> {
+  const r = (await dbx.execute(sql`SELECT DISTINCT la.source_raw->>'공급가액' AS sup, la.source_raw->>'부가세' AS vat
+    FROM legacy_master_mappings m
+    JOIN projects p ON p.id = m.entity_id
+    JOIN import_row_sources l ON l.batch_id = m.import_batch_id AND l.module = ${ACTIVATION_MODULE} AND l.row_key LIKE 'progress:%'
+    JOIN legacy_archive_rows la ON la.id::text = l.legacy_id
+    WHERE m.source_system = ${SRC} AND m.entity_type = ${ENTITY} AND m.status = 'active' AND m.entity_id = ${projectId}`)).rows as any[];
+  const [mapped] = (await dbx.execute(sql`SELECT 1 FROM legacy_master_mappings WHERE source_system = ${SRC} AND entity_type = ${ENTITY} AND status = 'active' AND entity_id = ${projectId} LIMIT 1`)).rows as any[];
+  if (!mapped) return { supply: null, isLegacy: false };
+  if (Math.abs(itemsTax) > 0.5 || r.length !== 1) return { supply: null, isLegacy: true };   // 이미 분리됐거나 원본 값이 여럿 → 사용 안 함
+  return { supply: verifiedCrmSupply(legacyNum(r[0].sup), legacyNum(r[0].vat), itemsTotal), isLegacy: true };
 }

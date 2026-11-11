@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import { findReusableProjectForInquiry } from "../services/quoteDeletion";
+import { legacyVerifiedSaleSupply } from "../services/legacyActivationLineage";
 import {
   db, projectsTable, paymentsTable, tasksTable, usersTable,
   logsTable, quotesTable, settlementsTable, notesTable,
@@ -879,9 +880,17 @@ router.get("/admin/projects/:id/performance-summary", ...adminGuard, async (req,
     const [currentQuote] = await db.select().from(quotesTable)
       .where(and(eq(quotesTable.projectId, projectId), eq(quotesTable.isCurrent, true), isNull(quotesTable.deletedAt)));
     let saleSupplyAmount = 0;
+    // 공급가액 기준: items(현재 견적 품목) | legacy_crm(과거 CRM 원본 공급가액, 검증됨) | legacy_unverified(과거 CRM 전환·공급가/부가세 미확인)
+    let saleSupplyBasis: "items" | "legacy_crm" | "legacy_unverified" = "items";
     if (currentQuote) {
       const items = await db.select().from(quoteItemsTable).where(eq(quoteItemsTable.quoteId, currentQuote.id));
       saleSupplyAmount = items.reduce((s, i) => s + Number(i.supplyAmount ?? 0), 0);
+      // 과거 CRM 전환 판매: 전환 시 부가세 포함 총액이 공급가로 들어간 건(품목 부가세 0)은 검증된 원본 공급가액으로 손익 계산(조회 전용, DB 미변경)
+      const itemsTotal = items.reduce((s, i) => s + Number(i.totalAmount ?? 0), 0);
+      const itemsTax = items.reduce((s, i) => s + Number(i.taxAmount ?? 0), 0);
+      const lg = await legacyVerifiedSaleSupply(db, projectId, itemsTotal, itemsTax).catch(() => ({ supply: null, isLegacy: false }));
+      if (lg.supply != null) { saleSupplyAmount = lg.supply; saleSupplyBasis = "legacy_crm"; }
+      else if (lg.isLegacy && Math.abs(itemsTax) <= 0.5) saleSupplyBasis = "legacy_unverified";
     }
 
     // 수행/원가 행 (soft-delete 제외)
@@ -917,6 +926,7 @@ router.get("/admin/projects/:id/performance-summary", ...adminGuard, async (req,
       // §15 프로젝트 손익 요약 (부가세 제외, 공급가액 기준)
       profit: {
         saleSupplyAmount: r0(saleSupplyAmount),
+        saleSupplyBasis,
         totalCost: r0(totalCost),
         basePerformanceFeeTotal: r0(basePerformanceFeeTotal),
         expenseTotal: r0(expenseTotal),

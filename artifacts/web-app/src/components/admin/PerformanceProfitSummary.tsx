@@ -22,6 +22,8 @@ interface Summary {
   };
   profit: {
     saleSupplyAmount: number; totalCost: number; basePerformanceFeeTotal: number;
+    /** 공급가액 기준: items(현재 품목) | legacy_crm(과거 CRM 원본 공급가액) | legacy_unverified(과거 CRM 전환·공급가/부가세 미확인) */
+    saleSupplyBasis?: 'items' | 'legacy_crm' | 'legacy_unverified';
     expenseTotal: number; deductionTotal: number; estimatedProfit: number; estimatedMarginRate: number;
     paidCost: number; actualProfit: number; actualMarginRate: number;
   };
@@ -102,6 +104,12 @@ export default function PerformanceProfitSummary({ projectId, token, refreshKey 
           {/* 예상 */}
           <div>
             {profitRow('총 판매 공급가액', `${won(profit.saleSupplyAmount)}원`)}
+            {profit.saleSupplyBasis === 'legacy_crm' && (
+              <p style={{ margin: '2px 0 6px', fontSize: 11, color: '#6b7280' }} data-testid="profit-supply-basis-legacy">과거 CRM 원본 공급가액 기준(판매 품목은 부가세 포함 총액 — 정정 전)</p>
+            )}
+            {profit.saleSupplyBasis === 'legacy_unverified' && (
+              <p style={{ margin: '2px 0 6px', fontSize: 11, color: '#b45309' }} data-testid="profit-supply-basis-unverified">과거 CRM 전환 — 공급가·부가세 구분 미확인(부가세 포함 총액일 수 있음)</p>
+            )}
             {profitRow('기본 수행료 합계', `${won(profit.basePerformanceFeeTotal)}원`)}
             {profitRow('추가비용 합계', `${won(profit.expenseTotal)}원`)}
             {profitRow('차감액 합계', `− ${won(profit.deductionTotal)}원`)}
