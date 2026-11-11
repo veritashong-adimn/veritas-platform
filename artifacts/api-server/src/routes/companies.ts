@@ -36,6 +36,12 @@ const isOutsourcingField = (v: unknown): v is OutsourcingField =>
   typeof v === "string" && (OUTSOURCING_FIELDS as readonly string[]).includes(v);
 
 const router: IRouter = Router();
+
+// ─── 거래처 프로젝트 수 공통 집계 기준 ─────────────────────────────────────────
+// 거래처 목록·상세(CompanyDetailModal) 모두 "거래처(company_id) 소속 + 취소(cancelled) 제외"로 센다.
+// 취소 프로젝트는 상세 화면의 「취소 프로젝트 포함」 토글로만 별도 조회한다(데이터는 그대로).
+const activeProjectCountSql = () =>
+  sql<number>`COUNT(DISTINCT ${projectsTable.id}) FILTER (WHERE ${projectsTable.status} <> 'cancelled')::int`;
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
 
 // ─── 거래처 주요정보 변경이력(§5) 추적 대상 ───────────────────────────────────
@@ -184,7 +190,7 @@ router.get("/admin/companies", ...adminGuard, async (req, res) => {
           vendorType: companiesTable.vendorType,
           customerType: companiesTable.customerType,
           contactCount: sql<number>`COUNT(DISTINCT ${contactsTable.id})::int`,
-          projectCount: sql<number>`COUNT(DISTINCT ${projectsTable.id})::int`,
+          projectCount: activeProjectCountSql(),
           totalPayment: sql<number>`COALESCE(SUM(${paymentsTable.amount}) FILTER (WHERE ${paymentsTable.status} = 'paid'), 0)::int`,
         })
         .from(companiesTable)
@@ -235,7 +241,7 @@ router.get("/admin/companies", ...adminGuard, async (req, res) => {
         vendorType: companiesTable.vendorType,
         customerType: companiesTable.customerType,
         contactCount: sql<number>`COUNT(DISTINCT ${contactsTable.id})::int`,
-        projectCount: sql<number>`COUNT(DISTINCT ${projectsTable.id})::int`,
+        projectCount: activeProjectCountSql(),
         totalPayment: sql<number>`COALESCE(SUM(${paymentsTable.amount}) FILTER (WHERE ${paymentsTable.status} = 'paid'), 0)::int`,
       })
       .from(companiesTable)
@@ -535,7 +541,8 @@ router.get("/admin/companies/:id", ...adminGuard, async (req, res) => {
     const divisionStats: Record<number, { projectCount: number; payment: number }> = {};
     for (const p of projects) {
       const did = p.requestingDivisionId;
-      if (did != null) {
+      // 프로젝트 수는 거래처 목록·상세와 같은 기준(취소 제외)으로 센다.
+      if (did != null && p.status !== "cancelled") {
         if (!divisionStats[did]) divisionStats[did] = { projectCount: 0, payment: 0 };
         divisionStats[did].projectCount++;
       }
