@@ -115,6 +115,9 @@ export async function buildFilteredSalesProjectList(query: Record<string, string
         payerCompanyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.payerCompanyId})`,
         payerDivisionName: sql<string | null>`(SELECT name FROM divisions WHERE id = ${projectsTable.payerDivisionId})`,
         requestingCompanyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.requestingCompanyId})`,
+        // 판매관리 '유형'(B2B/B2C) 판정용 — 화면 거래처(요청 거래처 → 기본 거래처)와 동일 우선순위로
+        // 거래처 마스터 customer_type 을 조회 시점에 실시간 참조(저장 X → 마스터 변경 즉시 반영, additive 필드).
+        companyCustomerType: sql<string | null>`(SELECT customer_type FROM companies WHERE id = COALESCE(${projectsTable.requestingCompanyId}, ${projectsTable.companyId}))`,
       })
       .from(projectsTable)
       .leftJoin(usersTable, eq(projectsTable.userId, usersTable.id))

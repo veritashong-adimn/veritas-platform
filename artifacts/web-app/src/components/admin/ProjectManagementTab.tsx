@@ -1118,13 +1118,29 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
                               </div>
                             </td>
 
-                            {/* 유형 (quoteType) */}
+                            {/* 유형 — 거래처 마스터 customerType 기준(B2B/B2C). 확인 불가 시 임의 B2B 처리 안 함.
+                                차감/누적 견적은 기존 정보 유지를 위해 보조 배지로 함께 표시. */}
                             <td style={{ ...tableTd }}>
-                              {p.quoteType ? (
-                                <span style={{ fontSize: 10, fontWeight: 700, background: (QUOTE_TYPE_COLOR[p.quoteType] ?? QUOTE_TYPE_COLOR_DEFAULT).bg, color: (QUOTE_TYPE_COLOR[p.quoteType] ?? QUOTE_TYPE_COLOR_DEFAULT).color, borderRadius: 5, padding: "2px 6px", whiteSpace: "nowrap" }}>
-                                  {QUOTE_TYPE_LABEL[p.quoteType] ?? p.quoteType}
-                                </span>
-                              ) : <span style={{ color: "#d1d5db", fontSize: 11 }}>—</span>}
+                              {(() => {
+                                const ct = pp.companyCustomerType as string | null | undefined;
+                                const seg = ct === "INDIVIDUAL" ? "B2C" : (ct === "CORPORATE" || ct === "PUBLIC") ? "B2B" : null;
+                                const segColor = seg === "B2C" ? { bg: "#ecfdf5", color: "#047857" } : { bg: "#f0f9ff", color: "#0369a1" };
+                                const subType = p.quoteType && p.quoteType !== "b2b_standard" ? p.quoteType : null;
+                                return (
+                                  <div style={{ display: "flex", gap: 3, alignItems: "center", flexWrap: "wrap" }} data-testid={`sale-segment-${p.id}`}>
+                                    {seg ? (
+                                      <span aria-label={`고객 유형 ${seg}`} style={{ fontSize: 10, fontWeight: 700, background: segColor.bg, color: segColor.color, borderRadius: 5, padding: "2px 6px", whiteSpace: "nowrap" }}>{seg}</span>
+                                    ) : (
+                                      <span title="거래처 마스터의 고객 유형을 확인할 수 없습니다" aria-label="고객 유형 미확인" style={{ color: "#9ca3af", fontSize: 11, whiteSpace: "nowrap" }}>미확인</span>
+                                    )}
+                                    {subType && (
+                                      <span style={{ fontSize: 10, fontWeight: 700, background: (QUOTE_TYPE_COLOR[subType] ?? QUOTE_TYPE_COLOR_DEFAULT).bg, color: (QUOTE_TYPE_COLOR[subType] ?? QUOTE_TYPE_COLOR_DEFAULT).color, borderRadius: 5, padding: "2px 6px", whiteSpace: "nowrap" }}>
+                                        {QUOTE_TYPE_LABEL[subType] ?? subType}
+                                      </span>
+                                    )}
+                                  </div>
+                                );
+                              })()}
                             </td>
 
                             {/* 견적금액 */}
