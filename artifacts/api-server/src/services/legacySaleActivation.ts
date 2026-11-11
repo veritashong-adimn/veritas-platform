@@ -419,6 +419,8 @@ export async function executeActivation(legacyRowId: number, planToken: string, 
       const rr = rawRowFromRecord(src?.source_raw ?? {}, "진행관리", Number(src?.source_row ?? seq + 1));
       const { payload } = buildLegacyPayload(rr, p.translatorId) as { payload: any };
       payload.quoteId = quote.id; payload.saleItemId = item.id; payload.sequence = seq++;
+      // 판매상품 순번(단일 품목 = 0) — '판매정보 불러오기'가 이 행을 기존 행으로 인식하도록(미기록 시 중복 수행행 생성 위험)
+      payload.saleItemSequence = 0;
       // 세금처리: 원본 CRM 세전·세후로 원천징수(3.3%/2.2%)가 확인되면 그 값을 쓴다(실제 과거 처리 기준).
       //   확인되지 않으면(세후=세전·값 없음 등) 기존대로 연결된 통번역사 정산정보에서 도출(미연결·미설정은 세무확인 필요).
       payload.withholdingTreatment = p.withholdingTreatment ?? undefined;   // 미리보기에서 결정한 값(우선순위 규칙) — 미리보기와 실행이 같은 기준
