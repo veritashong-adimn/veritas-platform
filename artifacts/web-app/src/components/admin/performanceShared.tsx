@@ -354,7 +354,10 @@ export const toRow = (p: any): Row => ({
   payDateChangeReason: p.payDateChangeReason, memo: p.memo, remark: p.remark,
   contractUnitPrice: initialContractUnitPrice(p), quantity: trimNum(p.quantity), unit: p.unit,
   // directAmount(기준금액 입력값) — 신규는 별도 저장된 directAmount 사용, 기존행(null)은 basePerformanceFee로 fallback(§통역료85 재조회 복원).
-  isDirectAmount: p.isDirectAmount ?? false, directAmount: p.directAmount ?? p.basePerformanceFee,
+  //   단, 통역 요금(100%)만 입력된 행(directAmount 미저장 + contractUnitPrice 있음)은 base가 요금(100%)이므로 통역료(85%) 칸에
+  //   되살리지 않는다(되살리면 재조회 시 ×0.85 재계산돼 금액이 달라짐).
+  isDirectAmount: p.isDirectAmount ?? false,
+  directAmount: p.directAmount ?? ((isInterpretationKind(p as Row) && p.contractUnitPrice != null && p.contractUnitPrice !== '') ? null : p.basePerformanceFee),
   basePerformanceFee: p.basePerformanceFee, expenseTotal: p.expenseTotal,
   deductionTotal: p.deductionTotal, costTotal: p.costTotal,
   paymentStatus: p.paymentStatus ?? 'unpaid',
@@ -539,7 +542,14 @@ export function calcRowCostPreview(r: Row): { base: number; expenseTotal: number
   else if (r.performerCategory === 'vendor') base = round2(num(r.supplyAmount));
   else if (r.performerCategory === 'expense') base = round2(num(r.directAmount));
   // 직접금액(base) — 번역 요금(100%)=directAmount는 그대로, 통역 통역료(85%)=directAmount는 ×0.85 적용(§1·§2·§5).
-  else if (r.isDirectAmount) base = round2(num(r.directAmount) * (isInterpretationKind(r) ? INTERP_FEE_RATE : 1));
+  //   통역에서 통역료(85%)가 비어 있거나 0이고 요금(100%)=contractUnitPrice만 있으면 요금(100%) 금액을 그대로 base로 쓴다
+  //   (두 필드 모두 있으면 기존 규칙대로 통역료(85%)×0.85만 사용 — 합산·중복 없음). 서버 computePerformanceBaseFee와 동일.
+  else if (r.isDirectAmount) {
+    if (isInterpretationKind(r)) {
+      const fee85 = num(r.directAmount);
+      base = fee85 > 0 ? round2(fee85 * INTERP_FEE_RATE) : round2(num(r.contractUnitPrice));
+    } else base = round2(num(r.directAmount));
+  }
   else if (isTranslationKind(r)) {
     // 번역 지급액 = 수량 × 단가 — 단위 종류(단어/글자/페이지/회/분/시간/일)와 무관(§단위확장). 사용자가 수량·단가 입력 시 적용.
     //   §14 호환: 기존 저장행은 계약단가(contractUnitPrice)가 없어(판매단가 자동복사 안 함) 이 분기를 타지 않고,

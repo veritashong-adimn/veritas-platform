@@ -756,7 +756,7 @@ router.post("/admin/projects/:id/performances/import-from-sale", ...adminGuard, 
 //   저장(applyPerformanceRow)과 Import 미리보기(§28)가 동일 규칙을 공유한다. 추가비용·차감은 별도(calcCostTotal).
 //   · vendor → 공급가액(computed.supplyAmount)
 //   · expense → directAmount(100%)
-//   · isDirectAmount → 통역 통역료(85%)=directAmount×0.85, 그 외(번역 요금100)=directAmount×1
+//   · isDirectAmount → 통역 통역료(85%)>0 이면 directAmount×0.85, 없으면 요금(100%)=contractUnitPrice×1 / 그 외(번역 요금100)=directAmount×1
 //   · 번역 → 계약단가×수량(없으면 작업량), 통역 → 계약단가×수행일수×인원, 폴백 계약단가×수량 → 개인 기본료
 export function computePerformanceBaseFee(
   r: RowInput,
@@ -769,8 +769,14 @@ export function computePerformanceBaseFee(
   if (category === "expense") return calcBasePerformanceFee(true, r.directAmount ?? 0, null, null);
   if (r.isDirectAmount) {
     // 통역 통역료(85%)=directAmount 는 ×0.85(§통역료85), 번역 요금(100%)은 그대로. 저장/재조회/정산 일관(§10).
-    const directBase = Number(r.directAmount ?? 0) * (isInterpretationSnap(snapForCost, r.serviceType) ? 0.85 : 1);
-    return calcBasePerformanceFee(true, directBase, null, null);
+    if (isInterpretationSnap(snapForCost, r.serviceType)) {
+      // 통역: 통역료(85%)>0 이면 기존대로 ×0.85. 통역료(85%)가 비었거나 0이고 요금(100%)=contractUnitPrice만 있으면
+      //   요금(100%) 금액을 그대로 base로 사용(두 값 합산·중복 없음). 화면 calcRowCostPreview와 동일 규칙.
+      const fee85 = Number(r.directAmount ?? 0);
+      const directBase = fee85 > 0 ? fee85 * 0.85 : Number(r.contractUnitPrice ?? 0);
+      return calcBasePerformanceFee(true, directBase, null, null);
+    }
+    return calcBasePerformanceFee(true, Number(r.directAmount ?? 0), null, null);
   }
   if (isTranslationSnap(snapForCost, r.serviceType)) {
     if (r.contractUnitPrice != null && r.quantity != null) {
