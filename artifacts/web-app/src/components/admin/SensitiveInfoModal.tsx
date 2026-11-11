@@ -155,6 +155,9 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
   const [editMode, setEditMode] = useState(false);
   const [form, setForm] = useState(emptyForm());
   const [savedSettlementType, setSavedSettlementType] = useState(initialSettlementType ?? "");
+  // 예금주 기본값(통번역사 이름) 표시 여부 — 저장된 예금주가 비어 있을 때만 화면 입력 편의용으로 채운다.
+  //   은행 실명 검증값이 아니며, 사용자가 한 번이라도 수정하면 false 가 되어 이후 자동으로 덮어쓰지 않는다.
+  const [holderAuto, setHolderAuto] = useState(false);
   const backRef = useRef<HTMLInputElement>(null);
   const authH = { Authorization: `Bearer ${token}` };
 
@@ -164,12 +167,15 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
       .then(r => r.json())
       .then((d: SensitiveData) => {
         setData(d);
+        const defaultHolder = userName?.trim() ?? "";
+        const useDefaultHolder = !d.accountHolder?.trim() && !!defaultHolder;
+        setHolderAuto(useDefaultHolder);
         setForm({
           settlementType: initialSettlementType ?? "",
           paymentMethod: splitPaymentCode(d.paymentMethod).method,
           withholdingRate: splitPaymentCode(d.paymentMethod).rate,
           residentFront: "", residentBack: "",
-          bankName: d.bankName ?? "", bankAccount: d.bankAccount ?? "", accountHolder: d.accountHolder ?? "",
+          bankName: d.bankName ?? "", bankAccount: d.bankAccount ?? "", accountHolder: useDefaultHolder ? defaultHolder : (d.accountHolder ?? ""),
           businessNumber: d.businessNumber ?? "", businessName: d.businessName ?? "",
           businessOwner: d.businessOwner ?? "", taxInvoiceEmail: d.taxInvoiceEmail ?? "",
           paypalEmail: d.paypalEmail ?? "", englishName: d.englishName ?? "",
@@ -193,11 +199,13 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
     setSaving(true);
     try {
       const rn = `${form.residentFront.trim()}${form.residentBack.trim()}`;
+      // 기본값 예금주를 손대지 않았고 계좌번호도 없으면 저장하지 않음(기존 빈 값 유지 — 계좌 미입력 레코드에 예금주만 생기지 않도록)
+      const skipAutoHolder = holderAuto && !form.bankAccount.trim();
       const body: Record<string, unknown> = {
         paymentMethod: form.paymentMethod ? joinPaymentCode(form.paymentMethod, form.withholdingRate) : null,
         bankName: form.bankName || null,
         bankAccount: form.bankAccount || null,
-        accountHolder: form.accountHolder || null,
+        accountHolder: skipAutoHolder ? null : (form.accountHolder || null),
         businessNumber: form.businessNumber || null,
         businessName: form.businessName || null,
         businessOwner: form.businessOwner || null,
@@ -227,6 +235,7 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
       if (!res.ok) { onToast(`오류: ${d.error}`); return; }
       setData(d);
       setForm(p => ({ ...p, residentFront: "", residentBack: "" }));
+      if (!skipAutoHolder) setHolderAuto(false);   // 저장된 예금주는 이후 기본값으로 덮어쓰지 않음
 
       // 정산유형 별도 저장 (translator_profiles)
       if (form.settlementType !== (initialSettlementType ?? "")) {
@@ -247,6 +256,9 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
     } catch { onToast("오류: 저장 실패"); }
     finally { setSaving(false); }
   };
+
+  // 예금주 직접 수정 — 입력값을 그대로 보존(영문 대소문자·공백 포함, 변환 없음)하고 기본값 표시 해제
+  const setHolder = (v: string) => { setHolderAuto(false); sf("accountHolder", v); };
 
   const pm = form.paymentMethod;
   const isDomestic     = pm === "domestic_bank_transfer";
@@ -561,7 +573,7 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
               {!isPaypal && !isBank && (
                 <>
                   <p style={sH}>계좌정보</p>
-                  <BankFields form={form} sf={sf} />
+                  <BankFields form={form} sf={sf} holderAuto={holderAuto} onHolderChange={setHolder} />
                 </>
               )}
 
@@ -596,7 +608,14 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
                     <Field label="SWIFT Code" value={form.swiftCode} onChange={v => sf("swiftCode", v)} placeholder="AAAABBCC" mono />
                     <Field label="Routing Number" value={form.routingNumber} onChange={v => sf("routingNumber", v)} placeholder="021000021" mono />
                   </div>
-                  <Field label="IBAN (선택)" value={form.iban} onChange={v => sf("iban", v)} placeholder="GB33BUKB20201555555555" mono />
+                  <div style={{ ...grid2, marginBottom:10 }}>
+                    <div>
+                      <Field label="예금주 (영문 · Account Holder)" value={form.accountHolder} onChange={setHolder}
+                        placeholder="HONG GIL DONG" testId="sensitive-account-holder-en" />
+                      <HolderHint show={holderAuto} overseas />
+                    </div>
+                    <Field label="IBAN (선택)" value={form.iban} onChange={v => sf("iban", v)} placeholder="GB33BUKB20201555555555" mono />
+                  </div>
                 </>
               )}
 
@@ -660,15 +679,16 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
 
 // ─── 서브 컴포넌트들 ─────────────────────────────────────────────────────────
 
-function Field({ label, value, onChange, placeholder = "", type = "text", mono = false }: {
+function Field({ label, value, onChange, placeholder = "", type = "text", mono = false, testId }: {
   label: string; value: string; onChange: (v: string) => void;
-  placeholder?: string; type?: string; mono?: boolean;
+  placeholder?: string; type?: string; mono?: boolean; testId?: string;
 }) {
   return (
     <div>
       <label style={lbl}>{label}</label>
       <input type={type} value={value} onChange={e => onChange(e.target.value)}
         placeholder={placeholder}
+        {...(testId ? { "data-testid": testId, "aria-label": label } : {})}
         style={{ ...inp, fontFamily: mono ? "monospace" : undefined, letterSpacing: mono ? 0.5 : undefined }} />
     </div>
   );
@@ -725,11 +745,29 @@ export function BankNameSelect({ value, onChange, label, inputStyle, labelStyle 
   );
 }
 
-function BankFields({ form, sf }: { form: ReturnType<typeof emptyForm>; sf: (k: keyof ReturnType<typeof emptyForm>, v: string | boolean) => void }) {
+// 예금주 기본값 안내 — 통번역사 이름으로 채운 값은 은행 실명 검증값이 아님
+function HolderHint({ show, overseas = false }: { show: boolean; overseas?: boolean }) {
+  if (!show) return null;
+  return (
+    <p style={{ fontSize:11, color:"#b45309", margin:"4px 0 0", lineHeight:1.4 }} data-testid="sensitive-account-holder-default-hint">
+      {overseas
+        ? "통번역사 이름 기본값 — 해외 송금은 은행에 등록된 영문 예금주로 수정하세요"
+        : "통번역사 이름 기본값 — 실제 은행 예금주명과 확인 필요"}
+    </p>
+  );
+}
+
+function BankFields({ form, sf, holderAuto, onHolderChange }: {
+  form: ReturnType<typeof emptyForm>; sf: (k: keyof ReturnType<typeof emptyForm>, v: string | boolean) => void;
+  holderAuto: boolean; onHolderChange: (v: string) => void;
+}) {
   return (
     <div style={{ ...grid3, marginBottom:10 }}>
       <BankNameSelect label="은행명" value={form.bankName} onChange={v => sf("bankName", v)} inputStyle={inp} labelStyle={lbl} />
-      <Field label="예금주" value={form.accountHolder} onChange={v => sf("accountHolder", v)} placeholder="홍길동" />
+      <div>
+        <Field label="예금주" value={form.accountHolder} onChange={onHolderChange} placeholder="홍길동" testId="sensitive-account-holder" />
+        <HolderHint show={holderAuto} />
+      </div>
       <Field label="계좌번호" value={form.bankAccount} onChange={v => sf("bankAccount", v)} placeholder="123-456-789012" mono />
     </div>
   );
