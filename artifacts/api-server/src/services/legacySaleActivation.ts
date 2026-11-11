@@ -269,15 +269,22 @@ export async function buildActivationPlan(dbx: Dbx, legacyRowId: number) {
 
   // 공급가·부가세 구분 — 연결 진행관리 원본 행의 (공급가액, 부가세)가 단일 값이고 합이 판매 총액과 일치할 때만 사용(추정 금지).
   const splitPairs = [...new Set(prog.map((p: any) => `${num(p.source_raw?.["공급가액"])}|${num(p.source_raw?.["부가세"])}`))];
-  let amountSplit: { supply: number; vat: number; basis: "progress" | "total_only" } = { supply: total, vat: 0, basis: "total_only" };
+  //   과세(10%)로 확인되는 경우(부가세 = 공급가액×10%, 1원 이내)만 과세 항목으로 나눈다. 원본에는 면세·영세율 구분 칸이 없으므로
+  //   부가세 0원은 총액 = 공급가액 그대로 두고 과세구분 미확인(기존 확인 절차 유지)으로 남긴다 — 일괄 10% 적용 금지.
+  let amountSplit: { supply: number; vat: number; basis: "progress" | "zero_vat" | "total_only" } = { supply: total, vat: 0, basis: "total_only" };
   if (splitPairs.length === 1) {
     const [s, v] = splitPairs[0].split("|").map(x => (x === "null" ? null : Number(x)));
-    if (s != null && s > 0 && v != null && v >= 0 && Math.abs(s + v - total) <= 1) amountSplit = { supply: s, vat: v, basis: "progress" };
+    if (s != null && s > 0 && v != null && Math.abs(s + v - total) <= 1) {
+      if (v > 0 && Math.abs(v - s * 0.1) <= 1) amountSplit = { supply: s, vat: v, basis: "progress" };
+      else if (v === 0) amountSplit = { supply: total, vat: 0, basis: "zero_vat" };
+    }
   }
   const warnings: string[] = [
     amountSplit.basis === "progress"
-      ? `원본 진행관리의 공급가액 ${amountSplit.supply.toLocaleString()}원 · 부가세 ${amountSplit.vat.toLocaleString()}원(합계 = 판매 총액)으로 1개 항목을 만듭니다. 원본에 개별 판매항목(통역료·출장비 등) 구분은 없습니다.`
-      : "과거 CRM 판매목록에는 총액만 있고 진행관리 원본의 공급가액·부가세로 확인되지 않아, 공급가·부가세를 구분하지 않고 총액 그대로 1개 항목으로 만듭니다.",
+      ? `원본 진행관리의 공급가액 ${amountSplit.supply.toLocaleString()}원 · 부가세 ${amountSplit.vat.toLocaleString()}원(과세 10%, 합계 = 판매 총액)으로 1개 항목을 만듭니다. 원본 Excel 에 개별 판매항목(통역료·출장비 등) 구분이 없어 항목별 복원은 판매 상세에서 직접 입력해야 합니다.`
+      : amountSplit.basis === "zero_vat"
+        ? "원본 진행관리의 부가세가 0원입니다(공급가액 = 총액). 원본에 면세·영세율 구분이 없어 과세구분은 미확인으로 두고 총액 그대로 1개 항목으로 만듭니다."
+        : "과거 CRM 판매목록에는 총액만 있고 진행관리 원본의 공급가액·부가세(과세 10%)로 확인되지 않아, 공급가·부가세를 구분하지 않고 총액 그대로 1개 항목으로 만듭니다.",
     ...supplementWarn];
   if (!company.matchedId) warnings.push(company.method === "ambiguous" ? "거래처 후보가 여러 곳이라 연결하지 않습니다(전환 후 판매 상세에서 지정)." : "일치하는 거래처 Master 가 없어 원본 거래처명만 보존합니다.");
   const unm = performances.filter(p => !p.translatorId).length;

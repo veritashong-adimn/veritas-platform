@@ -15,7 +15,7 @@ type Perf = {
 type Plan = {
   legacyRowId: number; saleNo: string; saleDate: string | null; existing: { projectId: number } | null;
   title: string; productName: string; total: number;
-  amountSplit?: { supply: number; vat: number; basis: "progress" | "total_only" };
+  amountSplit?: { supply: number; vat: number; basis: "progress" | "zero_vat" | "total_only" };
   company: { name: string | null; matchedId: number | null; matchedName: string | null; method: string; email?: string | null };
   contact: { name: string | null; matchedId: number | null; method: string; phone?: string | null; mobile?: string | null; email?: string | null; from?: 'master' | 'source' | null; phoneShared?: boolean };
   pm: { name: string | null; matchedId: number | null };
@@ -87,7 +87,8 @@ export function LegacySaleActivationModal({ legacyRowId, token, onClose, onActiv
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
             {([
               ["판매번호", plan.saleNo], ["판매일", plan.saleDate ?? "-"], ["판매금액(총액)", `${won(plan.total)}원`],
-              ["공급가액 · 부가세", plan.amountSplit?.basis === "progress" ? `${won(plan.amountSplit.supply)}원 · ${won(plan.amountSplit.vat)}원` : "구분 없음(총액 그대로)"],
+              ["공급가액 · 부가세", plan.amountSplit?.basis === "progress" ? `${won(plan.amountSplit.supply)}원 · ${won(plan.amountSplit.vat)}원 (과세)`
+                : plan.amountSplit?.basis === "zero_vat" ? `${won(plan.amountSplit.supply)}원 · 0원 (면세·영세율 확인 필요)` : "구분 없음(총액 그대로)"],
               ["거래처", plan.company.matchedId ? `${plan.company.name} → Master 연결` : `${plan.company.name ?? "-"} (${plan.company.method === "ambiguous" ? "후보 여러 곳 · 미연결" : "Master 미연결"})`],
               ["담당자/고객", plan.contact.matchedId ? `${plan.contact.name} → 담당자 연결` : `${plan.contact.name ?? "-"} (미연결)`],
               // 새 견적 수신자로 전달할 연락처 — Master 연결이면 Master 값, 아니면 원본 개인번호(공용번호 제외). 전환 후 견적에서 확인·수정 가능.
