@@ -15,6 +15,7 @@ import './readTableView.css';
 import { formatDisplayDate } from '../../lib/dateFormat';
 import { exportCollections } from '../../lib/collectionsExcel';
 import { displayPaymentMethod } from '../../lib/paymentMethodDisplay';
+import { CollectionsSaleView } from './CollectionsSaleView';
 
 type CollectionRow = {
   id: number;
@@ -104,7 +105,35 @@ interface Props {
   onOpenLegacyDetail?: (legacyRowId: number) => void;   // 과거 CRM 판매 상세(/legacy-archive/:id)
 }
 
-export function CollectionsTab({ token, onToast, onOpenSalesDetail, onOpenLegacyDetail }: Props) {
+// 보기 전환 — 판매건별(기본: 판매건 단위 수금상태·부분입금) / 청구회차별(기존 청구행 단위 목록 그대로)
+export function CollectionsTab(props: Props) {
+  const [view, setView] = useState<'sale' | 'billing'>('sale');
+  const tabBtn = (v: 'sale' | 'billing', label: string) => (
+    <button type="button" onClick={() => setView(v)} data-testid={`collections-view-${v}`} aria-label={`${label} 보기`} aria-pressed={view === v}
+      style={{ padding: '6px 14px', fontSize: 13, fontWeight: 700, borderRadius: 8, cursor: 'pointer',
+        border: `1px solid ${view === v ? '#2563eb' : '#e5e7eb'}`, background: view === v ? '#eff6ff' : '#fff', color: view === v ? '#1d4ed8' : '#6b7280' }}>
+      {label}
+    </button>
+  );
+  return (
+    <div style={{ marginBottom: 32 }} data-testid="collections-tab">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6, flexWrap: 'wrap' }}>
+        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#111827' }}>수금 현황</h2>
+        <div style={{ display: 'flex', gap: 6 }}>{tabBtn('sale', '판매건별')}{tabBtn('billing', '청구회차별')}</div>
+      </div>
+      {view === 'sale'
+        ? (<>
+            <p style={{ margin: '0 0 12px', fontSize: 12, color: '#6b7280' }}>
+              판매건 1건 = 1행. 총 판매금액(VAT 포함)과 판매상세 &gt; 청구정보의 실제 입금내역으로 수금상태를 판정합니다. (선입금·차감 견적 제외 · 조회 전용)
+            </p>
+            <CollectionsSaleView {...props} />
+          </>)
+        : <BillingCollections {...props} />}
+    </div>
+  );
+}
+
+function BillingCollections({ token, onToast, onOpenSalesDetail, onOpenLegacyDetail }: Props) {
   const authHeaders = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
   const [rows, setRows] = useState<CollectionRow[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -171,9 +200,9 @@ export function CollectionsTab({ token, onToast, onOpenSalesDetail, onOpenLegacy
     : 0;
 
   return (
-    <div style={{ marginBottom: 32 }} data-testid="collections-tab">
+    <div data-testid="collections-billing-view">
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#111827" }}>수금 현황 ({filtered.length})</h2>
+        <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#111827" }}>청구회차별 ({filtered.length})</h3>
         <GhostBtn
           onClick={() => {
             if (filtered.length === 0) { onToast?.("다운로드할 수금 내역이 없습니다."); return; }

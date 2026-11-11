@@ -83,3 +83,66 @@ export function exportCollections(rows: CollectionExportRow[]): void {
     rows,
   });
 }
+
+// ─── 판매건별 수금현황 Excel(판매건 1건 = 1행) ─────────────────────────────────────
+//  · SSOT = GET /api/admin/collections/sales — 서버 계산값을 그대로 내보낸다(Excel 에서 재계산 없음).
+export interface SaleCollectionExportRow {
+  source: 'current' | 'legacy';
+  saleNumber: string | null;
+  companyName: string | null;
+  projectTitle: string | null;
+  saleTotal: number;
+  paidAmount: number | null;
+  receivable: number | null;
+  paidRate: number | null;
+  status: 'unpaid' | 'partial' | 'completed' | 'review';
+  overpaid: boolean;
+  overpaidAmount: number;
+  installments: { sequence: number; amount: number; status: 'scheduled' | 'partial' | 'completed' }[];
+  unbilledAmount: number | null;
+  unissuedAmount: number | null;
+  issuedAwaitingAmount: number | null;
+  nextExpectedDate: string | null;
+  lastPaidDate: string | null;
+  overdue: boolean;
+  pmName: string | null;
+  reviewReason?: string | null;
+}
+export const SALE_STATUS_LABEL: Record<SaleCollectionExportRow['status'], string> = {
+  unpaid: '미입금', partial: '부분입금', completed: '입금완료', review: '확인 필요',
+};
+export const INSTALLMENT_STATUS_LABEL: Record<string, string> = { scheduled: '대기', partial: '부분', completed: '완료' };
+/** 청구회차 요약 — "1차 완료 / 2차 대기" */
+export const installmentSummary = (r: Pick<SaleCollectionExportRow, 'installments'>) =>
+  r.installments.map((i) => `${i.sequence}차 ${INSTALLMENT_STATUS_LABEL[i.status] ?? i.status}`).join(' / ');
+
+const SALE_COLUMNS: ExcelColumn<SaleCollectionExportRow>[] = [
+  { header: '판매번호', value: (r) => r.saleNumber ?? '' },
+  { header: '거래처명', value: (r) => r.companyName ?? '' },
+  { header: '프로젝트명', value: (r) => r.projectTitle ?? '' },
+  { header: '총 판매금액(VAT 포함)', value: (r) => num(r.saleTotal), type: 'number' },
+  { header: '누적 입금액', value: (r) => num(r.paidAmount), type: 'number' },
+  { header: '잔여 미수금', value: (r) => num(r.receivable), type: 'number' },
+  { header: '입금률(%)', value: (r) => num(r.paidRate), type: 'number', numFmt: '0.0' },
+  { header: '수금상태', value: (r) => SALE_STATUS_LABEL[r.status] + (r.overpaid ? ' (초과입금)' : '') + (r.overdue ? ' (기한경과)' : '') },
+  { header: '초과입금액', value: (r) => (r.overpaid ? r.overpaidAmount : ''), type: 'number' },
+  { header: '청구회차', value: (r) => installmentSummary(r) },
+  { header: '청구 전 금액', value: (r) => num(r.unbilledAmount), type: 'number' },
+  { header: '미발행금액', value: (r) => num(r.unissuedAmount), type: 'number' },
+  { header: '발행 후 입금대기', value: (r) => num(r.issuedAwaitingAmount), type: 'number' },
+  { header: '입금예정일', value: 'nextExpectedDate', type: 'date' },
+  { header: '최종 입금일', value: 'lastPaidDate', type: 'date' },
+  { header: '담당PM', value: (r) => r.pmName ?? '' },
+  { header: '자료 출처', value: (r) => (r.source === 'legacy' ? '과거 CRM' : '신규 판매') },
+  { header: '확인 사유', value: (r) => r.reviewReason ?? '' },
+];
+
+/** 판매건별 수금현황 Excel — 현재 필터·검색·정렬 결과 그대로 */
+export function exportSaleCollections(rows: SaleCollectionExportRow[]): void {
+  exportDataset<SaleCollectionExportRow>({
+    filename: `수금현황_판매건별_${todayStamp()}.xlsx`,
+    sheetName: '판매건별 수금현황',
+    columns: SALE_COLUMNS,
+    rows,
+  });
+}

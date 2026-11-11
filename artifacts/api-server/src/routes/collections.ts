@@ -216,6 +216,163 @@ router.get("/admin/collections", ...adminGuard, requireStaffPermission(["payment
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 판매건별 수금 현황 — GET /admin/collections/sales[?include=legacy]   (READ-ONLY, 저장·수정 없음)
+//  · 조회 단위 = 판매건 1건(청구회차가 여러 개여도 판매금액·미수금은 판매건당 1회만 집계).
+//  · 판매건 = 판매관리와 같은 기준(projects.status ∉ created·quoted·cancelled), 선입금/차감 견적 판매건 제외(기존 수금현황과 동일).
+//  · 총 판매금액 = 현재 견적(is_current·미삭제·derived 제외) price(VAT 포함) — 판매상세 청구정보의 '총 판매금액'과 같은 값.
+//  · 실제 누적 입금액 = 청구행별 실입금 합계. 청구행 실입금은 판매상세 청구정보와 같은 규칙:
+//      입금거래(payment_transactions) 1건 이상 → SUM(customer_paid_amount),
+//      없으면 입금완료 확정(deposit_status=completed AND deposit_confirmed AND paid_date) → 청구액, 그 외 0.
+//    입금예정일·세금계산서 발행 여부·청구회차 상태만으로 입금완료 처리하지 않는다.
+//  · 수금상태: 입금 0 → unpaid(미입금) / 0 < 입금 < 판매금액 → partial(부분입금) / 입금 ≥ 판매금액 → completed(입금완료),
+//    입금 > 판매금액이면 overpaid=true(초과입금 경고).
+//  · 세금계산서: 결제방법이 '세금계산서'인 청구행이 발행 대상, 발행일(issue_date)이 있으면 발행 기록으로 본다(추정 없음).
+//      미발행금액 = 발행 대상 청구행 중 발행일 없는 청구액 / 발행 후 입금대기 = 발행된 청구행의 MAX(청구액 − 행 입금, 0)
+//      청구 전 금액 = MAX(판매금액 − 청구액 합계, 0)(아직 청구행이 없는 금액 — 발행 대상 여부 미정이라 미발행금액과 분리).
+//  · ?include=legacy — 과거 CRM 판매목록 행(판매번호 1건=1행, 위 loadLegacyCollections 판정 그대로)을 함께 반환.
+// ─────────────────────────────────────────────────────────────────────────────
+export type SaleBaseRow = {
+  project_id: number; title: string | null; project_status: string; company_name: string | null;
+  quote_number: string | null; price: string | null; pm_name: string | null;
+};
+export type SalePayRow = {
+  id: number; project_id: number; sequence: number; amount: string | null; payment_method: string | null;
+  issue_date: string | null; expected_date: string | null; paid_date: string | null;
+  deposit_status: string | null; deposit_confirmed: boolean | null; billing_company_name: string | null;
+  tx_cnt: string | null; tx_paid: string | null; last_paid_date: string | null;
+};
+const isTaxInvoiceMethod = (m: string | null) => (m ?? "").replace(/\s/g, "") === "세금계산서";
+
+// 판매건 1건의 수금 집계(순수 함수 — DB 접근 없음). 위 규칙의 단일 구현.
+export function summarizeSaleCollection(b: SaleBaseRow, rows: SalePayRow[], today: string) {
+  const saleTotal = Number(b.price ?? 0);
+  let billed = 0, paidTotal = 0, unissued = 0, issuedAwaiting = 0, invoiceTarget = 0, overdue = false;
+  let lastPaidDate: string | null = null, nextExpectedDate: string | null = null;
+  const installments = rows.map((r) => {
+    const amount = Number(r.amount ?? 0);
+    const txCnt = Number(r.tx_cnt ?? 0);
+    const paid = txCnt > 0 ? Number(r.tx_paid ?? 0)
+      : (r.deposit_status === "completed" && r.deposit_confirmed === true && !!r.paid_date ? amount : 0);
+    const rowRecv = Math.max(amount - paid, 0);
+    const status: "scheduled" | "partial" | "completed" = paid <= 0 ? "scheduled" : paid < amount ? "partial" : "completed";
+    const paidDate = r.last_paid_date ?? (txCnt === 0 && paid > 0 ? r.paid_date : null);
+    billed += amount; paidTotal += paid;
+    if (paidDate && (!lastPaidDate || paidDate > lastPaidDate)) lastPaidDate = paidDate;
+    if (rowRecv > 0 && r.expected_date) {
+      if (!nextExpectedDate || r.expected_date < nextExpectedDate) nextExpectedDate = r.expected_date;
+      if (r.expected_date < today) overdue = true;
+    }
+    const invoice = isTaxInvoiceMethod(r.payment_method);
+    if (invoice) {
+      invoiceTarget += amount;
+      if (r.issue_date) issuedAwaiting += rowRecv; else unissued += amount;
+    }
+    return {
+      id: r.id, sequence: r.sequence, amount, paidAmount: paid, receivable: rowRecv, status,
+      paymentMethod: r.payment_method, issueDate: r.issue_date, expectedDate: r.expected_date, lastPaidDate: paidDate,
+      invoiceTarget: invoice, billingCompanyName: r.billing_company_name,
+    };
+  });
+  const receivable = Math.max(saleTotal - paidTotal, 0);
+  const status: "unpaid" | "partial" | "completed" = paidTotal <= 0 && saleTotal > 0 ? "unpaid" : paidTotal < saleTotal ? "partial" : "completed";
+  return {
+    rowKey: `sale:${b.project_id}`, source: "current" as const, projectId: b.project_id, legacyRowId: null,
+    saleNumber: b.quote_number, projectTitle: b.title, projectStatus: b.project_status,
+    companyName: b.company_name ?? installments.find((i) => i.billingCompanyName)?.billingCompanyName ?? null,
+    saleTotal, paidAmount: paidTotal, receivable,
+    paidRate: saleTotal > 0 ? Math.round((paidTotal / saleTotal) * 1000) / 10 : null,
+    status, overpaid: paidTotal > saleTotal, overpaidAmount: Math.max(paidTotal - saleTotal, 0),
+    billedAmount: billed, unbilledAmount: Math.max(saleTotal - billed, 0),
+    invoiceTargetAmount: invoiceTarget, unissuedAmount: unissued, issuedAwaitingAmount: issuedAwaiting,
+    installments, lastPaidDate, nextExpectedDate, overdue: overdue && receivable > 0,
+    pmName: b.pm_name, reviewReason: null as string | null,
+  };
+}
+
+router.get("/admin/collections/sales", ...adminGuard, requireStaffPermission(["payment.view", "menu.payment"], { allowStaffWithoutRole: true }), async (req, res) => {
+  try {
+    const base = await db.execute<SaleBaseRow>(sql`
+      SELECT p.id AS project_id, p.title, p.status AS project_status,
+        c.name AS company_name, q.quote_number, q.price,
+        (SELECT u.name FROM users u WHERE u.id = p.admin_id) AS pm_name
+      FROM projects p
+      LEFT JOIN companies c ON c.id = p.company_id
+      LEFT JOIN LATERAL (
+        SELECT q1.quote_number, q1.price FROM quotes q1
+        WHERE q1.project_id = p.id AND q1.is_current = true AND q1.deleted_at IS NULL
+          AND (q1.relation_type IS NULL OR q1.relation_type <> 'derived')
+        ORDER BY q1.id DESC LIMIT 1
+      ) q ON true
+      WHERE p.status NOT IN ('created', 'quoted', 'cancelled')
+        AND NOT EXISTS (
+          SELECT 1 FROM quotes q2
+          WHERE q2.project_id = p.id AND q2.is_current = true AND q2.deleted_at IS NULL
+            AND q2.quote_type IN ('b2c_prepaid', 'prepaid_deduction')
+        )
+      ORDER BY p.id DESC`);
+    const pids = base.rows.map((r) => r.project_id);
+    const pays = pids.length ? await db.execute<SalePayRow>(sql`
+      SELECT pp.id, pp.project_id, pp.sequence, pp.amount, pp.payment_method, pp.issue_date, pp.expected_date, pp.paid_date,
+        pp.deposit_status, pp.deposit_confirmed, c.name AS billing_company_name,
+        COALESCE(tx.tx_cnt, 0) AS tx_cnt, COALESCE(tx.tx_paid, 0) AS tx_paid, tx.last_paid_date
+      FROM project_payments pp
+      LEFT JOIN companies c ON c.id = pp.billing_company_id
+      LEFT JOIN (
+        SELECT project_payment_id, COUNT(*) AS tx_cnt, COALESCE(SUM(customer_paid_amount), 0) AS tx_paid, MAX(paid_date) AS last_paid_date
+        FROM payment_transactions GROUP BY project_payment_id
+      ) tx ON tx.project_payment_id = pp.id
+      WHERE pp.project_id IN (${sql.join(pids.map((i) => sql`${i}`), sql`, `)})
+      ORDER BY pp.project_id, pp.sequence, pp.id`) : { rows: [] as SalePayRow[] };
+    const payByProject = new Map<number, SalePayRow[]>();
+    for (const r of pays.rows) { const a = payByProject.get(r.project_id) ?? []; a.push(r); payByProject.set(r.project_id, a); }
+
+    const today = todayKst();
+    const sales = base.rows.map((b) => summarizeSaleCollection(b, payByProject.get(b.project_id) ?? [], today));
+
+    const includeLegacy = String(req.query.include ?? "") === "legacy";
+    const legacy = includeLegacy ? await loadLegacyCollections() : null;
+    const legacySales = (legacy?.rows ?? []).map((l) => ({
+      rowKey: l.rowKey, source: "legacy" as const, projectId: null, legacyRowId: l.legacyRowId,
+      saleNumber: l.quoteNumber, projectTitle: l.projectTitle, projectStatus: null,
+      companyName: l.billingCompanyName,
+      saleTotal: l.amount, paidAmount: l.paidAmount, receivable: l.receivable,
+      paidRate: l.paidAmount != null && l.amount > 0 ? Math.round((l.paidAmount / l.amount) * 1000) / 10 : null,
+      // 과거 CRM 판정 그대로: 입금예정(원본 입금기록 없음) → 미입금, 입금완료 → 입금완료, 확인 필요 → review(집계 제외)
+      status: (l.status === "scheduled" ? "unpaid" : l.status) as "unpaid" | "completed" | "review",
+      overpaid: false, overpaidAmount: 0,
+      billedAmount: null, unbilledAmount: null,
+      invoiceTargetAmount: null, unissuedAmount: null, issuedAwaitingAmount: null,
+      installments: [], lastPaidDate: l.lastPaidDate, nextExpectedDate: null, overdue: false,
+      pmName: l.pmName, reviewReason: l.reviewReason, parsedDepositAmount: l.parsedDepositAmount, saleDate: l.saleDate,
+    }));
+    const all = [...sales, ...legacySales];
+    const counted = all.filter((r) => r.status !== "review");
+    const sum = (xs: typeof all, f: (r: (typeof all)[number]) => number | null) => xs.reduce((s, r) => s + (f(r) ?? 0), 0);
+    const by = (st: string) => counted.filter((r) => r.status === st);
+    const summary = {
+      count: counted.length,
+      totalSales: sum(counted, (r) => r.saleTotal),
+      totalPaid: sum(counted, (r) => r.paidAmount),
+      totalReceivable: sum(counted, (r) => r.receivable),
+      unpaid: { count: by("unpaid").length, amount: sum(by("unpaid"), (r) => r.receivable) },
+      partial: { count: by("partial").length, receivable: sum(by("partial"), (r) => r.receivable), paid: sum(by("partial"), (r) => r.paidAmount) },
+      completed: { count: by("completed").length, amount: sum(by("completed"), (r) => r.saleTotal) },
+      overpaid: { count: counted.filter((r) => r.overpaid).length, amount: sum(counted, (r) => r.overpaidAmount) },
+      unbilled: sum(sales, (r) => r.unbilledAmount),
+      unissued: sum(sales, (r) => r.unissuedAmount),
+      issuedAwaiting: sum(sales, (r) => r.issuedAwaitingAmount),
+      overdueCount: counted.filter((r) => r.overdue).length,
+      review: legacy ? { count: all.length - counted.length, totalAmount: sum(all.filter((r) => r.status === "review"), (r) => r.saleTotal) } : undefined,
+      sources: legacy ? { current: sales.length, legacy: legacySales.length, legacyLinkedExcluded: legacy.linkedExcluded } : undefined,
+    };
+    res.json({ summary, rows: all });
+  } catch (err) {
+    req.log.error({ err }, "판매건별 수금 현황 조회 실패");
+    res.status(500).json({ error: "판매건별 수금 현황 조회 중 오류가 발생했습니다." });
+  }
+});
+
 // ── 과거 CRM 판매목록 → 수금 현황 행(읽기 전용) ─────────────────────────────────
 type LegacySaleRow = {
   id: number; sale_no: string | null; total: string | null; deposit_date: string | null; deposit_memo: string | null;
