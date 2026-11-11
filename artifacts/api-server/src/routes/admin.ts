@@ -3444,6 +3444,7 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
     hasTravelExpense?: boolean; hasEquipment?: boolean; isCustomProduct?: boolean;
     discountType?: string; discountValue?: number; discountReason?: string;
     parentItemIndex?: number | null;   // 서비스 그룹: 같은 items[] 내 본 서비스 인덱스(부대항목만 지정)
+    sourceItemId?: number | null;      // 편집 전 기존 품목 id(편집 화면 _lid 'S{id}') — 수행정보 판매항목 연결 승계용
   };
   const { title, items, note, quoteType, issueDate, validUntil, companyId, contactId, divisionId, adminId, versionReason, prepaidLines } = req.body as {
     title?: string; items?: PutItemInput[]; note?: string;
@@ -3475,7 +3476,7 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
   const totalPrice = calcItems.reduce((s, it) => s + it.totalAmount, 0);
   // 감사로그용 수정 전 값 + 판매 확정(approved) 견적의 금액 변경은 변경사유 필수
   const [qBefore] = await db.select({ price: quotesTable.price, status: quotesTable.status, projectId: quotesTable.projectId }).from(quotesTable).where(eq(quotesTable.id, quoteId));
-  const itemsBefore = await db.select({ productName: quoteItemsTable.productName, totalAmount: quoteItemsTable.totalAmount }).from(quoteItemsTable).where(eq(quoteItemsTable.quoteId, quoteId));
+  const itemsBefore = await db.select({ id: quoteItemsTable.id, productName: quoteItemsTable.productName, supplyAmount: quoteItemsTable.supplyAmount, taxAmount: quoteItemsTable.taxAmount, totalAmount: quoteItemsTable.totalAmount }).from(quoteItemsTable).where(eq(quoteItemsTable.quoteId, quoteId));
   const priceChanged = qBefore != null && Math.abs(Number(qBefore.price ?? 0) - totalPrice) >= 0.005;
   // 과거 CRM 전환 견적 — 원본은 총액만 있고 공급가·부가세 구분이 확인되지 않은 금액이다.
   //   편집 화면의 부가세 재계산 등으로 원본 총액과 다른 금액이 저장되지 않도록, 금액이 바뀌는 저장은 명시적 확인을 요구한다(임의 VAT 가산 방지).
@@ -3543,6 +3544,8 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
         // 변경사유(version_reason) — 전달된 경우에만 갱신(미전달 시 기존값 보존)
         ...(versionReason !== undefined ? { versionReason: versionReason.trim() || null } : {}),
       }).where(eq(quotesTable.id, quoteId));
+      // 수정 전 품목 id(수행정보 판매항목 연결 승계용) — 품목은 아래에서 전량 재삽입되어 id 가 바뀐다.
+      const oldItemIds = new Set((await tx.select({ id: quoteItemsTable.id }).from(quoteItemsTable).where(eq(quoteItemsTable.quoteId, quoteId))).map(r => r.id));
       await tx.delete(quoteItemsTable).where(eq(quoteItemsTable.quoteId, quoteId));
       const putInserted = await tx.insert(quoteItemsTable).values(calcItems.map((it, i) => ({
         quoteId,
@@ -3581,6 +3584,23 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
       }))).returning({ id: quoteItemsTable.id });
       // 서비스 그룹 링크 재확정(수정 시 전량 재삽입 → 인덱스 기반 재연결). 삽입 순서 = items 순서.
       await applyParentIndexLinks(tx, putInserted.map(r => r.id), items);
+      // 수행정보 판매항목 연결 승계 — 편집 화면이 보낸 기존 품목 id(sourceItemId)가 이 견적의 수정 전 품목이면
+      //   그 품목을 가리키던 수행정보의 sale_item_id 만 새 품목 id 로 옮긴다(그 외 수행정보 값은 변경 없음).
+      //   삭제된 품목·새 품목·출처 불명 품목은 옮기지 않는다(기존 동작 유지). 같은 기존 id 는 1회만 승계.
+      {
+        const [qp] = await tx.select({ projectId: quotesTable.projectId }).from(quotesTable).where(eq(quotesTable.id, quoteId));
+        if (qp?.projectId != null) {
+          const used = new Set<number>();
+          for (let i = 0; i < items.length; i++) {
+            const src = Number((items[i] as PutItemInput).sourceItemId);
+            const dst = putInserted[i]?.id;
+            if (!Number.isInteger(src) || !oldItemIds.has(src) || used.has(src) || dst == null) continue;
+            used.add(src);
+            await tx.update(performanceAssignmentsTable).set({ saleItemId: dst })
+              .where(and(eq(performanceAssignmentsTable.projectId, qp.projectId), eq(performanceAssignmentsTable.saleItemId, src), isNull(performanceAssignmentsTable.deletedAt)));
+          }
+        }
+      }
 
       // ── 차감 견적서: 선입/이월 + 차감 예약 재동기화 ───────────────────────────
       if (isPrepaidDeductionQuoteType(quoteType ?? "b2b_standard")) {
@@ -3617,8 +3637,9 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
     });
     await logEvent("quote", quoteId, "quote_items_updated", req.log, (req as any).user ?? undefined, JSON.stringify({
       projectId: qBefore?.projectId ?? null, reason: versionReason?.trim() || null,
-      before: { price: qBefore ? Number(qBefore.price) : null, items: itemsBefore.map(i => ({ productName: i.productName, totalAmount: Number(i.totalAmount) })) },
-      after: { price: totalPrice, items: calcItems.map(i => ({ productName: i.productName, totalAmount: i.totalAmount })) },
+      // 공급가액·부가세도 기록(총액이 같은 공급가/부가세 정정도 감사로그에서 확인 가능). 기존 키(productName·totalAmount) 유지.
+      before: { price: qBefore ? Number(qBefore.price) : null, items: itemsBefore.map(i => ({ id: i.id, productName: i.productName, supplyAmount: Number(i.supplyAmount), taxAmount: Number(i.taxAmount), totalAmount: Number(i.totalAmount) })) },
+      after: { price: totalPrice, items: calcItems.map(i => ({ productName: i.productName, supplyAmount: i.supplyAmount, taxAmount: i.taxAmount, totalAmount: i.totalAmount })) },
     }));
     res.json({ id: quoteId, price: totalPrice });
   } catch (err) {

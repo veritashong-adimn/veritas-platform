@@ -190,8 +190,14 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
     if (editItems.length === 0) { setToast('최소 1개 이상의 품목이 필요합니다.'); return; }
     const vatForCheck = items[0]?.taxType ?? 'taxable';
     let versionReason: string | undefined;
-    if (saleConfirmed && Math.abs(calcTotals(editItems, vatForCheck).total - Number(quote.price ?? 0)) >= 0.005) {
-      const r = await promptDialog({ title: '판매금액 변경 사유', message: '판매 확정 건의 금액이 변경됩니다. 변경 사유를 입력하세요(감사로그에 기록됩니다).', placeholder: '예: 고객 요청으로 수량 조정', confirmLabel: '저장' });
+    // 판매 확정 건: 총액뿐 아니라 공급가액·부가세가 바뀌어도(총액 동일한 공급가/부가세 정정 포함) 변경 사유를 받는다.
+    const editTotals = calcTotals(editItems, vatForCheck);
+    const curSupply = items.reduce((s: number, it: any) => s + Number(it.supplyAmount ?? 0), 0);
+    const curTax = items.reduce((s: number, it: any) => s + Number(it.taxAmount ?? 0), 0);
+    const amountChanged = Math.abs(editTotals.total - Number(quote.price ?? 0)) >= 0.005
+      || Math.abs(editTotals.supply - curSupply) >= 0.005 || Math.abs(editTotals.tax - curTax) >= 0.005;
+    if (saleConfirmed && amountChanged) {
+      const r = await promptDialog({ title: '판매금액 변경 사유', message: '판매 확정 건의 금액(공급가액·부가세·총액)이 변경됩니다. 변경 사유를 입력하세요(감사로그에 기록됩니다).', placeholder: '예: 고객 요청으로 수량 조정', confirmLabel: '저장' });
       if (r == null || !r.trim()) return;
       versionReason = r.trim();
     }

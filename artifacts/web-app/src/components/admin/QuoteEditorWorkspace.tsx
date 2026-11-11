@@ -1714,7 +1714,9 @@ export function buildQuoteItemsBody(items: QuoteItemForm[], vat: VatType) {
     const base = toApiItem(it, vat);
     const pIdx = it.parentLid != null ? idxByLid.get(it.parentLid) : undefined;
     const parentItemIndex = pIdx != null && pIdx !== i ? pIdx : null;   // 자기참조 방지
-    return { ...base, parentItemIndex };
+    // 기존 품목(_lid 'S{id}')이면 원래 id 를 함께 보내 서버가 수행정보 판매항목 연결을 새 품목으로 승계한다.
+    const m = typeof it._lid === 'string' ? /^S(\d+)$/.exec(it._lid) : null;
+    return { ...base, parentItemIndex, ...(m ? { sourceItemId: Number(m[1]) } : {}) };
   });
 }
 
