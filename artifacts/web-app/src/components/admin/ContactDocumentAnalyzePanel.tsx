@@ -50,12 +50,22 @@ export function ContactDocumentAnalyzePanel({
   onToast,
   onClose,
   onApplied,
+  prefetched,
+  currentValues,
+  extraTop,
 }: {
-  file: File;
+  /** 파일 분석 시 필수. 텍스트 분석(prefetched) 시 생략 */
+  file?: File;
   token: string;
   onToast: (msg: string) => void;
   onClose: () => void;
   onApplied: (values: Partial<ContactAnalyzeResult["extracted"]>) => void;
+  /** 이미 받은 텍스트 분석 결과. 있으면 파일 분석 API를 호출하지 않는다. */
+  prefetched?: ContactAnalyzeResult;
+  /** 현재 폼 입력값 — 값이 있고 AI 값과 다르면 기본 미선택(덮어쓰기 방지) */
+  currentValues?: Record<string, string>;
+  /** 결과 상단 추가 영역(기존 담당자/거래처 후보 안내) */
+  extraTop?: React.ReactNode;
 }) {
   const authH = { Authorization: `Bearer ${token}` };
 
@@ -65,7 +75,23 @@ export function ContactDocumentAnalyzePanel({
   const [checked, setChecked] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
 
+  const initFrom = (res: ContactAnalyzeResult) => {
+    setResult(res);
+    const initEdited: Record<string, string> = {};
+    const initChecked: Record<string, boolean> = {};
+    for (const f of CONTACT_FIELDS) {
+      const v = res.extracted[f.key];
+      const cur = currentValues?.[f.key]?.trim();
+      initEdited[f.key] = v ?? "";
+      initChecked[f.key] = !!v && (!cur || cur === v);
+    }
+    setEdited(initEdited);
+    setChecked(initChecked);
+  };
+
   const handleAnalyze = async () => {
+    if (prefetched) { initFrom(prefetched); setAnalyzing(false); return; }
+    if (!file) { setError("분석할 파일이 없습니다."); setAnalyzing(false); return; }
     setAnalyzing(true);
     setError(null);
     setResult(null);
@@ -89,17 +115,7 @@ export function ContactDocumentAnalyzePanel({
         setError(errDetail.trim());
         return;
       }
-      const res = d as unknown as ContactAnalyzeResult;
-      setResult(res);
-      const initEdited: Record<string, string> = {};
-      const initChecked: Record<string, boolean> = {};
-      for (const f of CONTACT_FIELDS) {
-        const v = res.extracted[f.key];
-        initEdited[f.key] = v ?? "";
-        initChecked[f.key] = !!v;
-      }
-      setEdited(initEdited);
-      setChecked(initChecked);
+      initFrom(d as unknown as ContactAnalyzeResult);
     } catch (e) {
       setError(e instanceof Error ? e.message : "AI 분석에 실패했습니다.");
     } finally {
@@ -134,7 +150,7 @@ export function ContactDocumentAnalyzePanel({
         <div style={{ padding: "16px 20px", borderBottom: "1px solid #e5e7eb", display: "flex", alignItems: "center", justifyContent: "space-between", background: "#f0f9ff" }}>
           <div>
             <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#0369a1" }}>
-              📇 담당자 명함 AI 분석
+              {prefetched ? "📝 담당자 텍스트 AI 분석" : "📇 담당자 명함 AI 분석"}
             </h3>
             <p style={{ margin: "2px 0 0", fontSize: 12, color: "#6b7280" }}>
               분석 결과를 검토 후 승인하면 등록 폼에 자동 반영됩니다.
@@ -176,6 +192,8 @@ export function ContactDocumentAnalyzePanel({
                 <span style={{ fontSize: 11, color: "#6b7280", marginLeft: "auto" }}>체크된 항목만 폼에 반영됩니다.</span>
               </div>
 
+              {extraTop}
+
               <div style={{ display: "grid", gridTemplateColumns: "26px 120px 1fr", gap: "0 8px", marginBottom: 6, paddingBottom: 4, borderBottom: "1px solid #e5e7eb" }}>
                 <div /><div />
                 <div style={{ fontSize: 11, fontWeight: 700, color: "#059669", textAlign: "center" }}>AI 추출값 (수정 가능)</div>
@@ -207,6 +225,14 @@ export function ContactDocumentAnalyzePanel({
                         background: checked[f.key] ? "#f0fdf4" : "#fff",
                       }} />
                   )}
+                  {(() => {
+                    const cur = currentValues?.[f.key]?.trim();
+                    return cur && edited[f.key] && cur !== edited[f.key] ? (
+                      <p style={{ gridColumn: "3", margin: "3px 0 0", fontSize: 11, color: "#b45309" }} data-testid={`contact-ocr-current-${f.key}`}>
+                        현재 입력값: {cur} — 체크하면 AI 값으로 바뀝니다.
+                      </p>
+                    ) : null;
+                  })()}
                 </div>
               ))}
 

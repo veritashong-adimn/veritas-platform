@@ -4,6 +4,10 @@ import { formatPhone } from "../../lib/utils";
 import { DraggableModal } from "./DraggableModal";
 import { PrimaryBtn, GhostBtn } from "../ui";
 import { ContactDocumentAnalyzePanel } from "./ContactDocumentAnalyzePanel";
+import {
+  AiTextPasteBox, AiInputModeTabs, COMPANY_MATCH_LABEL, CONTACT_MATCH_LABEL, isStrongCompanyMatch,
+  type TextAnalyzeResult, type TextMatchCompany,
+} from "./AiTextPasteBox";
 
 // ─── 공통 스타일 ────────────────────────────────────────────────────────────
 const inputStyle: React.CSSProperties = {
@@ -51,6 +55,8 @@ type Props =
       onClose: () => void;
       onSuccess: () => void;
       onToast: (msg: string) => void;
+      /** AI 텍스트 분석에서 기존 담당자(동일인)를 선택했을 때 — 신규 등록 대신 기존 담당자 상세로 이동 */
+      onOpenExistingContact?: (contactId: number) => void;
       contactId?: never;
       initialData?: never;
     }
@@ -63,6 +69,7 @@ type Props =
       onSuccess: () => void;
       onToast: (msg: string) => void;
       companies?: never;
+      onOpenExistingContact?: never;
     };
 
 const emptyForm: FormData = {
@@ -74,7 +81,7 @@ const emptyForm: FormData = {
 };
 
 // ─── 컴포넌트 ────────────────────────────────────────────────────────────────
-export function ContactFormModal({ mode, token, companies, contactId, initialData, onClose, onSuccess, onToast }: Props) {
+export function ContactFormModal({ mode, token, companies, contactId, initialData, onClose, onSuccess, onToast, onOpenExistingContact }: Props) {
   const authH = { Authorization: `Bearer ${token}` };
   const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -117,6 +124,11 @@ export function ContactFormModal({ mode, token, companies, contactId, initialDat
   const [showAiPanel, setShowAiPanel] = useState(false);
   const [aiDragOver, setAiDragOver] = useState(false);
   const ALLOWED_EXTS = [".jpg", ".jpeg", ".png", ".pdf"];
+  // AI 텍스트 붙여넣기(등록 전용)
+  const [aiInputMode, setAiInputMode] = useState<"file" | "text">("file");
+  const [textResult, setTextResult] = useState<TextAnalyzeResult | null>(null);
+  // 거래처가 확정되지 않았을 때 사용자가 고를 Master 후보
+  const [companyChoices, setCompanyChoices] = useState<TextMatchCompany[]>([]);
 
   // edit 모드: 마운트 시 division 목록 로드
   useEffect(() => {
@@ -139,7 +151,7 @@ export function ContactFormModal({ mode, token, companies, contactId, initialDat
   };
 
   // ── AI 결과 반영 ──────────────────────────────────────────────────────────
-  const handleAiApplied = (values: Record<string, string | null | undefined>) => {
+  const applyAiFields = (values: Record<string, string | null | undefined>) => {
     setForm(prev => {
       const next = { ...prev };
       if (values.contactName) next.name = values.contactName;
@@ -151,6 +163,42 @@ export function ContactFormModal({ mode, token, companies, contactId, initialDat
       if (values.memo) next.memo = values.memo;
       return next;
     });
+  };
+
+  const linkCompany = (id: number, name: string) => {
+    setForm(prev => ({ ...prev, companyId: id, divisionId: null }));
+    setCompanyQuery(name);
+    setDivisions([]);
+    setCompanyChoices([]);
+    loadDivisions(id);
+  };
+
+  // ── 텍스트 분석 결과 반영 — 거래처는 서버 Master 검색 결과로 연결 ─────────────
+  // 강한 일치(사업자번호/거래처명/별칭) 1건이면 자동 연결, 여러 건·약한 일치면 사용자 선택.
+  const handleTextApplied = (values: Record<string, string | null | undefined>) => {
+    const res = textResult;
+    applyAiFields(values);
+    if (mode === "create" && form.companyId === null && res) {
+      const cands = res.matches.companies;
+      const strong = cands.filter(isStrongCompanyMatch);
+      if (strong.length === 1) {
+        linkCompany(strong[0].id, strong[0].name);
+        onToast(`기존 거래처 연결: "${strong[0].name}" — 확인 후 등록해 주세요.`);
+        return;
+      }
+      if (cands.length > 0) {
+        setCompanyChoices(cands);
+        if (values.companyName) setCompanyQuery(values.companyName);
+        onToast("거래처 후보가 여러 건입니다. 거래처 선택에서 직접 골라 주세요.");
+        return;
+      }
+      if (values.companyName) setCompanyQuery(values.companyName);
+    }
+    onToast("텍스트 분석 결과가 폼에 반영되었습니다. 확인 후 등록해 주세요.");
+  };
+
+  const handleAiApplied = (values: Record<string, string | null | undefined>) => {
+    applyAiFields(values);
 
     // 거래처 자동 매칭 (create 모드 + 회사명 추출 시)
     if (mode === "create" && values.companyName && form.companyId === null) {
@@ -282,6 +330,59 @@ export function ContactFormModal({ mode, token, companies, contactId, initialDat
   return (
     <>
       {/* AI 분석 패널 */}
+      {textResult && (
+        <ContactDocumentAnalyzePanel
+          token={token}
+          onToast={onToast}
+          prefetched={textResult as never}
+          currentValues={{
+            contactName: form.name, department: form.department, position: form.position,
+            email: form.email, mobilePhone: form.mobile, officePhone: form.officePhone, memo: form.memo,
+          }}
+          extraTop={(textResult.matches.contacts.length > 0 || textResult.matches.companies.length > 0) ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+              {textResult.matches.contacts.length > 0 && (
+                <div data-testid="ai-text-contact-candidates" style={{ padding: "10px 12px", background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8 }}>
+                  <p style={{ margin: "0 0 6px", fontSize: 12, fontWeight: 700, color: "#991b1b" }}>
+                    ⚠ 이미 등록된 담당자일 수 있습니다 — 동일인이면 신규 등록 대신 기존 담당자를 사용해 주세요.
+                  </p>
+                  {textResult.matches.contacts.map(c => (
+                    <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, padding: "4px 0", borderTop: "1px solid #fee2e2", flexWrap: "wrap" }}>
+                      <span style={{ fontWeight: 700, color: "#111827" }}>{c.name}</span>
+                      <span style={{ color: "#374151" }}>{c.companyName ?? "(거래처 없음)"}{c.department ? ` · ${c.department}` : ""}{c.position ? ` · ${c.position}` : ""}</span>
+                      <span style={{ color: "#6b7280" }}>{[c.email, c.mobile ? formatPhone(c.mobile) : null].filter(Boolean).join(" / ")}</span>
+                      <span style={{ fontSize: 10, background: "#fee2e2", color: "#991b1b", borderRadius: 10, padding: "1px 7px" }}>{CONTACT_MATCH_LABEL[c.matchReason]}</span>
+                      {onOpenExistingContact && (
+                        <button type="button" onClick={() => { setTextResult(null); onOpenExistingContact(c.id); }}
+                          data-testid={`ai-text-use-contact-${c.id}`} aria-label={`기존 담당자 ${c.name} 사용`}
+                          style={{ marginLeft: "auto", fontSize: 11, padding: "3px 10px", border: "1px solid #dc2626", borderRadius: 5, background: "#fff", color: "#dc2626", cursor: "pointer", fontWeight: 600 }}>
+                          기존 담당자 사용
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {textResult.matches.companies.length > 0 && (
+                <div data-testid="ai-text-company-candidates" style={{ padding: "10px 12px", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, fontSize: 12 }}>
+                  <p style={{ margin: "0 0 4px", fontWeight: 700, color: "#1d4ed8" }}>거래처 Master 후보</p>
+                  {textResult.matches.companies.map(c => (
+                    <div key={c.id} style={{ padding: "2px 0", color: "#374151" }}>
+                      #{c.id} {c.name} <span style={{ fontSize: 10, color: "#1d4ed8" }}>({COMPANY_MATCH_LABEL[c.matchReason]})</span>
+                    </div>
+                  ))}
+                  <p style={{ margin: "4px 0 0", color: "#6b7280", fontSize: 11 }}>
+                    {textResult.matches.companies.filter(isStrongCompanyMatch).length === 1 ? "폼에 반영하면 일치하는 거래처가 자동 연결됩니다." : "폼에 반영 후 거래처 선택에서 직접 골라 주세요."}
+                  </p>
+                </div>
+              )}
+            </div>
+          ) : undefined}
+          onClose={() => setTextResult(null)}
+          onApplied={(v) => { handleTextApplied(v as Record<string, string>); setTextResult(null); }}
+        />
+      )}
+
       {showAiPanel && aiFile && (
         <ContactDocumentAnalyzePanel
           file={aiFile}
@@ -306,12 +407,24 @@ export function ContactFormModal({ mode, token, companies, contactId, initialDat
           {/* ══ [1] AI 자동입력 Card (create 전용) ══ */}
           {mode === "create" && (
             <div style={{ background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: 12, padding: "16px 20px" }}>
-              <p style={{ margin: "0 0 4px", fontSize: 14, fontWeight: 700, color: "#0369a1" }}>
-                📇 AI 담당자 자동입력
-              </p>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", margin: "0 0 4px" }}>
+                <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#0369a1" }}>
+                  📇 AI 담당자 자동입력
+                </p>
+                <div style={{ marginLeft: "auto" }}>
+                  <AiInputModeTabs mode={aiInputMode} onChange={setAiInputMode} testIdPrefix="contact-ai" />
+                </div>
+              </div>
               <p style={{ margin: "0 0 12px", fontSize: 12, color: "#6b7280" }}>
-                명함, 이메일 서명, PDF를 업로드하면 AI가 담당자 정보를 자동 추출합니다. (JPG, PNG, PDF)
+                {aiInputMode === "text"
+                  ? "이메일 서명·본문, 명함 텍스트를 붙여넣으면 AI가 담당자 정보를 추출하고 기존 거래처·담당자를 찾아 줍니다."
+                  : "명함, 이메일 서명, PDF를 업로드하면 AI가 담당자 정보를 자동 추출합니다. (JPG, PNG, PDF)"}
               </p>
+
+              {aiInputMode === "text" ? (
+                <AiTextPasteBox kind="contact" token={token} onResult={setTextResult}
+                  placeholder={"예)\n홍길동 과장 | 해외사업팀\n(주)베리타스\nM. 010-1234-5678  T. 02-123-4567\nhong@veritas.co.kr"} />
+              ) : (<>
 
               {/* 드래그 앤 드롭 영역 */}
               <div
@@ -371,6 +484,7 @@ export function ContactFormModal({ mode, token, companies, contactId, initialDat
                   <span key={t} style={{ fontSize: 11, background: "#e0f2fe", color: "#0369a1", borderRadius: 6, padding: "2px 8px", fontWeight: 600 }}>{t}</span>
                 ))}
               </div>
+              </>)}
             </div>
           )}
 
@@ -382,6 +496,20 @@ export function ContactFormModal({ mode, token, companies, contactId, initialDat
               <div>
                 {form.companyId === null ? (
                   <>
+                    {companyChoices.length > 0 && (
+                      <div data-testid="ai-company-choices" style={{ marginBottom: 10, padding: "10px 12px", background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8 }}>
+                        <p style={{ margin: "0 0 6px", fontSize: 12, fontWeight: 700, color: "#92400e" }}>AI 분석 거래처 후보 — 소속 거래처를 선택해 주세요</p>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          {companyChoices.map(c => (
+                            <button key={c.id} type="button" onClick={() => linkCompany(c.id, c.name)}
+                              data-testid={`ai-company-choice-${c.id}`} aria-label={`거래처 ${c.name} 선택`}
+                              style={{ fontSize: 12, padding: "5px 10px", borderRadius: 7, border: "1px solid #f59e0b", background: "#fff", color: "#92400e", cursor: "pointer", fontWeight: 600 }}>
+                              {c.name} <span style={{ fontWeight: 400, fontSize: 10 }}>({COMPANY_MATCH_LABEL[c.matchReason]})</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     <label style={fieldLabel}>거래처 <span style={{ color: "#dc2626" }}>*</span></label>
                     <input
                       value={companyQuery}

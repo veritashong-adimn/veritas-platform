@@ -18,6 +18,7 @@ import {
 import { PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
 import { formatPhone } from "../../lib/utils";
 import { CompanyDocumentAnalyzePanel, type CompanyOcrDocType } from "./CompanyDocumentAnalyzePanel";
+import { AiTextPasteBox, AiInputModeTabs, COMPANY_MATCH_LABEL, isStrongCompanyMatch, type TextAnalyzeResult } from "./AiTextPasteBox";
 import { CompanyAliasSection } from "./CompanyAliasSection";
 import { DateField } from "./DatePickerShared";
 
@@ -161,6 +162,9 @@ export function CompanyForm({
   const [bankbookFile, setBankbookFile] = useState<File | null>(null);
   const [ocrPanel, setOcrPanel] = useState<CompanyOcrDocType | null>(null);
   const [dragOverType, setDragOverType] = useState<CompanyOcrDocType | null>(null);
+  // AI 텍스트 붙여넣기 자동입력(등록 전용) — 파일 업로드와 같은 검토 패널로 반영
+  const [aiInputMode, setAiInputMode] = useState<"file" | "text">("file");
+  const [textResult, setTextResult] = useState<TextAnalyzeResult | null>(null);
 
   // AI 업로드 원본(사업자등록증/통장사본)을 부모에 노출(외주업체 등록 시 vendor_documents 보관용, opt-in).
   useEffect(() => {
@@ -229,6 +233,29 @@ export function CompanyForm({
       return next;
     });
     onToast("사업자등록증 정보가 폼에 자동 반영되었습니다.");
+  };
+  // 텍스트 분석 반영 — 검토 패널에서 체크한 항목만 들어온다(미추출 항목은 기존 값 유지).
+  const applyTextOcr = (_fields: string[], values: Record<string, string>) => {
+    setForm(prev => {
+      const next = { ...prev };
+      for (const k of ["name", "businessNumber", "representativeName", "registeredAt", "industry", "businessCategory", "address"] as const) {
+        if (values[k]) next[k] = values[k];
+      }
+      if (values.customerType && prev.companyType === "client" && ["CORPORATE", "PUBLIC", "INDIVIDUAL"].includes(values.customerType)) {
+        next.customerType = values.customerType;
+      }
+      // 휴대폰·이메일 입력칸은 개인고객 화면에만 보인다. 기업·공공·외주는 화면에 보이지 않는 값이
+      // 저장되지 않도록 메모에 적어 사용자가 확인하게 한다.
+      const showsContactFields = next.companyType === "client" && next.customerType === "INDIVIDUAL";
+      const memoLines: string[] = [];
+      if (values.mobile) { if (showsContactFields) next.mobile = values.mobile; else memoLines.push(`대표전화: ${values.mobile}`); }
+      if (values.email) { if (showsContactFields) next.email = values.email; else memoLines.push(`이메일: ${values.email}`); }
+      if (values.website) memoLines.push(`홈페이지: ${values.website}`);
+      const add = memoLines.filter(l => !prev.notes.includes(l));
+      if (add.length) next.notes = prev.notes ? `${prev.notes}\n${add.join("\n")}` : add.join("\n");
+      return next;
+    });
+    onToast("텍스트 분석 결과가 폼에 반영되었습니다. 확인 후 등록해 주세요.");
   };
   const applyBankbookOcr = (_fields: string[], values: Record<string, string>) => {
     const parts = [
@@ -333,6 +360,39 @@ export function CompanyForm({
           onApplied={(fields, values) => { applyLicenseOcr(fields, values); setOcrPanel(null); }}
         />
       )}
+      {textResult && (
+        <CompanyDocumentAnalyzePanel
+          docType="text" token={token} onToast={onToast} prefetched={textResult}
+          currentValues={{
+            name: form.name, businessNumber: form.businessNumber, representativeName: form.representativeName,
+            industry: form.industry, businessCategory: form.businessCategory, address: form.address,
+            email: form.email, mobile: form.mobile,
+          }}
+          extraTop={textResult.matches.companies.length > 0 ? (
+            <div data-testid="ai-text-company-candidates" style={{ marginBottom: 12, padding: "10px 12px", background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8 }}>
+              <p style={{ margin: "0 0 6px", fontSize: 12, fontWeight: 700, color: "#92400e" }}>
+                ⚠ 이미 등록된 거래처일 수 있습니다{textResult.matches.companies.some(isStrongCompanyMatch) ? " (일치 항목 있음)" : ""} — 신규 등록 전 확인해 주세요.
+              </p>
+              {textResult.matches.companies.map(c => (
+                <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, padding: "3px 0" }}>
+                  <span style={{ fontWeight: 600, color: "#111827" }}>#{c.id} {c.name}</span>
+                  {c.businessNumber && <span style={{ color: "#6b7280", fontFamily: "monospace" }}>{c.businessNumber}</span>}
+                  <span style={{ fontSize: 10, background: "#fef3c7", color: "#92400e", borderRadius: 10, padding: "1px 7px" }}>{COMPANY_MATCH_LABEL[c.matchReason]}</span>
+                  {onOpenCompany && (
+                    <button type="button" onClick={() => { setTextResult(null); onOpenCompany(c.id); }}
+                      data-testid={`ai-text-open-company-${c.id}`} aria-label={`거래처 ${c.name} 상세보기`}
+                      style={{ marginLeft: "auto", fontSize: 11, padding: "2px 8px", border: "1px solid #d1d5db", borderRadius: 5, background: "#fff", cursor: "pointer" }}>
+                      상세보기
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : undefined}
+          onClose={() => setTextResult(null)}
+          onApplied={(fields, values) => { applyTextOcr(fields, values); setTextResult(null); }}
+        />
+      )}
       {ocrPanel === "bankbook" && bankbookFile && (
         <CompanyDocumentAnalyzePanel
           file={bankbookFile} docType="bankbook" token={token} onToast={onToast}
@@ -423,8 +483,17 @@ export function CompanyForm({
               <div style={{ background: "#f0f9ff", padding: "9px 16px", borderBottom: "1px solid #bae6fd", display: "flex", alignItems: "center", gap: 8 }}>
                 <span style={{ fontSize: 17 }}>✨</span>
                 <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#0369a1" }}>AI 문서 자동입력</p>
+                {mode === "create" && (
+                  <div style={{ marginLeft: "auto" }}>
+                    <AiInputModeTabs mode={aiInputMode} onChange={setAiInputMode} testIdPrefix="company-ai" />
+                  </div>
+                )}
               </div>
               <div style={{ padding: "12px 16px" }}>
+                {mode === "create" && aiInputMode === "text" ? (
+                  <AiTextPasteBox kind="company" token={token} onResult={setTextResult}
+                    placeholder="이메일 본문·서명, 회사 소개, 사업자 정보 등을 붙여넣으세요. (거래처명, 사업자등록번호, 대표자, 업태·종목, 주소 등)" />
+                ) : (
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                   {(["business_license", "bankbook"] as const).map(dt => {
                     const isLicense = dt === "business_license";
@@ -479,6 +548,7 @@ export function CompanyForm({
                     );
                   })}
                 </div>
+                )}
               </div>
             </div>
           );

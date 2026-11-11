@@ -9,7 +9,25 @@ interface FieldConfig {
   mono?: boolean;
 }
 
-const FIELD_CONFIG: Record<CompanyOcrDocType, FieldConfig[]> = {
+// "text": 붙여넣은 텍스트 AI 분석(AiTextPasteBox) 결과 검토용 — 파일 분석과 같은 검토/반영 흐름을 재사용한다.
+type PanelDocType = CompanyOcrDocType | "text";
+
+const CUSTOMER_TYPE_LABEL: Record<string, string> = { CORPORATE: "기업", PUBLIC: "공공기관", INDIVIDUAL: "개인고객" };
+
+const FIELD_CONFIG: Record<PanelDocType, FieldConfig[]> = {
+  text: [
+    { key: "customerType", label: "고객 유형 (근거 있을 때만)" },
+    { key: "name", label: "거래처명" },
+    { key: "businessNumber", label: "사업자등록번호", mono: true },
+    { key: "representativeName", label: "대표자명" },
+    { key: "registeredAt", label: "개업일" },
+    { key: "industry", label: "업태" },
+    { key: "businessCategory", label: "종목" },
+    { key: "address", label: "주소" },
+    { key: "email", label: "이메일 (기업은 메모)" },
+    { key: "mobile", label: "연락처 (기업은 메모)" },
+    { key: "website", label: "홈페이지 (메모)" },
+  ],
   business_license: [
     { key: "name", label: "상호(거래처명)" },
     { key: "businessNumber", label: "사업자등록번호", mono: true },
@@ -29,10 +47,11 @@ const FIELD_CONFIG: Record<CompanyOcrDocType, FieldConfig[]> = {
 
 interface AnalyzeResult {
   extracted: Record<string, string | null>;
-  current: Record<string, string | null>;
-  validations: Record<string, boolean>;
+  current?: Record<string, string | null>;
+  validations?: Record<string, boolean>;
   confidence: "high" | "medium" | "low";
   notes: string | null;
+  customerTypeEvidence?: string | null;
 }
 
 const confidenceColor: Record<string, string> = { high: "#059669", medium: "#d97706", low: "#dc2626" };
@@ -58,15 +77,25 @@ export function CompanyDocumentAnalyzePanel({
   onToast,
   onClose,
   onApplied,
+  prefetched,
+  currentValues,
+  extraTop,
 }: {
-  file: File;
-  docType: CompanyOcrDocType;
+  /** 파일 분석 시 필수. docType="text"(prefetched 사용) 에서는 생략 */
+  file?: File;
+  docType: PanelDocType;
   token: string;
   onToast: (msg: string) => void;
   onClose: () => void;
   onApplied: (appliedFields: string[], appliedValues: Record<string, string>) => void;
+  /** 이미 받은 분석 결과(텍스트 분석). 있으면 파일 업로드 분석을 호출하지 않는다. */
+  prefetched?: AnalyzeResult;
+  /** 현재 폼 입력값 — 값이 이미 있고 AI 값과 다르면 기본 미선택(덮어쓰기 방지) */
+  currentValues?: Record<string, string>;
+  /** 결과 상단 추가 영역(기존 거래처 후보 안내 등) */
+  extraTop?: React.ReactNode;
 }) {
-  const label = docType === "business_license" ? "사업자등록증" : "통장사본";
+  const label = docType === "business_license" ? "사업자등록증" : docType === "text" ? "텍스트" : "통장사본";
   const fields = FIELD_CONFIG[docType];
   const authH = { Authorization: `Bearer ${token}` };
 
@@ -76,7 +105,24 @@ export function CompanyDocumentAnalyzePanel({
   const [checked, setChecked] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
 
+  const initFrom = (res: AnalyzeResult) => {
+    setResult(res);
+    const initEdited: Record<string, string> = {};
+    const initChecked: Record<string, boolean> = {};
+    for (const f of fields) {
+      const v = res.extracted[f.key];
+      const cur = currentValues?.[f.key]?.trim();
+      initEdited[f.key] = v ?? "";
+      // 기존 입력값과 다른 AI 값은 사용자가 직접 선택해야 반영된다.
+      initChecked[f.key] = !!v && (!cur || cur === v);
+    }
+    setEdited(initEdited);
+    setChecked(initChecked);
+  };
+
   const handleAnalyze = async () => {
+    if (prefetched) { initFrom(prefetched); setAnalyzing(false); return; }
+    if (!file) { setError("분석할 파일이 없습니다."); setAnalyzing(false); return; }
     setAnalyzing(true);
     setError(null);
     setResult(null);
@@ -90,16 +136,7 @@ export function CompanyDocumentAnalyzePanel({
       });
       const d = await parseJsonResponse(r);
       if (!r.ok) { setError((d.error as string) ?? (d.message as string) ?? `HTTP ${r.status}`); return; }
-      setResult(d as unknown as AnalyzeResult);
-      const initEdited: Record<string, string> = {};
-      const initChecked: Record<string, boolean> = {};
-      for (const f of fields) {
-        const v = (d as unknown as AnalyzeResult).extracted[f.key];
-        initEdited[f.key] = v ?? "";
-        initChecked[f.key] = !!v;
-      }
-      setEdited(initEdited);
-      setChecked(initChecked);
+      initFrom(d as unknown as AnalyzeResult);
     } catch (e) {
       setError(e instanceof Error ? e.message : `${label} 분석에 실패했습니다.`);
     } finally {
@@ -119,7 +156,7 @@ export function CompanyDocumentAnalyzePanel({
     onClose();
   };
 
-  const bankNameUnmatched = docType === "bankbook" && !!result?.extracted.bankName && result.validations.bankNameMatched === false;
+  const bankNameUnmatched = docType === "bankbook" && !!result?.extracted.bankName && result.validations?.bankNameMatched === false;
 
   return (
     <div
@@ -136,7 +173,7 @@ export function CompanyDocumentAnalyzePanel({
         <div style={{ padding: "16px 20px", borderBottom: "1px solid #e5e7eb", display: "flex", alignItems: "center", justifyContent: "space-between", background: "#f0f9ff" }}>
           <div>
             <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#0369a1" }}>
-              {docType === "business_license" ? "📄" : "🏦"} {label} AI 분석
+              {docType === "business_license" ? "📄" : docType === "text" ? "📝" : "🏦"} {label} AI 분석
             </h3>
             <p style={{ margin: "2px 0 0", fontSize: 12, color: "#6b7280" }}>
               분석 결과를 검토 후 승인하면 등록 폼에 자동 반영됩니다.
@@ -182,6 +219,8 @@ export function CompanyDocumentAnalyzePanel({
                 <span style={{ fontSize: 11, color: "#6b7280", marginLeft: "auto" }}>체크된 항목만 폼에 반영됩니다.</span>
               </div>
 
+              {extraTop}
+
               {bankNameUnmatched && (
                 <div style={{ padding: "8px 12px", marginBottom: 8, background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, fontSize: 12, color: "#991b1b", fontWeight: 600 }}>
                   ⚠️ 은행명이 등록된 은행 목록과 일치하지 않습니다. 입력값을 확인해 주세요.
@@ -206,6 +245,19 @@ export function CompanyDocumentAnalyzePanel({
                     style={{ marginTop: 9 }}
                   />
                   <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", paddingTop: 7, paddingRight: 4 }}>{f.label}</label>
+                  <div>
+                  {f.key === "customerType" ? (
+                    <select
+                      value={edited[f.key] ?? ""}
+                      onChange={e => setEdited(p => ({ ...p, [f.key]: e.target.value }))}
+                      aria-label={`${f.label} AI 추천값`}
+                      data-testid={`company-ocr-input-${f.key}`}
+                      style={{ width: "100%", border: checked[f.key] ? "1.5px solid #059669" : "1px solid #d1d5db", borderRadius: 6, padding: "6px 10px", fontSize: 12, background: checked[f.key] ? "#f0fdf4" : "#fff" }}
+                    >
+                      <option value="">(추천 없음 — 직접 선택)</option>
+                      {Object.entries(CUSTOMER_TYPE_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                    </select>
+                  ) : (
                   <input
                     type="text"
                     value={edited[f.key] ?? ""}
@@ -218,6 +270,19 @@ export function CompanyDocumentAnalyzePanel({
                       fontFamily: f.mono ? "monospace" : undefined, background: checked[f.key] ? "#f0fdf4" : "#fff",
                     }}
                   />
+                  )}
+                  {f.key === "customerType" && result.customerTypeEvidence && (
+                    <p style={{ margin: "3px 0 0", fontSize: 11, color: "#6b7280" }}>근거: “{result.customerTypeEvidence}”</p>
+                  )}
+                  {(() => {
+                    const cur = currentValues?.[f.key]?.trim();
+                    return cur && edited[f.key] && cur !== edited[f.key] ? (
+                      <p style={{ margin: "3px 0 0", fontSize: 11, color: "#b45309" }} data-testid={`company-ocr-current-${f.key}`}>
+                        현재 입력값: {cur} — 체크하면 AI 값으로 바뀝니다.
+                      </p>
+                    ) : null;
+                  })()}
+                  </div>
                 </div>
               ))}
 

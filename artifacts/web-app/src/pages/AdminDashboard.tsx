@@ -1855,6 +1855,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               onClose={() => setShowCreateContactModal(false)}
               onSuccess={async () => { await fetchContacts(); }}
               onToast={setToast}
+              onOpenExistingContact={(id) => { setShowCreateContactModal(false); setContactModal(id); }}
             />
           )}
           {/* 상단 '수정' — 선택 1건 담당자 편집 폼 */}
