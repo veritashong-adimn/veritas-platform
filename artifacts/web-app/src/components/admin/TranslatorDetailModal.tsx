@@ -2227,6 +2227,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
       <SensitiveInfoModal
         userId={userId}
         userName={profile?.bio ? `${userEmail} (${profile.bio})` : userEmail}
+        translatorName={userInfo?.name}
         token={token}
         onClose={() => setShowSensitive(false)}
         onToast={onToast}

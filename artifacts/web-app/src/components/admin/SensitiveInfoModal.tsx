@@ -143,8 +143,10 @@ const emptyForm = () => ({
   paymentHold: false, settlementMemo: "",
 });
 
-export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, initialSettlementType, onSettlementTypeSaved }: {
+export function SensitiveInfoModal({ userId, userName, translatorName, token, onClose, onToast, initialSettlementType, onSettlementTypeSaved }: {
   userId: number; userName: string; token: string;
+  // 예금주 기본값용 통번역사 마스터 이름(users.name). userName 은 부제목 표시용(이메일)이라 사용하지 않는다.
+  translatorName?: string | null;
   onClose: () => void; onToast: (msg: string) => void;
   initialSettlementType?: string;
   onSettlementTypeSaved?: (type: string) => void;
@@ -167,7 +169,9 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
       .then(r => r.json())
       .then((d: SensitiveData) => {
         setData(d);
-        const defaultHolder = userName?.trim() ?? "";
+        // 이름(users.name)만 사용 — 없거나 이메일 형태면 빈칸 유지(이메일·로그인 ID 대체 금지)
+        const nameTrim = translatorName?.trim() ?? "";
+        const defaultHolder = nameTrim.includes("@") ? "" : nameTrim;
         const useDefaultHolder = !d.accountHolder?.trim() && !!defaultHolder;
         setHolderAuto(useDefaultHolder);
         setForm({
