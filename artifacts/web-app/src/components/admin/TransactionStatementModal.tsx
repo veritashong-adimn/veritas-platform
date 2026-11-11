@@ -9,12 +9,13 @@
  * - 공급자·수신자 박스·품목 배지·직인은 견적서와 같은 공통 부품(docParts)을 쓴다. 직인은 공급자 정보 박스 오른쪽 위에만 표시.
  * - 인쇄는 견적서와 같은 인쇄 HTML(buildQuotePrintHtml — 페이지 여백·표 분리 규칙 공통)을 사용한다.
  */
-import React, { useEffect, useRef } from 'react';
+import React, { useRef } from 'react';
 import type { QuotePdfData } from '../../lib/quotePdf';
 import { vatSummaryLabel } from '../../lib/quotePdf';
 import { renderQuoteTitle, buildDocFileName, formatDocNumber } from '../../lib/quoteTitle';
 import { alertDialog } from '../ui';
 import { buildQuotePrintHtml } from '../../lib/quotePrintHtml';
+import { DocPreviewWindow } from './DocPreviewWindow';
 import { BRAND, BRAND_LIGHT, useCompanySeal, SealImage, SealErrorNotice, InfoBox, PartyRows, SummaryRow, ItemTypeBadge } from './docParts';
 
 // ─── 숫자 / 날짜 포맷 ────────────────────────────────────────────────────────
@@ -60,12 +61,7 @@ export default function TransactionStatementModal({ data, quoteTitle, onClose }:
   const quoteNo     = formatDocNumber('Q', data.quoteNumber, data.quoteDate);
   const writtenDate = todayStr();
 
-  // ESC로 닫기
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
+  // ESC·닫기·이동·크기 조절은 공통 팝업(DocPreviewWindow)이 처리
 
   // 새 창에서 인쇄 → PDF 저장
   const handlePrint = () => {
@@ -102,63 +98,31 @@ export default function TransactionStatementModal({ data, quoteTitle, onClose }:
         #statement-print-only { display: none; }
       `}</style>
 
-      {/* 오버레이 */}
-      <div
-        style={{
-          position: 'fixed', inset: 0, zIndex: 2000,
-          background: 'rgba(15,23,42,0.6)',
-          display: 'flex', flexDirection: 'column',
-          overflowY: 'auto',
-        }}
-        onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+      {/* 공통 팝업창 — 드래그 이동·크기 조절·내부 스크롤·ESC/X 닫기 */}
+      <DocPreviewWindow
+        testIdPrefix="statement-preview" closeTestId="btn-statement-close" ariaLabel="거래명세서 미리보기"
+        onClose={onClose}
+        title="거래명세서 미리보기"
+        subtitle={<>{statementNo} · {renderQuoteTitle(quoteTitle)}</>}
+        actions={<>
+          <SealErrorNotice error={sealError} />
+          <button
+            onClick={handlePrint}
+            disabled={sealUrl === undefined}
+            style={{
+              padding: '8px 20px', borderRadius: 7, border: 'none',
+              background: '#2563eb', color: '#fff',
+              fontWeight: 700, fontSize: 13, cursor: sealUrl === undefined ? 'wait' : 'pointer', opacity: sealUrl === undefined ? 0.7 : 1,
+            }}
+            data-testid="btn-statement-print"
+            aria-label="거래명세서 인쇄 / PDF 저장"
+          >
+            🖨 인쇄 / PDF 저장
+          </button>
+        </>}
       >
-        {/* 툴바 */}
-        <div style={{
-          position: 'sticky', top: 0, zIndex: 10,
-          background: '#1e293b', padding: '12px 24px',
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span style={{ color: '#fff', fontWeight: 700, fontSize: 14 }}>
-              거래명세서 미리보기
-            </span>
-            <span style={{ color: '#94a3b8', fontSize: 12 }}>
-              {statementNo} · {renderQuoteTitle(quoteTitle)}
-            </span>
-            <SealErrorNotice error={sealError} />
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button
-              onClick={handlePrint}
-              disabled={sealUrl === undefined}
-              style={{
-                padding: '8px 20px', borderRadius: 7, border: 'none',
-                background: '#2563eb', color: '#fff',
-                fontWeight: 700, fontSize: 13, cursor: sealUrl === undefined ? 'wait' : 'pointer', opacity: sealUrl === undefined ? 0.7 : 1,
-              }}
-              data-testid="btn-statement-print"
-              aria-label="거래명세서 인쇄 / PDF 저장"
-            >
-              🖨 인쇄 / PDF 저장
-            </button>
-            <button
-              onClick={onClose}
-              style={{
-                padding: '8px 16px', borderRadius: 7, border: '1px solid #475569',
-                background: 'transparent', color: '#cbd5e1',
-                fontWeight: 600, fontSize: 13, cursor: 'pointer',
-              }}
-              data-testid="btn-statement-close"
-              aria-label="미리보기 닫기"
-            >
-              닫기
-            </button>
-          </div>
-        </div>
-
         {/* A4 용지 영역 */}
-        <div style={{ flex: 1, padding: '32px 24px', display: 'flex', justifyContent: 'center' }}>
+        <div style={{ padding: '32px 24px', display: 'flex', justifyContent: 'safe center', minWidth: 'fit-content' }}>
           <div
             ref={contentRef}
             id="statement-pdf-content"
@@ -347,7 +311,7 @@ export default function TransactionStatementModal({ data, quoteTitle, onClose }:
 
           </div>{/* /page */}
         </div>
-      </div>
+      </DocPreviewWindow>
     </>
   );
 }

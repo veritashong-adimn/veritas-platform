@@ -5,13 +5,14 @@
  * - 인쇄 버튼 클릭 시 브라우저 프린트 대화상자를 열어 PDF 저장이 가능하다.
  * - @media print CSS로 모달 UI를 숨기고 견적서만 출력한다.
  */
-import React, { useEffect, useRef } from 'react';
+import React, { useRef } from 'react';
 import type { QuotePdfData } from '../../lib/quotePdf';
 import { QUOTE_NOTES_BY_SERVICE, vatSummaryLabel } from '../../lib/quotePdf';
 import { renderQuoteTitle, buildDocFileName, formatDocNumber } from '../../lib/quoteTitle';
 import { formatDisplayDate, formatScheduleRange } from '../../lib/dateFormat';
 import { alertDialog } from '../ui';
 import { buildQuotePrintHtml } from '../../lib/quotePrintHtml';
+import { DocPreviewWindow } from './DocPreviewWindow';
 import { buildQuoteNotices, type NoticeSection, type NoticeRate } from '../../lib/quoteNotices';
 import { BRAND, BRAND_LIGHT, useCompanySeal, SealImage, SealErrorNotice, InfoBox, PartyRows, InfoRow, SummaryRow, ItemTypeBadge } from './docParts';
 
@@ -49,12 +50,7 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
   //   undefined = 불러오는 중(인쇄 버튼 잠시 대기 — 직인 없이 인쇄되는 것 방지)
   const { url: sealUrl, error: sealError } = useCompanySeal();
 
-  // ESC로 닫기
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
+  // ESC·닫기·이동·크기 조절은 공통 팝업(DocPreviewWindow)이 처리
 
   // 새 창에서 인쇄 → PDF 저장
   const handlePrint = () => {
@@ -97,63 +93,31 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
         #quote-print-only { display: none; }
       `}</style>
 
-      {/* 오버레이 */}
-      <div
-        style={{
-          position: 'fixed', inset: 0, zIndex: 2000,
-          background: 'rgba(15,23,42,0.6)',
-          display: 'flex', flexDirection: 'column',
-          overflowY: 'auto',
-        }}
-        onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+      {/* 공통 팝업창 — 드래그 이동·크기 조절·내부 스크롤·ESC/X 닫기 */}
+      <DocPreviewWindow
+        testIdPrefix="quote-preview" closeTestId="btn-pdf-close" ariaLabel="견적서 미리보기"
+        onClose={onClose}
+        title="견적서 미리보기"
+        subtitle={<>{(formatDocNumber('Q', data.quoteNumber, data.quoteDate) || data.quoteNumber)} · {renderQuoteTitle(quoteTitle)}</>}
+        actions={<>
+          <SealErrorNotice error={sealError} />
+          <button
+            onClick={handlePrint}
+            disabled={sealUrl === undefined}
+            style={{
+              padding: '8px 20px', borderRadius: 7, border: 'none',
+              background: '#2563eb', color: '#fff',
+              fontWeight: 700, fontSize: 13, cursor: sealUrl === undefined ? 'wait' : 'pointer', opacity: sealUrl === undefined ? 0.7 : 1,
+            }}
+            data-testid="btn-pdf-print"
+            aria-label="PDF 다운로드 (인쇄)"
+          >
+            🖨 인쇄 / PDF 저장
+          </button>
+        </>}
       >
-        {/* 툴바 */}
-        <div style={{
-          position: 'sticky', top: 0, zIndex: 10,
-          background: '#1e293b', padding: '12px 24px',
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span style={{ color: '#fff', fontWeight: 700, fontSize: 14 }}>
-              견적서 미리보기
-            </span>
-            <span style={{ color: '#94a3b8', fontSize: 12 }}>
-              {(formatDocNumber('Q', data.quoteNumber, data.quoteDate) || data.quoteNumber)} · {renderQuoteTitle(quoteTitle)}
-            </span>
-            <SealErrorNotice error={sealError} />
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button
-              onClick={handlePrint}
-              disabled={sealUrl === undefined}
-              style={{
-                padding: '8px 20px', borderRadius: 7, border: 'none',
-                background: '#2563eb', color: '#fff',
-                fontWeight: 700, fontSize: 13, cursor: sealUrl === undefined ? 'wait' : 'pointer', opacity: sealUrl === undefined ? 0.7 : 1,
-              }}
-              data-testid="btn-pdf-print"
-              aria-label="PDF 다운로드 (인쇄)"
-            >
-              🖨 인쇄 / PDF 저장
-            </button>
-            <button
-              onClick={onClose}
-              style={{
-                padding: '8px 16px', borderRadius: 7, border: '1px solid #475569',
-                background: 'transparent', color: '#cbd5e1',
-                fontWeight: 600, fontSize: 13, cursor: 'pointer',
-              }}
-              data-testid="btn-pdf-close"
-              aria-label="미리보기 닫기"
-            >
-              닫기
-            </button>
-          </div>
-        </div>
-
         {/* A4 용지 영역 */}
-        <div style={{ flex: 1, padding: '32px 24px', display: 'flex', justifyContent: 'center' }}>
+        <div style={{ padding: '32px 24px', display: 'flex', justifyContent: 'safe center', minWidth: 'fit-content' }}>
           <div
             ref={contentRef}
             id="quote-pdf-content"
@@ -496,7 +460,7 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
 
           </div>{/* /page */}
         </div>
-      </div>
+      </DocPreviewWindow>
     </>
   );
 }
