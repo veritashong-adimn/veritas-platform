@@ -27,20 +27,63 @@ const legacyNum = (v: unknown): number | null => {
 };
 
 // ── 과거 CRM 원본 세전·세후로 원천징수 근거 판정(전환 매핑용) ─────────────────────────
-//   원본 진행관리 행의 지급액(세전)·지급액(세후)(원본 헤더 오타 '지금액(세후)' 포함) 비율로만 판단한다.
-//   · 세후 ≈ 세전×(1−3.3%) (원 단위 절사/반올림 차이 1원 이내) → domestic_3_3
-//   · 세후 ≈ 세전×(1−2.2%) → domestic_2_2
-//   · 세후 = 세전, 값 없음, 그 외 비율 → null(판단 안 함: 기존대로 통번역사 정산정보 / 세무확인 필요).
-//     세금계산서 처리 건(세후=세전)에 3.3%를 임의로 적용하지 않기 위함.
+//   원본 진행관리 행의 지급액(세전)·지급액(세후)(원본 헤더 오타 '지금액(세후)' 포함)으로만 판단한다.
+//   과거 CRM 은 세후를 10원(초기 자료는 100원) 단위로 절사했으므로, 세후가 '세전×(1−세율)' 이하이고
+//   그 차이가 100원 미만이면 해당 세율로 본다(예: 85,000 → 82,195 → 82,190).
+//   · 3.3% / 2.2% 확인 → kind w33 / w22 (treatment domestic_3_3 / domestic_2_2)
+//   · 세후 = 세전 → no_withholding: 세금계산서·원천징수 예외를 구분할 근거가 없어 유형을 정하지 않는다(treatment null)
+//   · 지급 없음·세후 없음·그 외 비율 → unknown(treatment null)
+export type LegacyWithholdingKind = "w33" | "w22" | "no_withholding" | "no_payout" | "unknown";
+export function legacyWithholdingEvidence(raw: Record<string, unknown> | null | undefined): {
+  kind: LegacyWithholdingKind; treatment: "domestic_3_3" | "domestic_2_2" | null; pre: number | null; post: number | null;
+} {
+  const pre = raw ? legacyNum(raw["지급액(세전)"]) : null;
+  const post = raw ? legacyNum(raw["지급액(세후)"] ?? raw["지금액(세후)"]) : null;
+  if (pre == null || pre <= 0) return { kind: "no_payout", treatment: null, pre, post };
+  if (post == null || post <= 0) return { kind: "unknown", treatment: null, pre, post };
+  if (Math.abs(post - pre) < 1) return { kind: "no_withholding", treatment: null, pre, post };
+  const within = (rate: number) => { const exact = pre * (1 - rate); return post <= exact + 1 && exact - post < 100; };
+  if (within(0.033)) return { kind: "w33", treatment: "domestic_3_3", pre, post };
+  if (within(0.022)) return { kind: "w22", treatment: "domestic_2_2", pre, post };
+  return { kind: "unknown", treatment: null, pre, post };
+}
+/** @deprecated 호환용 — legacyWithholdingEvidence(raw).treatment 와 동일 */
 export function legacyWithholdingFromRaw(raw: Record<string, unknown> | null | undefined): "domestic_3_3" | "domestic_2_2" | null {
-  if (!raw) return null;
-  const pre = legacyNum(raw["지급액(세전)"]);
-  const post = legacyNum(raw["지급액(세후)"] ?? raw["지금액(세후)"]);
-  if (pre == null || post == null || pre <= 0 || post <= 0 || post >= pre) return null;
-  const near = (rate: number) => Math.abs(post - pre * (1 - rate)) <= 1;
-  if (near(0.033)) return "domestic_3_3";
-  if (near(0.022)) return "domestic_2_2";
-  return null;
+  return legacyWithholdingEvidence(raw).treatment;
+}
+
+// ── 전환 시 원천세 결정(우선순위) ───────────────────────────────────────────────
+//   1순위 CRM 행에 기록된 원천세율 — 원본 Excel 에 해당 칸이 없어 해당 없음
+//   2순위 CRM 세전·세후로 확인된 세율(위 판정)
+//   3순위 통번역사 Master 지급방식(translator_sensitive.payment_method) — 기존 신규 판매와 같은 매핑
+//   4순위 판단 불가 → null('원천세 확인 필요'). Master 지급방식이 없다는 이유로 0%·세금계산서로 두지 않는다.
+export type LegacyWithholdingBasis = "crm_pre_post" | "master" | "review_required";
+export function masterTreatmentOf(paymentMethod: string | null | undefined): string | null {
+  switch (paymentMethod) {
+    case "domestic_withholding": return "domestic_3_3";
+    case "domestic_withholding_2_2": return "domestic_2_2";
+    case "domestic_withholding_exempt": return "exempt";
+    case "domestic_business": return "tax_review_required";          // 사업자(세금계산서)
+    case "overseas_paypal": case "overseas_bank": return "tax_review_required";
+    default: return null;                                             // 미등록
+  }
+}
+export function decideLegacyWithholding(raw: Record<string, unknown> | null | undefined, masterPaymentMethod: string | null | undefined) {
+  const ev = legacyWithholdingEvidence(raw);
+  if (ev.treatment) return { treatment: ev.treatment as string | null, basis: "crm_pre_post" as LegacyWithholdingBasis, evidence: ev };
+  const m = masterTreatmentOf(masterPaymentMethod);
+  if (m) return { treatment: m, basis: "master" as LegacyWithholdingBasis, evidence: ev };
+  return { treatment: null, basis: "review_required" as LegacyWithholdingBasis, evidence: ev };
+}
+
+// CRM 세후와 플랫폼 세후(기존 원천징수·원 단위 규칙) 비교 — 보정하지 않고 상태만 표시한다.
+//   match: 1원 이내 / crm_truncation: CRM 이 10·100원 단위로 절사한 차이(CRM 이 0~100원 적음) / mismatch: 그 외(원본 지급액 불일치)
+export function comparePostTax(crmPost: number | null, platformPost: number | null): { status: "match" | "crm_truncation" | "mismatch" | "n/a"; diff: number | null } {
+  if (crmPost == null || platformPost == null) return { status: "n/a", diff: null };
+  const diff = Math.round((crmPost - platformPost) * 100) / 100;
+  if (Math.abs(diff) <= 1) return { status: "match", diff };
+  if (diff < 0 && -diff < 100) return { status: "crm_truncation", diff };
+  return { status: "mismatch", diff };
 }
 
 // ── 과거 CRM 전환 수행행의 판매 공급가액(수익률 분모) — 조회 전용 ────────────────────────

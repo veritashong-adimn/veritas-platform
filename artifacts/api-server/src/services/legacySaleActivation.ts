@@ -22,6 +22,7 @@ import crypto from "node:crypto";
 import {
   db, legacyArchiveRowsTable, legacyMasterMappingsTable, importBatchesTable, importRowSourcesTable,
   projectsTable, quotesTable, quoteItemsTable, projectPaymentsTable, performanceAssignmentsTable,
+  calcPayoutWithholding,
 } from "@workspace/db";
 import { sql, eq } from "drizzle-orm";
 import { normalizeCompanyName } from "../lib/normalizeCompany";
@@ -32,7 +33,7 @@ import { applyPerformanceRow, loadKrHolidaySet, type ApplyRowCtx } from "../rout
 import { rawRowFromRecord, buildAssignPayload, computeAssignPreview } from "../routes/pastWorkImport";
 import { maskSourceRawForRead } from "./legacyArchiveResolve";
 
-import { ACTIVATION_MODULE, activatedSaleExists, legacyWithholdingFromRaw } from "./legacyActivationLineage";
+import { ACTIVATION_MODULE, activatedSaleExists, decideLegacyWithholding, comparePostTax } from "./legacyActivationLineage";
 import { legacyActivationNote, LEGACY_ACTIVATION_ITEM_MEMO } from "./customerDocText";
 import { captureIfMissing } from "./quoteRecipientSnapshot";
 import { personKey, normPhone, phoneType, loadPhoneIndex } from "./legacyContactRestore";
@@ -230,6 +231,10 @@ export async function buildActivationPlan(dbx: Dbx, legacyRowId: number) {
   const companyEmail: string | null = coRow?.email && String(coRow.email).trim() ? String(coRow.email).trim() : null;
   if (!contactInfo.email && companyEmail) Object.assign(contactInfo, { email: companyEmail, emailFrom: "company" });
   const matchTr = await loadTranslatorIndex(dbx);
+  // 통번역사 Master 지급방식(원천세 3순위) — 연결된 통번역사만 미리 조회
+  const trIds = [...new Set(prog.map((p: any) => matchTr(rawRowFromRecord(p.source_raw ?? {}, "진행관리", 0).translatorName).id).filter((x: number | null): x is number => x != null))];
+  const pmByTr = new Map<number, string | null>();
+  if (trIds.length) for (const r of await rows(dbx, sql`SELECT translator_id, payment_method FROM translator_sensitive WHERE translator_id IN (${sql.join(trIds.map(i => sql`${i}`), sql`, `)})`)) pmByTr.set(Number(r.translator_id), r.payment_method ?? null);
   const performances = prog.map((p: any, i: number) => {
     const rr = rawRowFromRecord(p.source_raw ?? {}, "진행관리", Number(p.source_row ?? i + 1));
     const tm = matchTr(rr.translatorName);
@@ -252,6 +257,13 @@ export async function buildActivationPlan(dbx: Dbx, legacyRowId: number) {
       originalPreTax: original, computedPreTax: pv.gross, amountDiff: original != null ? Math.round((original - pv.gross) * 100) / 100 : null,
       amountBasis: lp.basis,
       plannedStatus: planned,
+      // 원천세(우선순위: CRM 세전·세후 → Master 지급방식 → 확인 필요) + CRM 세후 vs 플랫폼 세후 비교(보정 없음)
+      ...(() => {
+        const wd = decideLegacyWithholding(p.source_raw ?? {}, tm.id != null ? pmByTr.get(tm.id) ?? null : null);
+        const platformPost = wd.treatment && pv.gross > 0 ? calcPayoutWithholding(pv.gross, "individual", wd.treatment, null).net : null;
+        const cmp = comparePostTax(wd.evidence.post, platformPost);
+        return { withholdingTreatment: wd.treatment, withholdingBasis: wd.basis, originalPostTax: wd.evidence.post, computedPostTax: platformPost, postTaxStatus: cmp.status, postTaxDiff: cmp.diff };
+      })(),
     };
   });
 
@@ -289,6 +301,10 @@ export async function buildActivationPlan(dbx: Dbx, legacyRowId: number) {
   if (!company.matchedId) warnings.push(company.method === "ambiguous" ? "거래처 후보가 여러 곳이라 연결하지 않습니다(전환 후 판매 상세에서 지정)." : "일치하는 거래처 Master 가 없어 원본 거래처명만 보존합니다.");
   const unm = performances.filter(p => !p.translatorId).length;
   if (unm) warnings.push(`통번역사 Master 미연결 ${unm}건 — 수행정보는 원본 이름으로 만들고 연결은 전환 후 지정합니다.`);
+  const reviewN = performances.filter(p => p.withholdingBasis === "review_required" && (p.originalPreTax ?? p.computedPreTax) > 0).length;
+  if (reviewN) warnings.push(`원천세 확인 필요 ${reviewN}건 — CRM 세전·세후로 세율이 확인되지 않고 통번역사 Master 지급방식도 없어 세금처리를 비워 둡니다(0%·세금계산서로 처리하지 않음).`);
+  const postMis = performances.filter(p => p.postTaxStatus === "mismatch").length;
+  if (postMis) warnings.push(`원본 지급액 불일치 ${postMis}건 — CRM 세후 지급액과 플랫폼 계산 세후가 다릅니다(보정하지 않고 표시만 합니다).`);
   const origN = performances.filter(p => p.amountBasis === "original").length;
   if (origN) warnings.push(`수행비 항목 계산액이 원본 지급액(세전)과 다른 수행 ${origN}건 — 원본 지급액(세전)을 그대로 원가로 보존합니다.`);
 
@@ -405,12 +421,22 @@ export async function executeActivation(legacyRowId: number, planToken: string, 
       payload.quoteId = quote.id; payload.saleItemId = item.id; payload.sequence = seq++;
       // 세금처리: 원본 CRM 세전·세후로 원천징수(3.3%/2.2%)가 확인되면 그 값을 쓴다(실제 과거 처리 기준).
       //   확인되지 않으면(세후=세전·값 없음 등) 기존대로 연결된 통번역사 정산정보에서 도출(미연결·미설정은 세무확인 필요).
-      payload.withholdingTreatment = legacyWithholdingFromRaw(src?.source_raw) ?? undefined;
+      payload.withholdingTreatment = p.withholdingTreatment ?? undefined;   // 미리보기에서 결정한 값(우선순위 규칙) — 미리보기와 실행이 같은 기준
       if (!p.translatorId) { payload.status = "unassigned"; payload.performerNameSnapshot = rr.translatorName || null; }
       const tag = p.plannedStatus === "legacy_paid" ? `과거 지급완료(지급일 ${p.payDate})` : p.plannedStatus === "payout_review" ? "과거 지급 확인 필요" : "과거 CRM";
       payload.remark = `[과거 CRM] ${tag}${!p.translatorId && rr.translatorName ? ` · 수행자 ${rr.translatorName}(Master 미연결)` : ""}${payload.remark ? ` · ${payload.remark}` : ""}`;
       payload.payDateChangeReason = rr.payDate ? "과거 CRM 원본 지급일 보존" : null;
       const assignmentId = await applyPerformanceRow(tx, project.id, payload, ctx);
+      // 4순위(확인 필요): 저장 경로가 Master 미등록을 '세금계산서'로 기본 채우므로, 전환 행은 비워 둔다(원천세 확인 필요).
+      if (p.withholdingBasis === "review_required") {
+        await tx.update(performanceAssignmentsTable).set({ withholdingTreatment: null }).where(eq(performanceAssignmentsTable.id, assignmentId));
+      }
+      // CRM 세후 vs 저장된 원가 기준 플랫폼 세후 비교(이관 이력에만 기록, 금액 보정 없음)
+      const [saved] = await tx.select({ costTotal: performanceAssignmentsTable.costTotal, wt: performanceAssignmentsTable.withholdingTreatment })
+        .from(performanceAssignmentsTable).where(eq(performanceAssignmentsTable.id, assignmentId));
+      const savedPost = saved?.wt && (saved.wt === "domestic_3_3" || saved.wt === "domestic_2_2" || saved.wt === "exempt")
+        ? calcPayoutWithholding(Number(saved.costTotal ?? 0), "individual", saved.wt, null).net : null;
+      const postCmp = comparePostTax(p.originalPostTax, savedPost);
       // 과거 수행 = 이미 납품 완료(원본 납품일 보존) → 납품확인 상태로 둔다(신규 행은 저장 시 확인이 해제되므로 명시 설정).
       if (rr.deliveryDate) {
         await tx.update(performanceAssignmentsTable).set({ deliveryConfirmed: true, deliveryConfirmedBy: userId, deliveryConfirmedAt: new Date() }).where(eq(performanceAssignmentsTable.id, assignmentId));
@@ -424,7 +450,9 @@ export async function executeActivation(legacyRowId: number, planToken: string, 
       lineage.push({
         batchId: batch.id, module: ACTIVATION_MODULE, entityId: assignmentId, rowKey: `progress:${p.progressRowId}`, status: p.plannedStatus,
         sourceSystem: SRC, legacyId: String(p.progressRowId), sourceRow: src?.source_row ?? null,
-        sourceRaw: { projectId: project.id, payDate: p.payDate, originalPreTax: p.originalPreTax, computedPreTax: p.computedPreTax, translatorMatch: p.translatorMatch },
+        sourceRaw: { projectId: project.id, payDate: p.payDate, originalPreTax: p.originalPreTax, computedPreTax: p.computedPreTax, translatorMatch: p.translatorMatch,
+          withholdingBasis: p.withholdingBasis, withholdingTreatment: p.withholdingBasis === "review_required" ? null : (saved?.wt ?? null),
+          originalPostTax: p.originalPostTax, computedPostTax: savedPost, postTaxStatus: postCmp.status, postTaxDiff: postCmp.diff },
       });
     }
 
@@ -476,6 +504,9 @@ export async function getLegacyOrigin(dbx: Dbx, projectId: number) {
     return {
       assignmentId: Number(l.entity_id), progressRowId: Number(l.legacy_id), legacyStatus: l.status as string,
       payDate: l.source_raw?.payDate ?? null, originalPreTax: l.source_raw?.originalPreTax ?? null,
+      // 원천세 판정 근거·CRM 세후 비교(이 기능 이후 전환 건만 기록 — 이전 전환 건은 null)
+      withholdingBasis: l.source_raw?.withholdingBasis ?? null, originalPostTax: l.source_raw?.originalPostTax ?? null,
+      computedPostTax: l.source_raw?.computedPostTax ?? null, postTaxStatus: l.source_raw?.postTaxStatus ?? null,
       performerName: a?.performer_name_snapshot ?? null, translatorId: a?.individual_user_id ?? null,
       costTotal: a ? Number(a.cost_total) : null, paymentStatus: a?.payment_status ?? null, deleted: !!a?.deleted_at,
     };

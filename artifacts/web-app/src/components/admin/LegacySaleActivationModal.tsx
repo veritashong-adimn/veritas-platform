@@ -11,7 +11,12 @@ type Perf = {
   productName: string | null; deliveryDate: string | null; payDate: string | null;
   originalPreTax: number | null; computedPreTax: number; amountDiff: number | null;
   plannedStatus: "legacy_paid" | "payout_review" | "unpaid";
+  withholdingTreatment?: string | null; withholdingBasis?: "crm_pre_post" | "master" | "review_required";
+  originalPostTax?: number | null; computedPostTax?: number | null; postTaxStatus?: "match" | "crm_truncation" | "mismatch" | "n/a";
 };
+const WH_LABEL: Record<string, string> = { domestic_3_3: "3.3%", domestic_2_2: "2.2%", exempt: "원천징수 예외", tax_review_required: "세금계산서" };
+const WH_BASIS: Record<string, string> = { crm_pre_post: "CRM 세전·세후", master: "통번역사 Master", review_required: "확인 필요" };
+
 type Plan = {
   legacyRowId: number; saleNo: string; saleDate: string | null; existing: { projectId: number } | null;
   title: string; productName: string; total: number;
@@ -113,7 +118,7 @@ export function LegacySaleActivationModal({ legacyRowId, token, onClose, onActiv
             <div style={{ maxHeight: 220, overflow: "auto", border: "1px solid #e5e7eb", borderRadius: 8 }}>
               <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
                 <thead><tr style={{ background: "#f9fafb" }}>
-                  {["통번역사", "Master", "상품/내용", "납품일", "지급일", "원본 지급액(세전)", "처리"].map(h => <th key={h} style={{ ...cell, textAlign: "left", fontWeight: 700, color: "#6b7280" }}>{h}</th>)}
+                  {["통번역사", "Master", "상품/내용", "납품일", "지급일", "원본 지급액(세전)", "원천세", "세후(CRM / 계산)", "처리"].map(h => <th key={h} style={{ ...cell, textAlign: "left", fontWeight: 700, color: "#6b7280" }}>{h}</th>)}
                 </tr></thead>
                 <tbody>
                   {plan.performances.map(p => (
@@ -124,6 +129,15 @@ export function LegacySaleActivationModal({ legacyRowId, token, onClose, onActiv
                       <td style={cell}>{p.deliveryDate ?? "-"}</td>
                       <td style={cell}>{p.payDate ?? "-"}</td>
                       <td style={cell}>{won(p.originalPreTax)}{p.amountDiff != null && Math.abs(p.amountDiff) >= 1 && <span style={{ color: "#b45309" }}> (계산 {won(p.computedPreTax)})</span>}</td>
+                      <td style={cell} title={p.withholdingBasis ? `근거: ${WH_BASIS[p.withholdingBasis]}` : undefined} data-testid={`activation-wh-${p.progressRowId}`}>
+                        {p.withholdingTreatment ? WH_LABEL[p.withholdingTreatment] ?? p.withholdingTreatment : <span style={{ color: "#b45309", fontWeight: 700 }}>확인 필요</span>}
+                        {p.withholdingBasis && p.withholdingBasis !== "review_required" && <span style={{ color: "#9ca3af" }}> ({WH_BASIS[p.withholdingBasis]})</span>}
+                      </td>
+                      <td style={cell} data-testid={`activation-post-${p.progressRowId}`}>
+                        {won(p.originalPostTax ?? null)} / {won(p.computedPostTax ?? null)}
+                        {p.postTaxStatus === "mismatch" && <span style={{ color: "#dc2626", fontWeight: 700 }}> 원본 지급액 불일치</span>}
+                        {p.postTaxStatus === "crm_truncation" && <span style={{ color: "#9ca3af" }}> (CRM 절사)</span>}
+                      </td>
                       <td style={cell}><span style={{ padding: "1px 6px", borderRadius: 4, background: STATUS_LABEL[p.plannedStatus].bg, color: STATUS_LABEL[p.plannedStatus].c, fontWeight: 700 }}>{STATUS_LABEL[p.plannedStatus].t}</span></td>
                     </tr>
                   ))}
