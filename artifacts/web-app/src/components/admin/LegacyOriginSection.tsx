@@ -6,7 +6,7 @@ import { Card, GhostBtn, promptDialog, confirmDialog, alertDialog } from "../ui"
 
 type Origin = {
   saleNo: string; activatedAt: string; legacyRowId: number | null; sourceChanged: boolean;
-  amountBasis?: { originalProductName: string | null; originalTotal: number | null; taxBreakdown: string };
+  amountBasis?: { originalProductName: string | null; originalTotal: number | null; taxBreakdown: string; originalSupply?: number | null; originalVat?: number | null };
   sourceRaw: Record<string, unknown> | null;
   payoutItems: { assignmentId: number; legacyStatus: string; payDate: string | null; originalPreTax: number | null; performerName: string | null; costTotal: number | null; paymentStatus: string | null; deleted: boolean }[];
   payoutSummary: { legacyPaid: number; reviewPending: number; reviewResolved: number };
@@ -119,7 +119,9 @@ export function LegacyOriginSection({ projectId, token, onChanged, onToast, onLo
       {origin.amountBasis && (
         <div style={{ fontSize: 12, color: "#374151", marginBottom: 8 }} data-testid="legacy-origin-amount-basis">
           원본 상품명 <b>{origin.amountBasis.originalProductName ?? "-"}</b> · 원본 총액 <b>{won(origin.amountBasis.originalTotal)}원</b>
-          <span style={{ color: "#92400e" }}> — 원본에 공급가·부가세 구분 없음(총액 그대로 1개 항목, 고객용 문서에는 이 안내를 출력하지 않음)</span>
+          {origin.amountBasis.taxBreakdown === "split_from_progress"
+            ? <span style={{ color: "#374151" }}> — 진행관리 원본 기준 공급가액 <b>{won(origin.amountBasis.originalSupply ?? null)}원</b> · 부가세 <b>{won(origin.amountBasis.originalVat ?? null)}원</b>(원본에 개별 판매항목 구분 없음, 1개 항목)</span>
+            : <span style={{ color: "#92400e" }}> — 원본에 공급가·부가세 구분 없음(총액 그대로 1개 항목, 고객용 문서에는 이 안내를 출력하지 않음)</span>}
         </div>
       )}
 

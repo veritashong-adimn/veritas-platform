@@ -8,7 +8,10 @@
 //   · 원본↔운영 매핑: legacy_master_mappings(old_crm, 'sale', 판매번호 → projects.id). 고유키로 중복 전환 차단.
 //     판매번호는 재업로드로 원본 행 버전이 바뀌어도 유지되는 식별키다.
 //   · 계보: import_batches(module=legacy_sale_activation) + import_row_sources(생성 레코드별 출처·분류).
-//   · 금액·상품: 원본 그대로(분할·추정 금지). 과거 판매목록은 총액만 있어 공급가·VAT 를 나누지 않는다.
+//   · 금액·상품: 원본 그대로(추정 금지). 과거 판매목록은 총액만 있으므로, 연결된 진행관리 원본 행의
+//     공급가액·부가세가 모두 같고 그 합이 판매 총액과 일치(1원 이내)할 때만 그 값으로 공급가·VAT 를 나눈다.
+//     근거가 없거나 어긋나면 기존대로 총액 그대로 1개 항목(공급가·VAT 미구분)으로 만든다.
+//     원본 판매 상세항목(통역료·출장비·교통비 등 개별 줄)은 원본 Excel 에 없어 복원하지 않는다(진행관리의 단가·수량은 판매 합계값).
 //   · 수행: 원본 수행행 1건 = 수행정보 1건(기존 저장 SSOT applyPerformanceRow 재사용).
 //       - 통번역사지급일 있음 → 과거 지급완료(paid, 지급회차·송금기록 생성 없음)
 //       - 지급일 없음 + 지급액/수행비 있음 → 과거 지급 확인 필요(payment_hold, 관리자 확인 전 지급대상 제외)
@@ -29,7 +32,7 @@ import { applyPerformanceRow, loadKrHolidaySet, type ApplyRowCtx } from "../rout
 import { rawRowFromRecord, buildAssignPayload, computeAssignPreview } from "../routes/pastWorkImport";
 import { maskSourceRawForRead } from "./legacyArchiveResolve";
 
-import { ACTIVATION_MODULE, activatedSaleExists } from "./legacyActivationLineage";
+import { ACTIVATION_MODULE, activatedSaleExists, legacyWithholdingFromRaw } from "./legacyActivationLineage";
 import { legacyActivationNote, LEGACY_ACTIVATION_ITEM_MEMO } from "./customerDocText";
 import { captureIfMissing } from "./quoteRecipientSnapshot";
 import { personKey, normPhone, phoneType, loadPhoneIndex } from "./legacyContactRestore";
@@ -264,7 +267,18 @@ export async function buildActivationPlan(dbx: Dbx, legacyRowId: number) {
   else if (parsedSum !== total) collection = { status: "review", reason: parsedSum < total ? "입금합계 < 판매금액(부분입금 가능성)" : "입금합계 > 판매금액", parsedAmount: parsedSum };
   else collection = { status: "matched", reason: null, parsedAmount: parsedSum };
 
-  const warnings: string[] = ["과거 CRM 판매목록에는 총액만 있어 공급가·부가세를 구분하지 않고 총액 그대로 1개 항목으로 만듭니다.", ...supplementWarn];
+  // 공급가·부가세 구분 — 연결 진행관리 원본 행의 (공급가액, 부가세)가 단일 값이고 합이 판매 총액과 일치할 때만 사용(추정 금지).
+  const splitPairs = [...new Set(prog.map((p: any) => `${num(p.source_raw?.["공급가액"])}|${num(p.source_raw?.["부가세"])}`))];
+  let amountSplit: { supply: number; vat: number; basis: "progress" | "total_only" } = { supply: total, vat: 0, basis: "total_only" };
+  if (splitPairs.length === 1) {
+    const [s, v] = splitPairs[0].split("|").map(x => (x === "null" ? null : Number(x)));
+    if (s != null && s > 0 && v != null && v >= 0 && Math.abs(s + v - total) <= 1) amountSplit = { supply: s, vat: v, basis: "progress" };
+  }
+  const warnings: string[] = [
+    amountSplit.basis === "progress"
+      ? `원본 진행관리의 공급가액 ${amountSplit.supply.toLocaleString()}원 · 부가세 ${amountSplit.vat.toLocaleString()}원(합계 = 판매 총액)으로 1개 항목을 만듭니다. 원본에 개별 판매항목(통역료·출장비 등) 구분은 없습니다.`
+      : "과거 CRM 판매목록에는 총액만 있고 진행관리 원본의 공급가액·부가세로 확인되지 않아, 공급가·부가세를 구분하지 않고 총액 그대로 1개 항목으로 만듭니다.",
+    ...supplementWarn];
   if (!company.matchedId) warnings.push(company.method === "ambiguous" ? "거래처 후보가 여러 곳이라 연결하지 않습니다(전환 후 판매 상세에서 지정)." : "일치하는 거래처 Master 가 없어 원본 거래처명만 보존합니다.");
   const unm = performances.filter(p => !p.translatorId).length;
   if (unm) warnings.push(`통번역사 Master 미연결 ${unm}건 — 수행정보는 원본 이름으로 만들고 연결은 전환 후 지정합니다.`);
@@ -283,7 +297,7 @@ export async function buildActivationPlan(dbx: Dbx, legacyRowId: number) {
 
   return {
     legacyRowId: sale.id, saleNo, saleDate, existing,
-    title: opportunity || productName, productName, total,
+    title: opportunity || productName, productName, total, amountSplit,
     company: { name: companyName, ...company, email: companyEmail }, contact: { name: contactName, ...contact, ...contactInfo },
     pm: { name: pmName, matchedId: pmId }, taxInvoiceDate,
     performances, perfSummary,
@@ -345,7 +359,8 @@ export async function executeActivation(legacyRowId: number, planToken: string, 
     }).returning({ id: quotesTable.id });
     const [item] = await tx.insert(quoteItemsTable).values({
       quoteId: quote.id, productId: null, productName: plan.productName, unit: "건", quantity: "1",
-      unitPrice: String(plan.total), supplyAmount: String(plan.total), taxAmount: "0", totalAmount: String(plan.total),
+      // 공급가·부가세: 원본 진행관리로 확인된 경우만 분리(amountSplit.basis="progress"), 아니면 총액 그대로(부가세 0, 구분 미확인)
+      unitPrice: String(plan.amountSplit.supply), supplyAmount: String(plan.amountSplit.supply), taxAmount: String(plan.amountSplit.vat), totalAmount: String(plan.total),
       itemType: itemTypeOf(plan.productName), taxType: "taxable", isCustomProduct: true,
       memo: null,   // 상품 비고도 고객용 출력 — 원본 특성(총액만, 공급가·부가세 구분 없음)은 이관 이력에 기록
 
@@ -365,7 +380,10 @@ export async function executeActivation(legacyRowId: number, planToken: string, 
       sourceSystem: SRC, legacyId: String(plan.legacyRowId), sourceRow: plan._sale.sourceRow ?? null,
       sourceRaw: { legacyRowId: plan.legacyRowId, rowHash: plan._sale.rowHash, quoteId: quote.id, itemId: item.id, progressRowIds: plan.performances.map(p => p.progressRowId),
         // 내부 관리 정보(고객용 문서 미출력): 원본 상품명·총액, 세금 구분 상태, 이관 경위
-        originalProductName: plan.productName, originalTotal: plan.total, taxBreakdown: "unknown",
+        originalProductName: plan.productName, originalTotal: plan.total,
+        taxBreakdown: plan.amountSplit.basis === "progress" ? "split_from_progress" : "unknown",
+        originalSupply: plan.amountSplit.basis === "progress" ? plan.amountSplit.supply : null,
+        originalVat: plan.amountSplit.basis === "progress" ? plan.amountSplit.vat : null,
         internalNote: legacyActivationNote(plan.saleNo), internalItemMemo: LEGACY_ACTIVATION_ITEM_MEMO },
     }];
 
@@ -378,7 +396,9 @@ export async function executeActivation(legacyRowId: number, planToken: string, 
       const rr = rawRowFromRecord(src?.source_raw ?? {}, "진행관리", Number(src?.source_row ?? seq + 1));
       const { payload } = buildLegacyPayload(rr, p.translatorId) as { payload: any };
       payload.quoteId = quote.id; payload.saleItemId = item.id; payload.sequence = seq++;
-      payload.withholdingTreatment = undefined;   // 세금처리는 연결된 통번역사 정산정보에서 도출(미연결·미설정은 세무확인 필요)
+      // 세금처리: 원본 CRM 세전·세후로 원천징수(3.3%/2.2%)가 확인되면 그 값을 쓴다(실제 과거 처리 기준).
+      //   확인되지 않으면(세후=세전·값 없음 등) 기존대로 연결된 통번역사 정산정보에서 도출(미연결·미설정은 세무확인 필요).
+      payload.withholdingTreatment = legacyWithholdingFromRaw(src?.source_raw) ?? undefined;
       if (!p.translatorId) { payload.status = "unassigned"; payload.performerNameSnapshot = rr.translatorName || null; }
       const tag = p.plannedStatus === "legacy_paid" ? `과거 지급완료(지급일 ${p.payDate})` : p.plannedStatus === "payout_review" ? "과거 지급 확인 필요" : "과거 CRM";
       payload.remark = `[과거 CRM] ${tag}${!p.translatorId && rr.translatorName ? ` · 수행자 ${rr.translatorName}(Master 미연결)` : ""}${payload.remark ? ` · ${payload.remark}` : ""}`;
@@ -459,7 +479,12 @@ export async function getLegacyOrigin(dbx: Dbx, projectId: number) {
     legacyRowId: cur ? Number(cur.id) : null, originalLegacyRowId: saleLin?.source_raw?.legacyRowId ?? null,
     sourceChanged,
     // 원본 금액 기준(내부 정보 — 고객용 문서 미출력): 과거 판매목록은 총액만 있어 공급가·부가세 구분이 확인되지 않는다
-    amountBasis: { originalProductName: cur?.product_name ?? null, originalTotal: cur?.total_amount != null ? Number(cur.total_amount) : null, taxBreakdown: "unknown" as const },
+    //   (전환 시 진행관리 원본 공급가액·부가세로 확인·분리한 건은 split_from_progress)
+    amountBasis: {
+      originalProductName: cur?.product_name ?? null, originalTotal: cur?.total_amount != null ? Number(cur.total_amount) : null,
+      taxBreakdown: (saleLin?.source_raw?.taxBreakdown === "split_from_progress" ? "split_from_progress" : "unknown") as "unknown" | "split_from_progress",
+      originalSupply: saleLin?.source_raw?.originalSupply ?? null, originalVat: saleLin?.source_raw?.originalVat ?? null,
+    },
     sourceRaw: cur ? maskSourceRawForRead("sales_list", cur.source_raw) : null,
     payoutItems,
     payoutSummary: {

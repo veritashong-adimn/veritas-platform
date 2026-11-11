@@ -21,7 +21,7 @@ import { eq, and, isNull, inArray, ne, desc, sql } from "drizzle-orm";
 import { z } from "zod";
 import { requireAuth, requireRole, requireRolePermission } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
-import { isPendingPayoutReview, activatedSaleExists } from "../services/legacyActivationLineage";
+import { isPendingPayoutReview, activatedSaleExists, legacySaleSupplyByAssignment } from "../services/legacyActivationLineage";
 import { getPermissionsForRole } from "../lib/rbac";
 import { decrypt, maskResidentNumber } from "../lib/encrypt";
 import { autoAssignByPaymentDate } from "./payoutRounds";
@@ -541,7 +541,14 @@ export async function loadPerformanceRows(projectId: number) {
   for (const e of expenses) { (expByRow.get(e.assignmentId) ?? expByRow.set(e.assignmentId, []).get(e.assignmentId)!).push(e); }
   const dedByRow = new Map<number, typeof deductions>();
   for (const d of deductions) { (dedByRow.get(d.assignmentId) ?? dedByRow.set(d.assignmentId, []).get(d.assignmentId)!).push(d); }
-  return rows.map(r => ({ ...stripEnc(r), expenses: expByRow.get(r.id) ?? [], deductions: dedByRow.get(r.id) ?? [] }));
+  // 과거 CRM 전환 행: 스냅샷에 판매 공급가액이 없으면 원본 공급가액(판매 총액과 검증된 경우만)을 조회 응답에만 채운다(수익률 계산용, DB 미변경).
+  const needSupply = rows.filter(r => { const s = r.serviceDetailSnapshot as any; return !(s && s.saleSupplyAmount != null && s.saleSupplyAmount !== ""); }).map(r => r.id);
+  const legacySupply = needSupply.length ? await legacySaleSupplyByAssignment(db, needSupply).catch(() => new Map<number, number>()) : new Map<number, number>();
+  return rows.map(r => {
+    const sup = legacySupply.get(r.id);
+    const snap = sup != null ? { ...((r.serviceDetailSnapshot as any) ?? {}), saleSupplyAmount: String(sup), saleSupplySource: "legacy_crm" } : r.serviceDetailSnapshot;
+    return { ...stripEnc(r), serviceDetailSnapshot: snap, expenses: expByRow.get(r.id) ?? [], deductions: dedByRow.get(r.id) ?? [] };
+  });
 }
 
 // ── 판매정보 불러오기 — 현재 견적 상품행을 수행정보로 복사(할인 제외, 금액 미복사, 중복방지) ─────

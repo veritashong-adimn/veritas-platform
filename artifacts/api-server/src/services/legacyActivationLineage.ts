@@ -19,3 +19,48 @@ export async function isPendingPayoutReview(dbx: any, assignmentId: number): Pro
     AND entity_id = ${assignmentId} AND status = 'payout_review' LIMIT 1`)).rows as any[];
   return r.length > 0;
 }
+
+const legacyNum = (v: unknown): number | null => {
+  if (v == null || v === "") return null;
+  const n = Number(String(v).replace(/,/g, ""));
+  return Number.isFinite(n) ? n : null;
+};
+
+// ── 과거 CRM 원본 세전·세후로 원천징수 근거 판정(전환 매핑용) ─────────────────────────
+//   원본 진행관리 행의 지급액(세전)·지급액(세후)(원본 헤더 오타 '지금액(세후)' 포함) 비율로만 판단한다.
+//   · 세후 ≈ 세전×(1−3.3%) (원 단위 절사/반올림 차이 1원 이내) → domestic_3_3
+//   · 세후 ≈ 세전×(1−2.2%) → domestic_2_2
+//   · 세후 = 세전, 값 없음, 그 외 비율 → null(판단 안 함: 기존대로 통번역사 정산정보 / 세무확인 필요).
+//     세금계산서 처리 건(세후=세전)에 3.3%를 임의로 적용하지 않기 위함.
+export function legacyWithholdingFromRaw(raw: Record<string, unknown> | null | undefined): "domestic_3_3" | "domestic_2_2" | null {
+  if (!raw) return null;
+  const pre = legacyNum(raw["지급액(세전)"]);
+  const post = legacyNum(raw["지급액(세후)"] ?? raw["지금액(세후)"]);
+  if (pre == null || post == null || pre <= 0 || post <= 0 || post >= pre) return null;
+  const near = (rate: number) => Math.abs(post - pre * (1 - rate)) <= 1;
+  if (near(0.033)) return "domestic_3_3";
+  if (near(0.022)) return "domestic_2_2";
+  return null;
+}
+
+// ── 과거 CRM 전환 수행행의 판매 공급가액(수익률 분모) — 조회 전용 ────────────────────────
+//   전환 시 판매 상품행은 원본 판매목록 총액(부가세 포함)만 공급가로 들어가 수행행 스냅샷에 saleSupplyAmount 가 없다.
+//   원본 진행관리 행의 공급가액+부가세가 연결된 판매 상품행 총액과 일치(1원 이내)할 때만 원본 공급가액을 돌려준다.
+//   일치하지 않거나 값이 없으면 넣지 않는다(임의 금액으로 수익률 계산 금지). DB는 변경하지 않는다.
+export async function legacySaleSupplyByAssignment(dbx: any, assignmentIds: number[]): Promise<Map<number, number>> {
+  const out = new Map<number, number>();
+  if (!assignmentIds.length) return out;
+  const r = (await dbx.execute(sql`SELECT l.entity_id AS aid, la.source_raw->>'공급가액' AS sup, la.source_raw->>'부가세' AS vat, qi.total_amount AS item_total
+    FROM import_row_sources l
+    JOIN legacy_archive_rows la ON la.id::text = l.legacy_id
+    JOIN performance_assignments pa ON pa.id = l.entity_id
+    LEFT JOIN quote_items qi ON qi.id = pa.sale_item_id
+    WHERE l.module = ${ACTIVATION_MODULE} AND l.row_key LIKE 'progress:%'
+      AND l.entity_id IN (${sql.join(assignmentIds.map(i => sql`${i}`), sql`, `)})`)).rows as any[];
+  for (const x of r) {
+    const sup = legacyNum(x.sup), vat = legacyNum(x.vat) ?? 0, total = legacyNum(x.item_total);
+    if (sup == null || sup <= 0 || total == null) continue;
+    if (Math.abs(sup + vat - total) <= 1) out.set(Number(x.aid), sup);
+  }
+  return out;
+}
