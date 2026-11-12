@@ -30,7 +30,7 @@ class HttpError extends Error { constructor(public status: number, message: stri
 
 const CONTACT_COLS = sql`c.id, c.company_id "companyId", c.name, c.position, c.department, c.phone, c.mobile, c.office_phone "officePhone", c.email`;
 
-interface SaleRef {
+export interface SaleRef {
   source: "legacy" | "current";
   id: number;                    // legacy_archive_rows.id | projects.id
   saleNo: string | null;
@@ -86,7 +86,7 @@ export async function resolveSale(dbx: any, source: string, id: number): Promise
 }
 
 // 연결할 거래처 결정 — 판매에 거래처가 확정돼 있으면 그 거래처만, 확정되지 않았으면(미일치·후보 복수) 사용자가 고른 거래처
-function targetCompanyId(sale: SaleRef, requested: unknown): number {
+export function targetCompanyId(sale: SaleRef, requested: unknown): number {
   const req = Number(requested);
   if (sale.company) {
     if (requested != null && req !== sale.company.id) throw new HttpError(409, `이 판매건의 거래처는 '${sale.company.name}'입니다. 다른 거래처의 담당자는 연결할 수 없습니다.`);
@@ -100,7 +100,7 @@ function targetCompanyId(sale: SaleRef, requested: unknown): number {
 const contactSummary = (c: any) => c ? { id: Number(c.id), name: c.name, position: c.position ?? null, department: c.department ?? null, phone: c.phone ?? null, mobile: c.mobile ?? null, email: c.email ?? null } : null;
 
 // 연결 적용(같은 트랜잭션) — 변경 전후 기록
-async function applyLink(tx: any, req: any, sale: SaleRef, contact: any, companyId: number, how: "link" | "create" | "link_related") {
+export async function applyLink(tx: any, req: any, sale: SaleRef, contact: any, companyId: number, how: "link" | "create" | "link_related") {
   const before = contactSummary(sale.contact);
   const after = contactSummary(contact);
   if (before?.id === after?.id) return { changed: false, frozenQuotes: [] as number[] };

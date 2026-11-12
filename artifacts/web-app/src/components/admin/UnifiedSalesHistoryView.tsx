@@ -6,6 +6,7 @@ import { api } from '../../lib/constants';
 import { Pagination } from '../ui/Paginator';
 import { SaleContactPicker } from './SaleContactPicker';
 import { ContactReviewListModal } from './ContactReviewListModal';
+import { LegacyPartyManager } from './LegacyPartyManager';
 
 type AdminUser = { id: number; name?: string | null; email?: string | null };
 type Row = {
@@ -47,6 +48,7 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
   // 과거 CRM 판매건(미전환·전환) 고객 담당자 보완 창
   const [contactEdit, setContactEdit] = useState<{ source: 'legacy' | 'current'; id: number } | null>(null);
   const [showReview, setShowReview] = useState(false);   // 고객 담당자 확인 필요 목록
+  const [showParty, setShowParty] = useState(false);     // 미연결 관리(거래처·담당자)
 
   const adminName = (id: number | null) => (id == null ? null : adminUsers.find(u => u.id === id)?.name || null);
 
@@ -82,7 +84,8 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
                style={{ padding: '8px 11px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13, flex: '1 1 320px', maxWidth: 420 }} />
         <button style={btn(loading, true)} disabled={loading} onClick={() => load(1, q)} data-testid="sales-history-search-btn">{loading ? '검색 중…' : '검색'}</button>
         <span style={{ fontSize: 12, color: '#6b7280' }}>총 {(p?.total ?? 0).toLocaleString()}건{range === 'all' ? ' (현재+과거)' : ' (과거 CRM)'}</span>
-        <button style={{ ...btn(false), marginLeft: 'auto' }} onClick={() => setShowReview(true)} data-testid="btn-contact-review-open" aria-label="고객 담당자 확인 필요 목록">고객 담당자 확인 필요 목록</button>
+        <button style={{ ...btn(false), marginLeft: 'auto', background: '#fef2f2', color: '#b91c1c' }} onClick={() => setShowParty(true)} data-testid="btn-legacy-party-manager" aria-label="미연결 관리">미연결 관리</button>
+        <button style={btn(false)} onClick={() => setShowReview(true)} data-testid="btn-contact-review-open" aria-label="고객 담당자 확인 필요 목록">고객 담당자 확인 필요 목록</button>
       </div>
 
       {/* 부분 실패 / degraded 배너 */}
@@ -157,6 +160,10 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
       {showReview && (
         <ContactReviewListModal authHeaders={authHeaders} onClose={() => setShowReview(false)}
           onPick={id => { setShowReview(false); setContactEdit({ source: 'legacy', id }); }} />
+      )}
+      {showParty && (
+        <LegacyPartyManager authHeaders={authHeaders} onClose={() => { setShowParty(false); load(p?.page ?? 1, q); }}
+          onOpenSale={r => { setShowParty(false); if (r.source === 'legacy' && r.saleRowId) onOpenLegacyDetail(r.saleRowId); else if (r.projectId) onOpenSalesDetail(r.projectId); }} />
       )}
       {contactEdit && (
         <SaleContactPicker source={contactEdit.source} id={contactEdit.id} authHeaders={authHeaders}

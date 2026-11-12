@@ -398,7 +398,7 @@ export function sourceEmailOf(memos: Array<{ cust: unknown; memo: unknown }>, cu
     && String(m.memo).replace(/\s/g, "").includes(flat) && !/(페이팔|paypal|메일변경|원천세)/i.test(String(m.memo)))
     .map(m => String(m.memo).match(SRC_EMAIL_RE)![0].toLowerCase()))];
 }
-async function loadSaleMemos(dbx: Dbx) {
+export async function loadSaleMemos(dbx: Dbx) {
   const by = new Map<number, Array<{ cust: unknown; memo: unknown }>>();
   for (const m of await rows(dbx, sql`SELECT l.sale_row_id, btrim(p.source_raw->>'고객명') cust, p.source_raw->>'비고' memo
       FROM legacy_sales_progress_links l JOIN legacy_archive_rows p ON p.id = l.progress_row_id AND p.is_effective
