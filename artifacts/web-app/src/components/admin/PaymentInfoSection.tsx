@@ -10,6 +10,7 @@ import { api } from '../../lib/constants';
 import { Card, GhostBtn, PrimaryBtn, ClickSelect, confirmDialog } from '../ui';
 import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
 import { DateField } from './DatePickerShared';
+import { saleSplitOf, amountsFromSupply, amountsFromTotal, splitMatched } from '../../lib/paymentSplit';
 import './readTableView.css';
 
 export interface PayTxn {
@@ -63,6 +64,10 @@ interface Props {
   token: string;
   paymentRecords: any[];
   saleTotal: number;                 // 총 판매금액(견적 total = 공급가+부가세)
+  // 판매 견적에 실제 저장된 공급가액·부가세(품목 합계). 주어지고 합이 총액과 같으면 청구 검증·기본값의 기준으로 쓴다
+  //  (영세율·해외 통역 등 부가세 0원 판매를 10%로 재계산하지 않기 위함). 없으면 기존 총액÷1.1 분해.
+  saleSupplyAmount?: number | null;
+  saleVatAmount?: number | null;
   defaultCompany?: { id: number; name: string } | null;   // 판매정보 거래처(일반청구 기본 청구업체)
   // 차감견적을 판매전환한 판매건 전용 — 하단 요약을 '이번 서비스 사용액/총 선입금액/사용가능잔액'으로 대체.
   //  (일반/누적 견적 판매건은 isPrepaidSale=false → 기존 미수금/입금완료율 요약 그대로 유지)
@@ -137,11 +142,10 @@ const scheduledLabel = (method?: string | null) => {
   if (m === '외화송금') return '송금예정일';
   return '입금예정일';
 };
-// 천 단위 콤마 표시(입력은 숫자만 저장). 부가세 = 공급가액 × 10%(원 단위 반올림).
+// 천 단위 콤마 표시(입력은 숫자만 저장). 부가세 계산·청구 합계 검증은 lib/paymentSplit(부가세 0원 판매는 0 유지).
 //  ⚠ numeric(14,2) DB값은 "5500000.00" 처럼 소수점이 붙어 오므로 [^\d] 제거는 소수점까지 지워 100배로 부풀린다.
 //  → num()으로 정확히 파싱 후 반올림 표시(소수점 안전).
 const commafy = (v: unknown) => { const n = num(v); return n ? Math.round(n).toLocaleString('ko-KR') : ''; };
-const vatOf = (supply: unknown) => Math.round(num(supply) * 0.1);
 
 // 결제방법 필드 — 세금처리 '직접입력'과 동일한 인플레이스 패턴. 기본 4개 드롭다운 + '기타' 선택 시 같은 칸에서 직접 입력.
 //  · 저장값이 사전 정의 4개가 아니면(레거시/사용자 입력) 자동으로 직접입력 모드로 표시. ▾ 로 목록 복귀.
@@ -215,7 +219,7 @@ function CompanyPicker({ token, companyName, onPick, style }: {
   );
 }
 
-export default function PaymentInfoSection({ projectId, token, paymentRecords, saleTotal, defaultCompany, isPrepaidSale = false, prepaidDeposited = null, prepaidAvailable = null, onChanged, onToast }: Props) {
+export default function PaymentInfoSection({ projectId, token, paymentRecords, saleTotal, saleSupplyAmount = null, saleVatAmount = null, defaultCompany, isPrepaidSale = false, prepaidDeposited = null, prepaidAvailable = null, onChanged, onToast }: Props) {
   const authH = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
   const [editMode, setEditMode] = useState(false);
   const [rows, setRows] = useState<PayRow[]>([]);
@@ -234,9 +238,12 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   const list: PayRow[] = paymentRecords ?? [];
   // 결제유형 — 저장 데이터에서 판단(수출바우처 행이 하나라도 있으면 수출바우처).
   const listCategory = list.some(r => r.paymentCategory === CAT_VOUCHER || r.payer === PAYER_OPERATOR) ? CAT_VOUCHER : CAT_GENERAL;
-  // 판매 공급가/부가세(분할청구 검증 기준) — 총판매에서 10% 기준 분해.
-  const saleSupply = Math.round(num(saleTotal) / 1.1);
-  const saleVat = num(saleTotal) - saleSupply;
+  // 판매 공급가/부가세(분할청구 검증 기준) — 견적에 저장된 실제 값 우선(합 = 총액일 때), 없으면 총판매에서 10% 기준 분해.
+  const split = useMemo(() => saleSplitOf(saleTotal, saleSupplyAmount, saleVatAmount), [saleTotal, saleSupplyAmount, saleVatAmount]);
+  const saleSupply = split.supply;
+  const saleVat = split.vat;
+  // 부가세 0원 판매(영세율·해외 통역 등) — 청구 금액 입력 시에도 부가세 0 유지(10% 자동계산 안 함)
+  const zeroVatSale = split.zeroVat;
 
   // 회사 담당자 로드(캐시). 회사 선택 시 대표 담당자 자동 선택용.
   const loadContacts = async (companyId: number): Promise<{ value: string; label: string; primary?: boolean }[]> => {
@@ -266,6 +273,8 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     _txnId: only?.id,
     _bank: only?.bankAccount ?? '', _paidAmt: only && num(only.customerPaidAmount) > 0 ? String(num(only.customerPaidAmount)) : '',
     _curr: seedCurr, _foreign: only && num(only.foreignAmount) > 0 ? String(num(only.foreignAmount)) : '',
+    // 발행일(세금계산서) — 수정 화면에서도 저장값 그대로(누락 시 저장하면 발행일이 지워짐)
+    issueDate: r.issueDate ? String(r.issueDate).slice(0, 10) : null,
     expectedDate: r.expectedDate ?? null, paidDate: r.paidDate ?? null,
     paymentType: r.paymentType ?? null, paymentMethod: r.paymentMethod ?? null,
     supplyAmount: r.supplyAmount ?? '', vatAmount: r.vatAmount ?? '', amount: r.amount ?? '',
@@ -359,19 +368,14 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   const patchSupply = (i: number, digits: string) => {
     setRows(prev => prev.map((r, idx) => {
       if (idx !== i) return r;
-      if (digits === '') return { ...r, supplyAmount: '', vatAmount: '', amount: '' };
-      const vat = vatOf(digits);
-      return { ...r, supplyAmount: digits, vatAmount: String(vat), amount: String(num(digits) + vat) };
+      return { ...r, ...amountsFromSupply(digits, zeroVatSale) };
     }));
   };
   // 합계 입력 → 공급가액(합계÷1.1 반올림)·부가세(합계−공급가액) 역산. 공급가액+부가세는 항상 합계와 일치. 빈 값이면 모두 비움.
   const patchHaap = (i: number, digits: string) => {
     setRows(prev => prev.map((r, idx) => {
       if (idx !== i) return r;
-      if (digits === '') return { ...r, amount: '', supplyAmount: '', vatAmount: '' };
-      const total = num(digits);
-      const supply = Math.round(total / 1.1);
-      return { ...r, amount: digits, supplyAmount: String(supply), vatAmount: String(total - supply) };
+      return { ...r, ...amountsFromTotal(digits, zeroVatSale) };
     }));
   };
   // 새 청구 기본값 — 청구업체=판매 거래처, 결제방법 세금계산서, 결제구분 일괄결제, 입금주체 고객사, 입금항목 전체금액.
@@ -479,9 +483,9 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     const sumSupply = data.reduce((s, r) => s + effAmounts(r, isVoucher).supply, 0);
     const sumVat = data.reduce((s, r) => s + effAmounts(r, isVoucher).vat, 0);
     const sumTotal = data.reduce((s, r) => s + haap(r), 0);
-    const matched = isVoucher || (sumSupply === saleSupply && sumVat === saleVat && sumTotal === num(saleTotal));
+    const matched = isVoucher || splitMatched({ supply: sumSupply, vat: sumVat, total: sumTotal }, saleTotal, split);
     return { totalPaid, receivable, rate, sumSupply, sumVat, sumTotal, matched };
-  }, [data, saleTotal, isVoucher]);
+  }, [data, saleTotal, split, isVoucher]);
 
   // ── 스타일 ──
   const inp: React.CSSProperties = { ...dsInputStd(), minHeight: 30, padding: '4px 8px', width: '100%' };

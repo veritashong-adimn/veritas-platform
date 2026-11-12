@@ -547,6 +547,8 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
             token={token}
             paymentRecords={project.paymentRecords ?? []}
             saleTotal={Number(quote?.price ?? 0)}
+            saleSupplyAmount={items.length ? items.reduce((s: number, it: any) => s + Number(it.supplyAmount ?? 0), 0) : null}
+            saleVatAmount={items.length ? items.reduce((s: number, it: any) => s + Number(it.taxAmount ?? 0), 0) : null}
             defaultCompany={project.companyId ? { id: project.companyId, name: companyName ?? '' } : null}
             /* 차감견적을 판매전환한 판매건에서만 '이번 서비스 사용액/총 선입금액/사용가능잔액' 요약 적용.
                일반·누적 견적 판매건은 isPrepaidSale=false → 기존 미수금/입금완료율 요약 그대로. */
