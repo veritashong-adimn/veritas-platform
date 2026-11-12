@@ -84,7 +84,7 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
   const defaultNotes = QUOTE_NOTES_BY_SERVICE[data.serviceType] ?? QUOTE_NOTES_BY_SERVICE['mixed'];
   const notesText = data.quoteNotes || defaultNotes;
   // 안내말씀 — 품목 서비스 유형별 고지사항(발행일 기준 템플릿 버전). 기타 품목만이면 공통 조건만, 품목이 할인뿐이면 null(미표시)
-  const notices = buildQuoteNotices(data.items, data.quoteDate);
+  const notices = buildQuoteNotices(data.items, data.quoteDate, { title: quoteTitle, note: data.note });
 
   return (
     <>
@@ -497,9 +497,16 @@ function NoticeBlock({ section }: { section: NoticeSection }) {
   );
   return (
     // 인쇄 분할 단위: 소제목은 첫 조항과 붙여 두고(qp-heading), 조항·문단·요율표는 각각 중간에서 자르지 않는다(qp-keep)
-    <div data-notice={section.key}>
+    <div data-notice={section.key} style={section.fullWidth ? { gridColumn: '1 / -1' } : undefined}>
       <div className="qp-heading" style={{ fontSize: 10, fontWeight: 700, color: BRAND, marginBottom: 3 }}>[{section.title}]</div>
       {section.items?.map((t, i) => numbered(t, i, i))}
+      {/* 소제목 붙은 번호 항목(번역 대조감수) — ① 소제목 / 본문, 항목 사이 간격으로 가독성 확보 */}
+      {section.labeledItems?.map((it, i) => (
+        <div key={`l${i}`} className="qp-keep" style={{ ...text, lineHeight: 1.7, display: 'flex', gap: 4, marginTop: i ? 5 : 2 }}>
+          <span style={{ flexShrink: 0, fontWeight: 700, color: '#1f2937' }}>{CIRCLED[i] ?? `${i + 1}.`}</span>
+          <span><span style={{ fontWeight: 700, color: '#1f2937' }}>{it.label}</span><br />{it.text}</span>
+        </div>
+      ))}
       {section.intro?.map((t, i) => <div key={i} className="qp-keep" style={text}>{t}</div>)}
       {section.rates && rateTable(section.rates, 'rates')}
       {section.outro?.map((t, i) => <div key={i} className="qp-keep" style={{ ...text, color: '#4b5563' }}>{t}</div>)}

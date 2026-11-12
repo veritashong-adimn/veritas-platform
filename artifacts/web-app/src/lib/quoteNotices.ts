@@ -13,7 +13,9 @@ export type NoticeKey = 'common' | 'interpretation' | 'interpRecording' | 'inter
   // 번역 전용 견적서(번역 품목만) — 공통 대신 번역 기준 4개 영역
   | 'transCommon' | 'transWork' | 'transDelivery' | 'transSecurity'
   // 통역장비 — 장비 단독은 4개 영역 전체, 복합은 공통(equipCommon)을 뺀 장비 전용 3개 영역
-  | 'equipCommon' | 'equipInstall' | 'equipCancel' | 'equipSafety';
+  | 'equipCommon' | 'equipInstall' | 'equipCancel' | 'equipSafety'
+  // 번역 대조감수(상품명 '…대조감수') — 언어 조합 무관
+  | 'proofCompare';
 
 export interface NoticeRate { label: string; value: string }
 export interface NoticeSection {
@@ -29,6 +31,10 @@ export interface NoticeSection {
   outro?: string[];
   /** 번호 항목과 요율표를 순서대로 섞어 표시할 때(번호는 항목만 이어서 매김) — items/intro/rates/outro 대신 사용 */
   blocks?: Array<{ item: string } | { rates: NoticeRate[] }>;
+  /** 소제목이 붙은 번호 항목(① 소제목 / 본문). gmpSop=true 항목은 GMP·SOP 문서 견적에만 출력 */
+  labeledItems?: Array<{ label: string; text: string; gmpSop?: boolean }>;
+  /** 안내말씀 2열 배치에서 한 줄 전체 사용(단독 출력 시 가독성) */
+  fullWidth?: boolean;
 }
 
 export interface NoticeTemplateVersion {
@@ -179,6 +185,19 @@ export const QUOTE_NOTICE_VERSIONS: NoticeTemplateVersion[] = [
           '고객사명 및 번역 프로젝트명은 당사의 주요 수행실적으로 활용될 수 있습니다. 단, 비공개 또는 기밀유지가 필요한 사항은 사전에 협의하여 공개 대상에서 제외합니다.',
         ],
       },
+      // ── 번역 대조감수 — 확정 문구. ② 전문문서 감수는 GMP·SOP 문서 견적에만 출력 ──
+      proofCompare: {
+        key: 'proofCompare',
+        title: '번역 대조감수 안내',
+        fullWidth: true,
+        labeledItems: [
+          { label: '감수 범위', text: '원문과 번역문을 대조하여 오역·누락, 의미의 정확성, 전문용어의 적절성 및 표현의 일관성을 검토합니다.' },
+          { label: '전문문서 감수', gmpSop: true, text: 'GMP·SOP 문서의 특성을 고려하여 전문용어, 문맥 및 문서 내 용어의 통일성을 중점적으로 검토합니다.' },
+          { label: '감수 기준', text: '고객이 제공한 원문과 번역문을 기준으로 진행하며, 원문의 오류·불명확한 표현 및 별도의 기술적 판단이 필요한 사항은 고객 확인 후 반영합니다.' },
+          { label: '변경 및 추가 작업', text: '감수 착수 후 원문·번역문이 변경되거나 작업 범위가 확대될 경우, 일정 및 비용을 별도 협의합니다.' },
+          { label: '기밀 유지', text: '제공된 문서와 업무상 취득한 정보는 기밀로 취급하며, 계약 및 적용되는 기밀유지 의무에 따라 관리합니다.' },
+        ],
+      },
     },
   },
 ];
@@ -193,6 +212,10 @@ export function pickNoticeVersion(issueDate: string): NoticeTemplateVersion {
 
 // 녹음·방송 이용료가 이미 별도 품목으로 들어간 경우(같은 비용을 다시 청구하지 않음을 함께 안내)
 const RECORDING_ITEM = /녹음|녹화|방송|2차\s*이용|재사용/;
+// 번역 대조감수 상품(언어 조합 무관 — '한국어-영어 대조감수', '원문대조감수' 등). 상품 유형과 무관하게 상품명으로 판별
+const COMPARE_PROOF_ITEM = /대조\s*감수/;
+// GMP·SOP 문서 견적 — 견적서명·비고·상품명·상품 상세/비고에 표기된 경우
+const GMP_SOP = /(?<![A-Za-z])(?:GMP|SOPs?)(?![A-Za-z])/i;  // 'GMP문서'·'SOP 번역' 등. 단어 일부(예: 'sopra')는 제외
 
 export interface QuoteNotices { version: string; sections: NoticeSection[] }
 
@@ -206,11 +229,14 @@ export interface QuoteNotices { version: string; sections: NoticeSection[] }
  *  · 장비가 섞인 복합은 기존 안내말씀(통역 / 번역 / 통역+번역) 뒤에 장비 전용 3개 영역(설치·운영, 취소보상비, 안전·기타)을 붙인다.
  *    견적·서비스 조건은 앞 서비스의 것 하나만(장비 공통 중복 출력 없음). 취소보상비는 통역(통역료 기준)과 장비(장비 계약금액 기준)를
  *    각자의 영역에 한 번씩만 — 번역에는 취소보상비를 붙이지 않는다.
+ *  · 번역 대조감수 품목(상품명 '대조감수')이 있으면 [번역 대조감수 안내]를 출력한다 — 대조감수 등 기타 품목만이면 공통 조건 대신 이것만,
+ *    다른 서비스와 섞이면 기존 안내말씀 뒤에 붙인다. ② 전문문서 감수는 GMP·SOP 표기가 있는 견적에만(없으면 번호를 이어 매김).
  *  · 서비스 구분은 품목 분류(productType) 기준 — 상품명의 '통역' 글자로 판단하지 않는다('통역장비 1세트' = 장비).
  */
 export function buildQuoteNotices(
-  items: Array<{ productType: string; productName?: string; detailText?: string }>,
+  items: Array<{ productType: string; productName?: string; detailText?: string; memo?: string }>,
   issueDate: string,
+  ctx?: { title?: string; note?: string },
 ): QuoteNotices | null {
   const types = new Set(items.map(i => i.productType));
   const hasInterp = types.has('interpretation');
@@ -221,8 +247,30 @@ export function buildQuoteNotices(
 
   const v = pickNoticeVersion(issueDate);
   const S = v.sections;
-  // 기타(expense) 품목만 — 감수·공증·편집 등 서비스 성격이 다양하므로 서비스 중립적인 공통 '견적 및 서비스 조건'만 표시(신규 문구 없음)
-  if (!hasInterp && !hasTrans && !hasEquip) return { version: v.version, sections: [S.common] };
+  const compare = buildCompareProofSection(S.proofCompare, items, ctx);
+  // 기타(expense) 품목만 — 대조감수가 있으면 대조감수 안내, 그 외에는 서비스 중립적인 공통 '견적 및 서비스 조건'만 표시
+  if (!hasInterp && !hasTrans && !hasEquip) return { version: v.version, sections: [compare ?? S.common] };
+  const r = buildServiceNotices(v, S, items, hasInterp, hasTrans, hasEquip);
+  return compare ? { ...r, sections: [...r.sections, compare] } : r;
+}
+
+/** 대조감수 품목이 없으면 null. GMP·SOP 표기가 없으면 ② 전문문서 감수 항목을 뺀다 */
+function buildCompareProofSection(
+  base: NoticeSection,
+  items: Array<{ productName?: string; detailText?: string; memo?: string }>,
+  ctx?: { title?: string; note?: string },
+): NoticeSection | null {
+  if (!items.some(i => COMPARE_PROOF_ITEM.test(i.productName ?? ''))) return null;
+  const hay = [ctx?.title, ctx?.note, ...items.flatMap(i => [i.productName, i.detailText, i.memo])].filter(Boolean).join(' ');
+  const gmpSop = GMP_SOP.test(hay);
+  return { ...base, labeledItems: (base.labeledItems ?? []).filter(it => gmpSop || !it.gmpSop) };
+}
+
+function buildServiceNotices(
+  v: NoticeTemplateVersion, S: Record<NoticeKey, NoticeSection>,
+  items: Array<{ productName?: string; detailText?: string }>,
+  hasInterp: boolean, hasTrans: boolean, hasEquip: boolean,
+): QuoteNotices {
   const transOnly = [S.transCommon, S.transDelivery, S.transWork, S.transSecurity];
   if (hasTrans && !hasInterp && !hasEquip) return { version: v.version, sections: transOnly };
   if (hasEquip && !hasInterp && !hasTrans) return { version: v.version, sections: [S.equipCommon, S.equipCancel, S.equipInstall, S.equipSafety] };
