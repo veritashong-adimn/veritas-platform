@@ -1,11 +1,13 @@
 // 위치: api-server/test — web-app 공용 함수(lib/paymentSplit)를 함께 검증하므로 api-server src(tsc rootDir) 밖에 둔다. esbuild 번들로 실행.
 // 청구정보 수정 화면 — 기존 저장값 보존 검증(개발 DB · 로컬 API :8080 전용). fixture 를 만들고 끝나면 삭제한다.
 //  [A] 금액 분해·검증 규칙(web-app lib/paymentSplit) — 부가세 0원 판매 / 국내 10% 판매 / 1원 반올림 차이
+//  [C] 결제방법 영세율 계산서·면세 계산서 — 세금 구분 규칙 + API 저장·재조회(선택값 유지·발행일·금액·입금정보 유지) + 수금 발행 대상
 //  [B] API 왕복 — 판매 상세 조회의 청구정보(발행일·금액) → 수정 화면과 같은 값으로 저장(입금일만 변경) → 발행일·공급가·부가세·청구금액 유지
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import jwt from "jsonwebtoken";
-import { saleSplitOf, amountsFromSupply, amountsFromTotal, splitMatched } from "../../web-app/src/lib/paymentSplit";
+import { saleSplitOf, amountsFromSupply, amountsFromTotal, splitMatched, methodTaxKind, isInvoiceMethod, isZeroVatMethod, methodVatWarning } from "../../web-app/src/lib/paymentSplit";
+import { summarizeSaleCollection } from "../src/routes/collections";
 
 let pass = 0, fail = 0;
 const check = (label: string, cond: boolean, extra?: unknown) => { if (cond) { pass++; console.log(`  ✅ ${label}`); } else { fail++; console.log(`  ❌ ${label}`, extra ?? ""); } };
@@ -70,6 +72,60 @@ async function main() {
       check(`${c.name}: 입금일만 수정 저장 → 발행일·공급가·부가세·청구금액 유지, 입금 반영`, put.ok && String(after.issue_date).slice(0, 10) === c.issue && Number(after.supply_amount) === c.supply
         && Number(after.vat_amount) === c.vat && Number(after.amount) === c.supply + c.vat && String(after.paid_date).slice(0, 10) === c.paid && after.deposit_status === "completed", { status: put.status, after });
     }
+
+    console.log("\n[C] 결제방법 영세율 계산서 · 면세 계산서");
+    check("세금 구분: 세금계산서=과세 · 영세율 계산서=영세율 · 면세 계산서=면세 · 카드/현금/외화송금=해당 없음",
+      methodTaxKind("세금계산서") === "taxable" && methodTaxKind("영세율 계산서") === "zero_rated" && methodTaxKind("면세 계산서") === "exempt"
+      && [ "카드", "현금", "외화송금", "", null ].every(m => methodTaxKind(m) === null));
+    check("발행일 대상 = 세 계산서 · 부가세 0원 = 영세율·면세만", isInvoiceMethod("영세율 계산서") && isInvoiceMethod("면세 계산서") && isInvoiceMethod("세금계산서") && !isInvoiceMethod("카드")
+      && isZeroVatMethod("영세율 계산서") && isZeroVatMethod("면세 계산서") && !isZeroVatMethod("세금계산서"));
+    check("영세율·면세 행 금액 입력 → 부가세 0원(10% 판매라도)", amountsFromSupply("1000000", false || isZeroVatMethod("면세 계산서")).vatAmount === "0"
+      && amountsFromTotal("1000000", false || isZeroVatMethod("영세율 계산서")).supplyAmount === "1000000");
+    check("세금계산서 행은 기존 10% 규칙 유지", amountsFromSupply("1000000", false || isZeroVatMethod("세금계산서")).vatAmount === "100000");
+    check("불일치 경고: 영세율/면세 + 부가세 있음 → 경고 · 부가세 0 또는 세금계산서 → 없음",
+      !!methodVatWarning("영세율 계산서", 100000) && !!methodVatWarning("면세 계산서", "100000.00") && methodVatWarning("면세 계산서", 0) === null && methodVatWarning("세금계산서", 0) === null && methodVatWarning("세금계산서", 100000) === null);
+
+    const roundTrip = async (pid: number, method: string, patch: Record<string, unknown> = {}) => {
+      const rec = ((await (await fetch(`${B}/admin/projects/${pid}`, { headers: H })).json()) as any).paymentRecords[0];
+      const row = { id: rec.id, issueDate: rec.issueDate ? String(rec.issueDate).slice(0, 10) : null, expectedDate: rec.expectedDate ?? null, paidDate: rec.paidDate ? String(rec.paidDate).slice(0, 10) : null,
+        paymentType: rec.paymentType, paymentMethod: method, supplyAmount: Number(rec.supplyAmount), vatAmount: Number(rec.vatAmount), amount: Number(rec.amount),
+        depositStatus: rec.depositStatus, depositConfirmed: !!rec.depositConfirmed, paymentCategory: rec.paymentCategory, payer: rec.payer, depositItem: rec.depositItem,
+        billingCompanyId: rec.billingCompanyId ?? null, billingContactId: rec.billingContactId ?? null, note: rec.note ?? null, ...patch };
+      const put = await fetch(`${B}/admin/projects/${pid}/payment-records`, { method: "PUT", headers: H, body: JSON.stringify({ rows: [row], deletedIds: [] }) });
+      const again = ((await (await fetch(`${B}/admin/projects/${pid}`, { headers: H })).json()) as any).paymentRecords[0];
+      return { ok: put.ok, status: put.status, again };
+    };
+    const snap = async (pid: number) => one(sql`SELECT payment_method, issue_date::text, expected_date::text, paid_date::text, supply_amount, vat_amount, amount, deposit_status, deposit_confirmed FROM project_payments WHERE project_id = ${pid}`);
+    // 영세율 판매(42,000,000/0) — 발행일 2026-11-09 · 입금예정 2026-11-30 · 입금완료 2026-11-20 이 있는 상태에서 결제방법만 변경
+    const zp = await mk(`${tag}_영세율전환`, 42000000, 0, "2026-11-09");
+    await db.execute(sql`UPDATE project_payments SET expected_date = '2026-11-30', paid_date = '2026-11-20', deposit_status = 'completed', deposit_confirmed = true WHERE project_id = ${zp}`);
+    const z0 = await snap(zp);
+    for (const m of ["영세율 계산서", "면세 계산서"]) {
+      const r = await roundTrip(zp, m);
+      const z1 = await snap(zp);
+      check(`${m}: 저장 → DB 결제방법 '${m}' · 재조회(수정 화면 재진입) 값 유지`, r.ok && z1.payment_method === m && r.again?.paymentMethod === m, { status: r.status, z1 });
+      check(`${m}: 발행일·입금예정일·입금일·입금상태·공급가·부가세 0·청구금액 유지`, JSON.stringify({ ...z1, payment_method: null }) === JSON.stringify({ ...z0, payment_method: null }), { z0, z1 });
+    }
+    // 국내 10% 판매(1,000,000/100,000)를 영세율 계산서로 바꿔도 금액은 그대로(자동 0원 처리 없음) → 화면은 경고만
+    const tp = await mk(`${tag}_10%전환`, 1000000, 100000, "2026-10-01");
+    const t0 = await snap(tp);
+    const tr = await roundTrip(tp, "영세율 계산서");
+    const t1 = await snap(tp);
+    check("10% 청구를 영세율 계산서로 변경 → 공급가·부가세·청구금액·발행일 그대로 · 경고 대상", tr.ok && t1.payment_method === "영세율 계산서" && t1.vat_amount === t0.vat_amount && t1.amount === t0.amount && t1.issue_date === t0.issue_date
+      && !!methodVatWarning(t1.payment_method, t1.vat_amount), { t0, t1 });
+    // 영세율·면세 신규 청구행 저장(신규 행 · 부가세 0)
+    const np = await mk(`${tag}_신규`, 500000, 0, "2026-11-01");
+    await db.execute(sql`DELETE FROM project_payments WHERE project_id = ${np}`);
+    const newRow = { issueDate: "2026-11-12", expectedDate: "2026-11-30", paidDate: null, paymentType: "lump_sum", paymentMethod: "면세 계산서", ...amountsFromSupply("500000", isZeroVatMethod("면세 계산서")),
+      depositStatus: "scheduled", depositConfirmed: false, paymentCategory: "일반결제", payer: "고객사", depositItem: "전체금액", billingCompanyId: null, billingContactId: null, note: null };
+    const nput = await fetch(`${B}/admin/projects/${np}/payment-records`, { method: "PUT", headers: H, body: JSON.stringify({ rows: [{ ...newRow, supplyAmount: Number(newRow.supplyAmount), vatAmount: Number(newRow.vatAmount), amount: Number(newRow.amount) }], deletedIds: [] }) });
+    const n1 = await snap(np);
+    check("신규 청구행 면세 계산서 저장 → 결제방법·발행일 2026-11-12·부가세 0 · 청구 500,000", nput.ok && n1.payment_method === "면세 계산서" && n1.issue_date === "2026-11-12" && Number(n1.vat_amount) === 0 && Number(n1.amount) === 500000, { status: nput.status, n1 });
+    // 수금관리 — 영세율·면세 계산서도 발행 대상(발행일 있으면 발행 기록)
+    const base = { project_id: 1, title: "t", project_status: "approved", company_name: null, quote_number: null, price: "300", pm_name: null };
+    const pr = (id: number, m: string, issue: string | null) => ({ id, project_id: 1, sequence: id, amount: "100", payment_method: m, issue_date: issue, expected_date: null, paid_date: null, deposit_status: "scheduled", deposit_confirmed: false, billing_company_name: null, tx_cnt: "0", tx_paid: "0", last_paid_date: null });
+    const cs: any = summarizeSaleCollection(base as any, [pr(1, "영세율 계산서", "2026-11-01"), pr(2, "면세 계산서", null), pr(3, "카드", null)] as any, "2026-11-12");
+    check("수금: 영세율·면세 계산서 = 발행 대상(카드 제외)", cs.installments.map((x: any) => x.invoiceTarget).join() === "true,true,false", cs.installments);
   } finally {
     if (pids.length) {
       const pl = sql.join(pids.map(i => sql`${i}`), sql`, `);

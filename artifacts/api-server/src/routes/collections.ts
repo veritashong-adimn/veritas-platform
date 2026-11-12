@@ -227,7 +227,7 @@ router.get("/admin/collections", ...adminGuard, requireStaffPermission(["payment
 //    입금예정일·세금계산서 발행 여부·청구회차 상태만으로 입금완료 처리하지 않는다.
 //  · 수금상태: 입금 0 → unpaid(미입금) / 0 < 입금 < 판매금액 → partial(부분입금) / 입금 ≥ 판매금액 → completed(입금완료),
 //    입금 > 판매금액이면 overpaid=true(초과입금 경고).
-//  · 세금계산서: 결제방법이 '세금계산서'인 청구행이 발행 대상, 발행일(issue_date)이 있으면 발행 기록으로 본다(추정 없음).
+//  · 세금계산서: 결제방법이 '세금계산서'·'영세율 계산서'·'면세 계산서'인 청구행이 발행 대상, 발행일(issue_date)이 있으면 발행 기록으로 본다(추정 없음).
 //      미발행금액 = 발행 대상 청구행 중 발행일 없는 청구액 / 발행 후 입금대기 = 발행된 청구행의 MAX(청구액 − 행 입금, 0)
 //      청구 전 금액 = MAX(판매금액 − 청구액 합계, 0)(아직 청구행이 없는 금액 — 발행 대상 여부 미정이라 미발행금액과 분리).
 //  · ?include=legacy — 과거 CRM 판매목록 행(판매번호 1건=1행, 위 loadLegacyCollections 판정 그대로)을 함께 반환.
@@ -242,7 +242,8 @@ export type SalePayRow = {
   deposit_status: string | null; deposit_confirmed: boolean | null; billing_company_name: string | null;
   tx_cnt: string | null; tx_paid: string | null; last_paid_date: string | null;
 };
-const isTaxInvoiceMethod = (m: string | null) => (m ?? "").replace(/\s/g, "") === "세금계산서";
+// 발행 대상 — 세금계산서 · 영세율 계산서 · 면세 계산서(청구정보 결제방법, web-app lib/paymentSplit 과 동일 규칙)
+const isTaxInvoiceMethod = (m: string | null) => ["세금계산서", "영세율계산서", "면세계산서"].includes((m ?? "").replace(/\s/g, ""));
 
 // 판매건 1건의 수금 집계(순수 함수 — DB 접근 없음). 위 규칙의 단일 구현.
 export function summarizeSaleCollection(b: SaleBaseRow, rows: SalePayRow[], today: string) {

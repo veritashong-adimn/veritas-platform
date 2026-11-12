@@ -10,7 +10,7 @@ import { api } from '../../lib/constants';
 import { Card, GhostBtn, PrimaryBtn, ClickSelect, confirmDialog } from '../ui';
 import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
 import { DateField } from './DatePickerShared';
-import { saleSplitOf, amountsFromSupply, amountsFromTotal, splitMatched } from '../../lib/paymentSplit';
+import { saleSplitOf, amountsFromSupply, amountsFromTotal, splitMatched, isInvoiceMethod, isZeroVatMethod, methodVatWarning, METHOD_ZERO_RATED, METHOD_EXEMPT } from '../../lib/paymentSplit';
 import './readTableView.css';
 
 export interface PayTxn {
@@ -84,8 +84,11 @@ const PAY_TYPE_OPTS = [
   { value: 'interim', label: '중도금' }, { value: 'balance', label: '잔금' }, { value: 'other', label: '기타' },
 ];
 // 결제방법 — text(자유 입력). 기본 4개(라벨=값) + '기타' 직접입력. 저장은 라벨/사용자 문자열 그대로.
+//  · 영세율 계산서·면세 계산서(부가세 0원) — 서로 다른 값으로 저장. 세금 구분 규칙은 lib/paymentSplit.
 const METHOD_OPTS = [
-  { value: '세금계산서', label: '세금계산서' }, { value: '카드', label: '카드' },
+  { value: '세금계산서', label: '세금계산서' },
+  { value: METHOD_ZERO_RATED, label: '영세율 계산서' }, { value: METHOD_EXEMPT, label: '면세 계산서' },
+  { value: '카드', label: '카드' },
   { value: '외화송금', label: '외화입금' }, { value: '현금', label: '현금' },
 ];
 const CUSTOM_METHOD = '__custom__';
@@ -134,7 +137,6 @@ const TXN_METHOD_OPTS = [
 const num = (v: unknown) => { const n = Number(String(v ?? '').replace(/,/g, '')); return Number.isFinite(n) ? n : 0; };
 const won = (n: number) => Math.round(n).toLocaleString('ko-KR');
 const dateVal = (v?: string | null) => (v ? String(v).slice(0, 10) : '');
-const METHOD_TAX = '세금계산서';   // 발행일은 세금계산서일 때만 입력 가능
 // 결제방법별 첫 예정/이벤트 날짜(expectedDate)의 컬럼명 — 카드=카드결제일 · 외화송금=송금예정일 · 그 외(세금계산서·현금·기타)=입금예정일.
 const scheduledLabel = (method?: string | null) => {
   const m = normMethod(method);
@@ -340,11 +342,12 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   const markPaid = (i: number, paidDate: string) => patchRow(i, { depositStatus: 'completed', depositConfirmed: true, paidDate });
   const markUnpaid = (i: number, status: string = 'scheduled') => patchRow(i, { depositStatus: status, depositConfirmed: false, paidDate: null });
   const todayStr = () => new Date().toISOString().slice(0, 10);
-  // 결제방법 변경 — 세금계산서가 아니면 발행일 자동 클리어(세금계산서만 발행일 사용).
+  // 결제방법 변경 — 계산서(세금·영세율·면세)가 아니면 발행일 자동 클리어(계산서만 발행일 사용).
+  //  금액(공급가·부가세·청구금액)은 결제방법 변경만으로 다시 계산하지 않는다(불일치는 경고만).
   //  외화송금 선택 시(§11/§12) 기본 제안값(입금은행 기업은행외화·통화 USD)을 비어있을 때만 채운다(강제 아님, 사용자가 변경 가능).
   const patchMethod = (i: number, v: string) => setRows(prev => prev.map((r, idx) => {
     if (idx !== i) return r;
-    const next: PayRow = { ...r, paymentMethod: v, ...(v !== METHOD_TAX ? { issueDate: null } : {}) };
+    const next: PayRow = { ...r, paymentMethod: v, ...(!isInvoiceMethod(v) ? { issueDate: null } : {}) };
     if (isOverseas(v)) { if (!next._bank) next._bank = '기업은행외화'; if (!next._curr) next._curr = 'USD'; }
     return next;
   }));
@@ -368,14 +371,14 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   const patchSupply = (i: number, digits: string) => {
     setRows(prev => prev.map((r, idx) => {
       if (idx !== i) return r;
-      return { ...r, ...amountsFromSupply(digits, zeroVatSale) };
+      return { ...r, ...amountsFromSupply(digits, zeroVatSale || isZeroVatMethod(r.paymentMethod)) };
     }));
   };
   // 합계 입력 → 공급가액(합계÷1.1 반올림)·부가세(합계−공급가액) 역산. 공급가액+부가세는 항상 합계와 일치. 빈 값이면 모두 비움.
   const patchHaap = (i: number, digits: string) => {
     setRows(prev => prev.map((r, idx) => {
       if (idx !== i) return r;
-      return { ...r, ...amountsFromTotal(digits, zeroVatSale) };
+      return { ...r, ...amountsFromTotal(digits, zeroVatSale || isZeroVatMethod(r.paymentMethod)) };
     }));
   };
   // 새 청구 기본값 — 청구업체=판매 거래처, 결제방법 세금계산서, 결제구분 일괄결제, 입금주체 고객사, 입금항목 전체금액.
@@ -604,7 +607,8 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     // 거래(transactions)가 있는 행 / 분할청구 / 차감견적 = 행 자체 기준(청구 − 행 고객결제액). 그 외 단일업체 회차청구는 러닝.
     const receivable = (isPrepaidSale || isSplitBilling || hasTxn(r)) ? Math.max(a.amount - paidOf(r), 0) : saleTotal - cumulativePaid;
     const companyLabel = r.billingCompanyName || r.payer || '—';
-    const isTaxMethod = normMethod(r.paymentMethod) === METHOD_TAX;   // 발행일 입력 대상 여부
+    const isTaxMethod = isInvoiceMethod(normMethod(r.paymentMethod));   // 발행일 입력 대상 여부(세금·영세율·면세 계산서)
+    const vatWarn = methodVatWarning(normMethod(r.paymentMethod), a.vat);   // 세금 구분 ↔ 금액 불일치(경고만)
     const schedLabel = scheduledLabel(r.paymentMethod);              // 첫 예정/이벤트 날짜 컬럼명(행별)
     // 입금 미확인(붉은색) — 예정일이 입력됐지만 입금확인 체크 전(수행정보 미확인 납품일과 동일). 확인 시 검정색.
     const confirmed = !!r.depositConfirmed;
@@ -652,6 +656,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
           {editable ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               <PaymentMethodField value={r.paymentMethod ?? ''} onChange={(v) => patchMethod(i, v)} triggerStyle={inp} testid={`pay-method-${i}`} />
+              {vatWarn && <span data-testid={`pay-method-warn-${i}`} title={vatWarn} style={{ fontSize: 11, color: C.danger, whiteSpace: 'normal' }}>⚠ 부가세 확인</span>}
               {firstPayMode && overseasRow && (
                 <div style={{ display: 'flex', gap: 4 }}>
                   <ClickSelect value={r._curr ?? ''} onChange={(v: string) => patchRow(i, { _curr: v })} triggerStyle={{ ...inp, width: 78 }} options={CURRENCY_OPTS} />
@@ -662,6 +667,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               <span>{methodText(r.paymentMethod)}</span>
+              {vatWarn && <span title={vatWarn} style={{ fontSize: 11, color: C.danger }}>⚠ 부가세 확인</span>}
               {/* §7 조회모드 — 외화송금 거래가 있으면 통화·외화입금액이 사라지지 않도록 셀 아래 compact 표시(팝업 없음) */}
               {dispForeign(r) && <span style={{ fontSize: 11, color: C.textSecondary, fontVariantNumeric: 'tabular-nums' }}>{dispForeign(r)}</span>}
             </div>
