@@ -16,6 +16,7 @@ type Row = {
   workflowStatus: string | null; adminId: number | null; financialStatus: string | null; quoteType: string | null;
   taxInvoiceDate: string | null; salesRep: string | null;
   paymentDate: string | null; paymentMemo: string | null;
+  paymentStatus?: 'completed' | 'partial' | null;   // current: 청구정보 실제 입금 기준(입금 없음 null)
 };
 
 // (표시 전용) 통역/번역 서비스 유형 분류 — 원본 변경 없이 상품명 기준.
@@ -144,7 +145,13 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.taxInvoiceDate ?? '-'}</td>
                   {/* 입금일(YYYY-MM-DD) · 입금내역(원문 보존, 상태 변환 없음) — 원본 값 없으면 '-' */}
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.paymentDate ?? '-'}</td>
-                  <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.paymentMemo ?? undefined}>{r.paymentMemo ?? '-'}</td>
+                  <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                      title={r.paymentMemo ? `${r.paymentStatus === 'partial' ? '[부분입금] ' : r.paymentStatus === 'completed' ? '[입금완료] ' : ''}${r.paymentMemo}` : undefined}>
+                    {/* current: 청구정보 입금상태 — 부분입금 / 입금완료 (입금 없음은 표시 없음) */}
+                    {r.paymentStatus && <span data-testid={`sh-paystatus-${r.key}`} style={{ marginRight: 4, padding: '1px 4px', borderRadius: 4, fontSize: 10, fontWeight: 700,
+                      background: r.paymentStatus === 'partial' ? '#fef3c7' : '#dcfce7', color: r.paymentStatus === 'partial' ? '#92400e' : '#166534' }}>{r.paymentStatus === 'partial' ? '부분' : '완료'}</span>}
+                    {r.paymentMemo ?? '-'}
+                  </td>
                   {/* 담당PM = 베리타스 내부 담당자(legacy=영업담당자, current=adminName). 고객 담당자와 대체 금지. 맨 오른쪽. */}
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={(isLegacy ? r.salesRep : (adminName(r.adminId) ?? r.pmName)) ?? undefined}>{(isLegacy ? r.salesRep : (adminName(r.adminId) ?? r.pmName)) ?? '-'}</td>
                 </tr>

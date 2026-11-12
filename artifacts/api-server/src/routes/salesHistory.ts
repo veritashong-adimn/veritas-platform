@@ -60,6 +60,8 @@ export interface SalesHistoryRow {
   // (목록/상세 표시 전용, READ-ONLY) 입금일(YYYY-MM-DD)·입금내역(원문 문자열). legacy 는 source_raw, current 는 null(임의 생성 금지).
   paymentDate: string | null;
   paymentMemo: string | null;
+  // (additive) 입금상태 — current 는 청구정보 실제 입금 기준 completed/partial(입금 없음 null). legacy 는 null(원본 문자열만).
+  paymentStatus?: "completed" | "partial" | null;
 }
 
 function toDateStr(v: unknown): string | null {
@@ -99,10 +101,11 @@ function mapCurrentRow(p: any): SalesHistoryRow {
     adminId: p.adminId ?? null,
     financialStatus: p.financialStatus ?? null,
     quoteType: p.quoteType ?? null,
-    taxInvoiceDate: null,         // current 은 계산서발행일 별도 보유 안 함(추정 금지)
+    taxInvoiceDate: null,         // fillBillingInfo 가 청구정보(project_payments) 실제 발행일로 채운다(추정 금지)
     salesRep: null,               // current 담당자는 프론트에서 adminName(adminId) 사용
-    paymentDate: null,            // current 수금/정산은 별도 로직 — 여기서 임의 생성하지 않음
+    paymentDate: null,            // fillBillingInfo — 실제 입금기록(입금거래/입금완료 확정)만. 입금예정일 사용 안 함
     paymentMemo: null,
+    paymentStatus: null,
   };
 }
 // 담당PM 표시명(내부 직원 admin/staff) — 화면의 관리자 목록에 없는 직원 PM 도 표시되도록 current 행에 채운다(additive).
@@ -134,6 +137,61 @@ async function markLegacyOrigin(dbx: any, list: SalesHistoryRow[]) {
     if (x?.contact_id) r.contactState = "master";
     else if (x?.name) { r.contactName = x.name; r.contactState = "restored"; }
     else if (r.contactName) r.contactState = "restored";   // 담당자 Master 없이 이름 스냅샷만 있는 전환 판매
+  }
+}
+
+// ── current 판매 목록의 계산서발행일·입금일·입금내역·입금상태 — 판매 상세 D.청구정보와 같은 원본(project_payments + payment_transactions) 조회.
+//  · 목록용 중복 저장 없음(READ-ONLY). 입금 판정은 수금관리(collections.summarizeSaleCollection)와 같은 규칙:
+//    청구행에 입금거래가 있으면 거래 각각이 입금기록, 없으면 입금완료 확정(completed + 확인 + 입금일)인 행의 청구액. 입금예정일은 입금으로 보지 않는다.
+//  · 계산서발행일 = 청구행에 저장된 발행일(여러 회차면 날짜순 모두). 없으면 생성하지 않는다.
+//  · 과거 CRM 전환 판매에 플랫폼 청구정보(발행일 / 입금기록)가 없으면 원본(sales_list) 값을 그대로 표시(항목군별 — 발행일, 입금일·입금내역).
+const won = (n: number) => Math.round(n).toLocaleString("ko-KR");
+const md = (d: string) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`;
+export function summarizeBillingForList(saleTotal: number | null, pays: any[], txns: any[]) {
+  const txByPay = new Map<number, any[]>();
+  for (const t of txns) { const k = Number(t.project_payment_id); txByPay.set(k, [...(txByPay.get(k) ?? []), t]); }
+  const issues = [...new Set(pays.map(p => toDateStr(p.issue_date)).filter((d): d is string => !!d))].sort();
+  const deposits: { date: string | null; bank: string | null; amount: number }[] = [];
+  for (const p of pays) {
+    const ts = txByPay.get(Number(p.id)) ?? [];
+    if (ts.length) for (const t of ts) deposits.push({ date: toDateStr(t.paid_date), bank: (t.bank_account ?? "").trim() || null, amount: Number(t.customer_paid_amount ?? 0) });
+    else if (p.deposit_status === "completed" && p.deposit_confirmed === true && p.paid_date) deposits.push({ date: toDateStr(p.paid_date), bank: null, amount: Number(p.amount ?? 0) });
+  }
+  const paid = deposits.filter(d => d.amount > 0).sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
+  const paidTotal = paid.reduce((s, d) => s + d.amount, 0);
+  const one = (d: typeof paid[number]) => [d.bank, won(d.amount)].filter(Boolean).join(" ");
+  return {
+    taxInvoiceDate: issues.length ? issues.join(", ") : null,
+    paymentDate: paid.length ? (paid.map(d => d.date).filter(Boolean).sort().pop() ?? null) : null,   // 마지막 실제 입금일
+    paymentMemo: !paid.length ? null : paid.length === 1 ? one(paid[0]) : paid.map(d => `${d.date ? md(d.date) + " " : ""}${one(d)}`).join(", "),
+    paymentStatus: paidTotal <= 0 ? null : (saleTotal != null && paidTotal < saleTotal ? "partial" : "completed") as "partial" | "completed",
+  };
+}
+async function fillBillingInfo(dbx: any, list: SalesHistoryRow[]) {
+  if (!list.length) return;
+  const ids = sql.join(list.map(r => sql`${Number(r.id)}`), sql`, `);
+  const pays = (await dbx.execute(sql`SELECT id, project_id, sequence, issue_date::text, amount, paid_date::text, deposit_status, deposit_confirmed
+    FROM project_payments WHERE project_id IN (${ids}) ORDER BY project_id, sequence, id`)).rows as any[];
+  const txns = pays.length ? (await dbx.execute(sql`SELECT t.project_payment_id, t.paid_date::text, t.bank_account, t.customer_paid_amount
+    FROM payment_transactions t WHERE t.project_payment_id IN (${sql.join(pays.map(p => sql`${Number(p.id)}`), sql`, `)}) ORDER BY t.paid_date, t.id`)).rows as any[] : [];
+  // 과거 CRM 전환 판매 — 원본 sales_list 값(플랫폼 청구정보가 없을 때만 사용)
+  const conv = list.filter(r => r.origin === "legacy_crm" && r.saleNumber);
+  const raw = conv.length ? new Map(((await dbx.execute(sql`SELECT DISTINCT ON (source_raw ->> '판매번호') source_raw ->> '판매번호' AS sale_no,
+      nullif(btrim(source_raw ->> '세금계산서발행(예정)일'), '') AS tax_date,
+      substring(source_raw ->> '입금일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') AS pay_date,
+      nullif(btrim(source_raw ->> '입금내역'), '') AS pay_memo
+    FROM legacy_archive_rows WHERE source_type = 'sales_list' AND is_effective AND source_raw ->> '판매번호' IN (${sql.join(conv.map(r => sql`${r.saleNumber}`), sql`, `)})
+    ORDER BY source_raw ->> '판매번호', id DESC`)).rows as any[]).map(x => [String(x.sale_no), x])) : new Map<string, any>();
+  const byProj = new Map<number, any[]>();
+  for (const p of pays) { const k = Number(p.project_id); byProj.set(k, [...(byProj.get(k) ?? []), p]); }
+  for (const r of list) {
+    const ps = byProj.get(Number(r.id)) ?? [];
+    const payIds = new Set(ps.map(p => Number(p.id)));
+    const b = summarizeBillingForList(r.amount, ps, txns.filter(t => payIds.has(Number(t.project_payment_id))));
+    const src = r.origin === "legacy_crm" && r.saleNumber ? raw.get(r.saleNumber) : null;
+    r.taxInvoiceDate = b.taxInvoiceDate ?? src?.tax_date ?? null;
+    if (b.paymentMemo) { r.paymentDate = b.paymentDate; r.paymentMemo = b.paymentMemo; r.paymentStatus = b.paymentStatus; }
+    else { r.paymentDate = src?.pay_date ?? null; r.paymentMemo = src?.pay_memo ?? null; r.paymentStatus = null; }
   }
 }
 
@@ -283,6 +341,8 @@ export async function getSalesHistory(dbx: any, q: Record<string, string | undef
   const merged = sortRows([...currentRows, ...legacyRows]);
   const total = (sources.current.ok ? (sources.current.count ?? 0) : 0) + (sources.legacy.ok ? (sources.legacy.count ?? 0) : 0);
   const pageRows = merged.slice((page - 1) * pageSize, page * pageSize);
+  // 현재 페이지의 current 판매만 청구정보(발행일·입금) 조회 — 실패해도 목록은 표시(해당 칸 '-')
+  try { await fillBillingInfo(dbx, pageRows.filter(r => r.source === "current")); } catch (e) { console.error("sales-history 청구정보 조회 실패", e); }
 
   return {
     rows: pageRows,
