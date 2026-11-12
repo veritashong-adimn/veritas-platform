@@ -83,7 +83,7 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
   // 안내문: 설정값 우선, 없으면 서비스 유형별 기본값
   const defaultNotes = QUOTE_NOTES_BY_SERVICE[data.serviceType] ?? QUOTE_NOTES_BY_SERVICE['mixed'];
   const notesText = data.quoteNotes || defaultNotes;
-  // 안내말씀 — 품목 서비스 유형별 고지사항(발행일 기준 템플릿 버전). 통역·번역·장비 품목이 없으면 null(미표시)
+  // 안내말씀 — 품목 서비스 유형별 고지사항(발행일 기준 템플릿 버전). 기타 품목만이면 공통 조건만, 품목이 할인뿐이면 null(미표시)
   const notices = buildQuoteNotices(data.items, data.quoteDate);
 
   return (

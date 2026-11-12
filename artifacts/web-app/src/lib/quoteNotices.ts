@@ -198,7 +198,8 @@ export interface QuoteNotices { version: string; sections: NoticeSection[] }
 
 /**
  * 견적 품목의 서비스 유형으로 안내말씀을 구성한다.
- *  · 통역·번역·장비 품목이 하나도 없으면(부대비용·할인·기타만) 안내말씀을 표시하지 않는다(기존 정책 유지).
+ *  · 통역·번역·장비 품목 없이 기타(expense) 품목이 있으면 공통 '견적 및 서비스 조건'만 표시한다(예: 기타 유형 대조감수).
+ *    할인 품목만 있으면 안내말씀을 표시하지 않는다.
  *  · 공통은 한 번, 서비스별 고지는 포함된 서비스만, 같은 고지는 중복하지 않는다.
  *  · 번역 전용(통역·장비 품목 없음)은 번역 4개 영역만 — 2열 배치 순서: 좌상 견적·서비스 조건 / 우상 납품·검수 / 좌하 작업·참고자료 / 우하 보안.
  *  · 장비 전용(통역·번역 품목 없음)은 장비 4개 영역만 — 좌상 견적·서비스 조건 / 우상 일정 변경·취소보상비 / 좌하 설치·운영 / 우하 안전·기타.
@@ -215,10 +216,13 @@ export function buildQuoteNotices(
   const hasInterp = types.has('interpretation');
   const hasTrans = types.has('translation');
   const hasEquip = types.has('equipment');
-  if (!hasInterp && !hasTrans && !hasEquip) return null;
+  const hasExpense = types.has('expense');
+  if (!hasInterp && !hasTrans && !hasEquip && !hasExpense) return null;
 
   const v = pickNoticeVersion(issueDate);
   const S = v.sections;
+  // 기타(expense) 품목만 — 감수·공증·편집 등 서비스 성격이 다양하므로 서비스 중립적인 공통 '견적 및 서비스 조건'만 표시(신규 문구 없음)
+  if (!hasInterp && !hasTrans && !hasEquip) return { version: v.version, sections: [S.common] };
   const transOnly = [S.transCommon, S.transDelivery, S.transWork, S.transSecurity];
   if (hasTrans && !hasInterp && !hasEquip) return { version: v.version, sections: transOnly };
   if (hasEquip && !hasInterp && !hasTrans) return { version: v.version, sections: [S.equipCommon, S.equipCancel, S.equipInstall, S.equipSafety] };
