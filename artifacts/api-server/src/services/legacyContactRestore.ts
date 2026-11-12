@@ -9,8 +9,12 @@
 // 3) 담당자 Master 자동 연결(auto_name_phone) — 같은 거래처 + 같은 이름 1명 + 진행관리표 연락처가 그 담당자 연락처와 일치할 때만.
 //    legacy_master_mappings('sale_contact') 에 저장(수동 보완과 같은 구조, match_method 로 구분). 이미 연결된 판매는 건드리지 않는다.
 //    담당자 Master 신규 등록 없음.
-// 4) 이름 기준 전체 자동 연결(auto_name / auto_name_created) — 같은 거래처 + 같은 이름이면 같은 담당자.
-//    전화·이메일 일치는 요구하지 않는다. 동명 Master 1명 → 연결, 0명 → (거래처, 이름)당 1명 신규 등록 후 연결,
+// 4) 이름 기준 자동 연결(auto_name / auto_name_created) — (변경) 이름만 같다고 같은 담당자로 확정하지 않는다.
+//    · 기존 동명 Master 연결: 원본 개인번호가 그 Master 번호와 일치(classifySales master=exact)할 때만. 이름만 같으면 예외(name_only_unverified).
+//    · 동명 Master 가 없을 때 신규 등록: (거래처, 이름) 묶음의 원본 개인번호가 서로 다르면 동명이인 가능 → 등록하지 않음(phone_conflict).
+//      판매 1건이거나, 등록할 번호와 같은 원본 개인번호를 가진 판매만 연결한다. 번호 근거 없는 나머지는 예외로 남긴다.
+//    · 이메일: 원본(진행관리표 비고)에 그 고객명과 함께 적힌 이메일이 1개로 확인될 때만 신규 담당자에 저장. 거래처 이메일로 대체하지 않는다.
+//      기존 Master 의 값은 덮어쓰지 않는다 — 원본 이메일과 Master 이메일이 다르거나 Master 가 비어 있으면 실행 근거(import_row_sources)에만 출처와 함께 남긴다.
 //    동명 2명 이상·거래처 미확정·고객명 없음/복수·기존 연결 충돌·운영 전환 판매는 예외(확인 필요)로 남긴다. planNameLinks / applyNameLinks.
 // 실행 기록·근거: import_batches(module=legacy_contact_restore) + import_row_sources. 배치 단위 되돌리기 지원.
 import { sql } from "drizzle-orm";
@@ -359,15 +363,20 @@ export async function rollbackRestore(tx: Dbx, batchId: number) {
 }
 
 // ─── 이름 기준 전체 자동 연결 ─────────────────────────────────────────────────────
-export type NameLinkException = "no_name" | "multiple_names" | "company_unresolved" | "duplicate_master" | "inactive_master" | "linked_conflict" | "converted_unlinked";
+export type NameLinkException = "no_name" | "multiple_names" | "company_unresolved" | "duplicate_master" | "inactive_master" | "linked_conflict" | "converted_unlinked"
+  | "name_only_unverified" | "phone_conflict";
 export const NAME_LINK_EXCEPTION_LABEL: Record<NameLinkException, string> = {
   no_name: "고객명 없음·무효", multiple_names: "고객명 복수 또는 의뢰건 식별 불확실", company_unresolved: "거래처 Master 미확정(없음·후보 복수)",
   duplicate_master: "같은 거래처 동명 담당자 Master 2명 이상", inactive_master: "같은 거래처 동명 담당자가 비활성 상태로만 존재",
   linked_conflict: "기존 연결 담당자 이름이 원본 고객명과 다름", converted_unlinked: "운영 판매로 전환된 건(담당자 미지정) — 운영 데이터라 자동 변경 제외",
+  name_only_unverified: "이름만 일치 — 연락처로 같은 사람인지 확인되지 않음",
+  phone_conflict: "같은 이름의 원본 개인번호가 서로 다름 — 동명이인 가능",
 };
 export interface NameLinkPlan {
-  existing: Array<{ saleNo: string; saleRowId: number; contactId: number; companyId: number }>;           // 동명 Master 1명(또는 개인번호로 1명 식별)에 연결
-  creates: Array<{ key: string; companyId: number; name: string; phone: { mobile: string | null; phone: string | null }; phoneConflict: string[]; sales: Array<{ saleNo: string; saleRowId: number }> }>;
+  // 원본 개인번호가 일치하는 기존 Master 에 연결. sourceEmail = 원본(비고) 이메일(Master 값은 바꾸지 않고 근거로만 기록)
+  existing: Array<{ saleNo: string; saleRowId: number; contactId: number; companyId: number; sourceEmail: string | null; masterEmail: string | null }>;
+  creates: Array<{ key: string; companyId: number; name: string; phone: { mobile: string | null; phone: string | null }; phoneConflict: string[];
+    email: string | null; emailConflict: string[]; sales: Array<{ saleNo: string; saleRowId: number; sourceEmail: string | null }> }>;
   exceptions: Array<{ saleNo: string | null; saleRowId: number; company: string | null; companyId: number | null; customerName: string | null; reason: NameLinkException; detail: string; linkedContactId: number | null }>;
   alreadyLinkedOk: number; total: number;
   individualNoContact: number;   // 개인 고객 거래처(INDIVIDUAL) — 기존 구조처럼 담당자를 만들지 않고 거래처 연결만으로 둔다
@@ -380,13 +389,34 @@ export function displayName(raw: string): string {
   return s;
 }
 
+// 원본 이메일 — 진행관리표에 이메일 칸이 없어 '비고'에 원본 고객명과 함께 적힌 이메일만 고객 이메일로 본다(saleContactInfo 와 같은 규칙)
+const SRC_EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
+export function sourceEmailOf(memos: Array<{ cust: unknown; memo: unknown }>, customerName: string | null | undefined): string[] {
+  if (!customerName) return [];
+  const nk = personKey(customerName); const flat = customerName.replace(/\s/g, "");
+  return [...new Set(memos.filter(m => !invalidCustomerName(m.cust) && personKey(m.cust) === nk && SRC_EMAIL_RE.test(String(m.memo ?? ""))
+    && String(m.memo).replace(/\s/g, "").includes(flat) && !/(페이팔|paypal|메일변경|원천세)/i.test(String(m.memo)))
+    .map(m => String(m.memo).match(SRC_EMAIL_RE)![0].toLowerCase()))];
+}
+async function loadSaleMemos(dbx: Dbx) {
+  const by = new Map<number, Array<{ cust: unknown; memo: unknown }>>();
+  for (const m of await rows(dbx, sql`SELECT l.sale_row_id, btrim(p.source_raw->>'고객명') cust, p.source_raw->>'비고' memo
+      FROM legacy_sales_progress_links l JOIN legacy_archive_rows p ON p.id = l.progress_row_id AND p.is_effective
+      WHERE l.decision = 'confirmed' AND p.source_raw->>'비고' LIKE '%@%'`))
+    (by.get(Number(m.sale_row_id)) ?? by.set(Number(m.sale_row_id), []).get(Number(m.sale_row_id))!).push(m);
+  return by;
+}
+
 /** 이름 기준 연결 계획(읽기 전용) — 판매건 고유 판매번호 기준, 진행관리표 행은 근거로만 쓴다 */
 export async function planNameLinks(dbx: Dbx): Promise<NameLinkPlan> {
   const list = await classifySales(dbx);
-  const linkedNames = new Map((await rows(dbx, sql`SELECT id, name, deleted_at FROM contacts`)).map(c => [Number(c.id), c]));
+  const linkedNames = new Map((await rows(dbx, sql`SELECT id, name, email, deleted_at FROM contacts`)).map(c => [Number(c.id), c]));
+  const memos = await loadSaleMemos(dbx);
+  const srcEmail = (r: SaleContactResult) => { const e = sourceEmailOf(memos.get(r.saleRowId) ?? [], r.customerName); return e.length === 1 ? e[0] : null; };
   const plan: NameLinkPlan = { existing: [], creates: [], exceptions: [], alreadyLinkedOk: 0, total: list.length, individualNoContact: 0 };
   const individualCos = new Set((await rows(dbx, sql`SELECT id FROM companies WHERE customer_type = 'INDIVIDUAL' AND deleted_at IS NULL`)).map(c => Number(c.id)));
-  const groups = new Map<string, NameLinkPlan["creates"][number] & { names: Map<string, number>; tels: Set<string> }>();
+  type Grp = NameLinkPlan["creates"][number] & { names: Map<string, number>; tels: Set<string>; saleTels: Map<number, string[]>; rs: Map<number, SaleContactResult> };
+  const groups = new Map<string, Grp>();
   const ex = (r: SaleContactResult, reason: NameLinkException, detail: string) => plan.exceptions.push({ saleNo: r.saleNo, saleRowId: r.saleRowId, company: r.company,
     companyId: r.companyId ?? null, customerName: r.customerName ?? null, reason, detail, linkedContactId: r.linkedContactId ?? null });
   for (const r of list) {
@@ -404,27 +434,49 @@ export async function planNameLinks(dbx: Dbx): Promise<NameLinkPlan> {
     if (!r.saleNo) { ex(r, "no_name", "판매번호 없음"); continue; }
     if (!r.companyId) { ex(r, "company_unresolved", r.masterWhy ?? "거래처 Master 없음"); continue; }
     const same = r.sameNameIds ?? [];
-    // 동명 1명 → 연결(번호 불일치·번호 없음 무관). 동명 복수 중 원본 개인번호로 1명 식별된 기존 규칙(exact/multi)도 연결.
-    const target = same.length === 1 ? same[0] : r.master === "exact" && r.contactId ? r.contactId : null;
-    if (target) { plan.existing.push({ saleNo: r.saleNo, saleRowId: r.saleRowId, contactId: target, companyId: r.companyId }); continue; }
+    // 기존 Master 연결은 원본 개인번호가 일치해 같은 사람으로 확인된 경우만(동명 1명+번호 일치 / 동명 복수 중 개인번호 1명). 이름만 같으면 예외.
+    if (r.master === "exact" && r.contactId) {
+      const me = linkedNames.get(r.contactId)?.email;
+      plan.existing.push({ saleNo: r.saleNo, saleRowId: r.saleRowId, contactId: r.contactId, companyId: r.companyId, sourceEmail: srcEmail(r),
+        masterEmail: me && String(me).trim() ? String(me).trim().toLowerCase() : null });
+      continue;
+    }
     if (same.length > 1) { ex(r, "duplicate_master", `동명 담당자 #${same.join(", #")}`); continue; }
+    if (same.length === 1) { ex(r, "name_only_unverified", `동명 담당자 #${same[0]} — ${r.masterWhy ?? "연락처로 확인되지 않음"}`); continue; }
     if (individualCos.has(r.companyId)) { plan.individualNoContact++; continue; }
     if (r.inactiveSameName) { ex(r, "inactive_master", `비활성 동명 담당자 ${r.inactiveSameName}명 — 재활성 또는 신규 등록 판단 필요`); continue; }
     const key = `${r.companyId}|${personKey(r.customerName)}`;
-    const g = groups.get(key) ?? groups.set(key, { key, companyId: r.companyId, name: "", phone: { mobile: null, phone: null }, phoneConflict: [], sales: [], names: new Map(), tels: new Set() }).get(key)!;
-    g.sales.push({ saleNo: r.saleNo, saleRowId: r.saleRowId });
+    const g = groups.get(key) ?? groups.set(key, { key, companyId: r.companyId, name: "", phone: { mobile: null, phone: null }, phoneConflict: [], email: null, emailConflict: [], sales: [],
+      names: new Map(), tels: new Set(), saleTels: new Map(), rs: new Map() }).get(key)!;
+    g.sales.push({ saleNo: r.saleNo, saleRowId: r.saleRowId, sourceEmail: srcEmail(r) });
+    g.rs.set(r.saleRowId, r);
     const dn = displayName(r.customerName!); g.names.set(dn, (g.names.get(dn) ?? 0) + 1);
-    for (const t of r.personalTels ?? []) if (phoneType(t) !== "unknown" && phoneType(t) !== "rep") g.tels.add(t);
+    const own = (r.personalTels ?? []).filter(t => phoneType(t) !== "unknown" && phoneType(t) !== "rep");
+    for (const t of own) g.tels.add(t);
+    g.saleTels.set(r.saleRowId, own);
   }
   for (const g of groups.values()) {
     // 이름: 가장 많이 쓰인 표기(동률이면 먼저 나온 표기)
     g.name = [...g.names.entries()].sort((a, b) => b[1] - a[1])[0][0];
-    // 연락처: 원본 개인번호가 휴대·일반 각각 1개로 일치할 때만 채운다. 여러 개면 비우고 충돌로 기록(임의 선택 안 함)
     const mobiles = [...g.tels].filter(t => phoneType(t) === "mobile"); const lands = [...g.tels].filter(t => phoneType(t) === "landline");
     g.phone = { mobile: mobiles.length === 1 ? mobiles[0] : null, phone: lands.length === 1 ? lands[0] : null };
     g.phoneConflict = [...(mobiles.length > 1 ? mobiles : []), ...(lands.length > 1 ? lands : [])];
-    const { names: _n, tels: _t, ...out } = g;
-    plan.creates.push(out);
+    // 원본 개인번호가 서로 다르면 같은 사람으로 묶지 않는다(동명이인 가능) — 등록·연결 없이 전부 확인 필요
+    if (g.phoneConflict.length) {
+      for (const s of g.sales) ex(g.rs.get(s.saleRowId)!, "phone_conflict", `원본 개인번호 ${g.phoneConflict.join(", ")}`);
+      continue;
+    }
+    // 연결할 판매: 판매 1건이거나, 등록할 번호와 같은 원본 개인번호가 있는 판매(이름만 같은 판매는 묶지 않음)
+    const groupNums = [g.phone.mobile, g.phone.phone].filter(Boolean) as string[];
+    const linkable = g.sales.length === 1 ? g.sales : g.sales.filter(s => (g.saleTels.get(s.saleRowId) ?? []).some(t => groupNums.includes(t)));
+    for (const s of g.sales) if (!linkable.includes(s)) ex(g.rs.get(s.saleRowId)!, "name_only_unverified", `같은 거래처 같은 이름 판매 ${g.sales.length}건 — 이 판매에는 같은 사람임을 확인할 원본 번호 없음`);
+    if (!linkable.length) continue;
+    // 이메일: 연결 판매의 원본 이메일이 1개로 일치할 때만. 여러 개면 비우고 충돌로 기록(임의 선택·거래처 이메일 대체 없음)
+    const emails = [...new Set(linkable.map(s => s.sourceEmail).filter(Boolean) as string[])];
+    g.email = emails.length === 1 ? emails[0] : null;
+    g.emailConflict = emails.length > 1 ? emails : [];
+    const { names: _n, tels: _t, saleTels: _st, rs: _rs, ...out } = g;
+    plan.creates.push({ ...out, sales: linkable });
   }
   return plan;
 }
@@ -466,19 +518,27 @@ export async function applyNameLinks(tx: Dbx, opts: { userId: number | null; onl
   let linkedExisting = 0, linkedNew = 0, contactsCreated = 0;
   for (const e of plan.existing) {
     const ins = await link(e.saleNo, e.contactId, AUTO_NAME_METHOD);
+    // 원본 이메일과 Master 이메일이 다르거나 Master 가 비어 있어도 Master 는 덮어쓰지 않는다 — 출처별 값을 근거로만 남긴다
     if (ins) { linkedExisting++; lineage.push({ entityId: Number(ins.id), rowKey: `sale_contact:${e.saleNo}`, status: "master_linked", legacyId: e.saleNo,
-      sourceRaw: { saleRowId: e.saleRowId, contactId: e.contactId, companyId: e.companyId, created: false } }); }
+      sourceRaw: { saleRowId: e.saleRowId, contactId: e.contactId, companyId: e.companyId, created: false, basis: "phone_verified",
+        sourceEmail: e.sourceEmail, masterEmail: e.masterEmail,
+        emailCheck: !e.sourceEmail ? "no_source_email" : !e.masterEmail ? "master_email_missing" : e.sourceEmail === e.masterEmail ? "same" : "differs" } }); }
   }
   for (const g of plan.creates) {
-    const memo = `과거 CRM 자동 등록(이름 기준, 판매 ${g.sales.length}건)${g.phoneConflict.length ? ` — 원본 연락처 복수: ${g.phoneConflict.join(", ")}` : ""}`;
-    const [c] = await rows(tx, sql`INSERT INTO contacts (company_id, name, phone, mobile, memo) VALUES (${g.companyId}, ${g.name}, ${g.phone.phone}, ${g.phone.mobile}, ${memo}) RETURNING id`);
+    // 재실행 안전: 잠금 뒤 다시 확인 — 같은 거래처에 같은 이름의 담당자가 이미 있으면 새로 만들지 않는다(다음 실행의 번호 확인 연결로 처리)
+    const [dup] = await rows(tx, sql`SELECT id FROM contacts WHERE company_id = ${g.companyId} AND deleted_at IS NULL
+      AND regexp_replace(lower(name), '\s', '', 'g') = regexp_replace(lower(${g.name}), '\s', '', 'g') LIMIT 1`);
+    if (dup) continue;
+    const memo = `과거 CRM 자동 등록(이름·원본 연락처 기준, 판매 ${g.sales.length}건)${g.emailConflict.length ? ` — 원본 이메일 복수: ${g.emailConflict.join(", ")}` : ""}`;
+    const [c] = await rows(tx, sql`INSERT INTO contacts (company_id, name, phone, mobile, email, memo) VALUES (${g.companyId}, ${g.name}, ${g.phone.phone}, ${g.phone.mobile}, ${g.email}, ${memo}) RETURNING id`);
     contactsCreated++;
     lineage.push({ entityId: Number(c.id), rowKey: `contact:${g.key}`, status: "contact_created", legacyId: null,
-      sourceRaw: { companyId: g.companyId, name: g.name, phone: g.phone, phoneConflict: g.phoneConflict, saleNos: g.sales.map(x => x.saleNo) } });
+      sourceRaw: { companyId: g.companyId, name: g.name, phone: g.phone, email: g.email, emailSource: g.email ? "crm_progress_memo" : null, emailConflict: g.emailConflict,
+        saleNos: g.sales.map(x => x.saleNo) } });
     for (const s of g.sales) {
       const ins = await link(s.saleNo, Number(c.id), AUTO_NAME_CREATED_METHOD);
       if (ins) { linkedNew++; lineage.push({ entityId: Number(ins.id), rowKey: `sale_contact:${s.saleNo}`, status: "master_linked", legacyId: s.saleNo,
-        sourceRaw: { saleRowId: s.saleRowId, contactId: Number(c.id), companyId: g.companyId, created: true } }); }
+        sourceRaw: { saleRowId: s.saleRowId, contactId: Number(c.id), companyId: g.companyId, created: true, sourceEmail: s.sourceEmail } }); }
     }
   }
   if (!scope) for (const e of plan.exceptions) lineage.push({ entityId: e.saleRowId, rowKey: `sale:${e.saleNo}`, status: e.reason === "no_name" ? "unverified" : "review", legacyId: e.saleNo,
@@ -557,12 +617,13 @@ export async function saleContactInfo(dbx: Dbx, saleNo: string, ctx: { companyId
   const nameMismatch = !!(linked && restoredName && personKey(linked.name) !== personKey(restoredName));
   const masterNumbers = linked ? [linked.phone, linked.mobile, linked.officePhone].map(normPhone).filter((t: string) => t.length >= 7) : [];
   // 업무 화면·새 문서에 쓸 담당자 연락처 자동 결정(저장된 원본·Master·거래처 값은 그대로 두고 표시용으로만 고른다)
-  //   이메일: 담당자 Master → 과거 CRM 원본(비고) → 거래처 Master. 공유·대표 이메일도 업무용으로 그대로 사용.
+  //   이메일: 담당자 Master → 과거 CRM 원본(비고)까지만. 거래처 Master 이메일은 담당자 이메일로 대체하지 않는다
+  //     (거래처 이메일이 다른 담당자 개인 이메일인 경우가 많아 오표시 — companyEmail 로 따로 돌려준다).
   //   연락처: 담당자 Master 휴대·일반 → 원본 개인번호 → 원본 대표·공용번호.
   const nz = (v: unknown) => (v != null && String(v).trim() ? String(v).trim() : null);
   const companyEmail = nz(co?.email);
-  const effectiveEmail = nz(linked?.email) ?? sourceEmails[0] ?? companyEmail;
-  const effectiveEmailFrom = nz(linked?.email) ? "master" : sourceEmails[0] ? "source" : companyEmail ? "company" : null;
+  const effectiveEmail = nz(linked?.email) ?? sourceEmails[0] ?? null;
+  const effectiveEmailFrom: "master" | "source" | null = nz(linked?.email) ? "master" : sourceEmails[0] ? "source" : null;
   const ownPhone = sourcePhones.find(p => !p.shared && p.type !== "unknown") ?? null;
   const effectivePhone = nz(linked?.mobile) ?? nz(linked?.phone) ?? nz(linked?.officePhone) ?? ownPhone?.raw ?? sourcePhones[0]?.raw ?? null;
   const effectivePhoneFrom = nz(linked?.mobile) || nz(linked?.phone) || nz(linked?.officePhone) ? "master" : sourcePhones.length ? "source" : null;

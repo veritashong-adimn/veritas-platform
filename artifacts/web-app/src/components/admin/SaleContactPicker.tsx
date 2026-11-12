@@ -71,8 +71,8 @@ export function SaleContactPicker({ source, id, authHeaders, onClose, onSaved }:
           // 신규 등록 자동 입력 — 복원 이름, 원본 개인번호(공용·대표번호 제외)
           const ci = d.contactInfo; const own = (ci?.sourcePhones ?? []).filter((p: any) => !p.shared && p.type !== 'unknown');
           const mob = own.find((p: any) => p.type === 'mobile'); const tel = own.find((p: any) => p.type !== 'mobile');
-          // 이메일: 원본 이메일 → 거래처 이메일(업무용 — 여러 담당자 공유 허용) 자동 입력
-          setForm({ name: d.restoredName, position: '', department: '', phone: tel?.raw ?? '', mobile: mob?.raw ?? '', email: ci?.sourceEmails?.[0] ?? ci?.companyEmail ?? '' });
+          // 이메일: 과거 CRM 원본 이메일만 자동 입력. 거래처 이메일은 다른 담당자 개인 이메일인 경우가 많아 담당자 이메일로 자동 입력하지 않는다.
+          setForm({ name: d.restoredName, position: '', department: '', phone: tel?.raw ?? '', mobile: mob?.raw ?? '', email: ci?.sourceEmails?.[0] ?? '' });
           if (!(d.contacts ?? []).length && d.company) setMode('create');   // 거래처에 등록된 담당자가 없으면 신규 등록 화면부터
         }
       })

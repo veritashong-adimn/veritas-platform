@@ -28,6 +28,7 @@ import PerformanceSection from '../components/admin/PerformanceSection';
 import { StaleSaleLinkNotice } from '../components/admin/StaleSaleLinkNotice';
 import PaymentInfoSection from '../components/admin/PaymentInfoSection';
 import { LegacyOriginSection } from '../components/admin/LegacyOriginSection';
+import { SaleBasicInfoEditor, SaleBasicInfoNotes, type BasicInfoView } from '../components/admin/SaleBasicInfoEditor';
 
 // ─── 로컬 라벨 맵 (견적관리 상세와 동일 문구) ────────────────────────────────
 const QUOTE_TYPE_LABEL: Record<string, string> = {
@@ -115,6 +116,18 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
   const [isLegacyOrigin, setIsLegacyOrigin] = useState(false);   // 과거 CRM 에서 전환된 판매건(출처 배지)
   // 견적 수신자 연락처·이메일 — 견적서에 실제 출력되는 값(발행 문서와 동일)
   const [recipient, setRecipient] = useState<{ phone: string | null; email: string | null } | null>(null);
+  // ── A. 기본정보 수정(담당자·연락처·이메일·PM·견적서명·견적일) ─────────────────
+  const [basicView, setBasicView] = useState<BasicInfoView | null>(null);
+  const [basicEdit, setBasicEdit] = useState(false);
+  const [recipientVer, setRecipientVer] = useState(0);   // 바뀌면 견적서 출력 수신자·갱신 안내를 다시 조회
+  const loadBasic = useCallback(async () => {
+    try {
+      const r = await fetch(api(`/api/admin/sales/${saleId}/basic-info`), { headers: authH });
+      setBasicView(r.ok ? await r.json() : null);
+    } catch { setBasicView(null); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saleId, token]);
+  useEffect(() => { loadBasic(); }, [loadBasic]);
 
   // ── 판매 상세(=프로젝트 + 원본 견적) 조회 ─────────────────────────────────
   // silent=true: 저장 후 백그라운드 갱신(예: 수행정보 추가비용 저장). 로딩 오버레이로 화면을 비우지 않아
@@ -130,6 +143,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
         return;
       }
       setProject(await res.json());
+      setRecipientVer(v => v + 1);
     } catch {
       setToast('판매 상세 조회 중 오류가 발생했습니다.');
     } finally {
@@ -155,7 +169,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
           ? { phone: d.customerContactPhone ?? d.customerContactMobile ?? null, email: d.customerContactEmail ?? null }
           : { phone: d.contactPhone ?? null, email: d.contactEmail ?? null });
       }).catch(() => setRecipient(null));
-  }, [quoteIdForRecipient, project?.contactId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [quoteIdForRecipient, project?.contactId, recipientVer]); // eslint-disable-line react-hooks/exhaustive-deps
   const saleConfirmed = ['approved', 'paid', 'matched', 'in_progress', 'completed'].includes(project?.status);
 
   const quoteDocTitle = quote ? (quote.title ?? quote.quoteNumber ?? `견적 #${quote.id}`) : '';
@@ -436,7 +450,19 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
 
           {/* ── A. 기본정보 ─────────────────────────────────────────────── */}
           <Card>
-            <CardSectionHeader badge="A" badgeBg="#eff6ff" badgeColor="#2563eb" title="기본정보" />
+            <CardSectionHeader badge="A" badgeBg="#eff6ff" badgeColor="#2563eb" title="기본정보"
+              hint={basicEdit ? '수정 중 — 저장 시 반영됩니다' : undefined}
+              right={!basicEdit && basicView ? (
+                <GhostBtn onClick={() => setBasicEdit(true)} style={{ fontSize: 12, padding: '6px 12px' }}
+                  data-testid="btn-sales-basic-edit" aria-label="기본정보 수정">✏ 기본정보 수정</GhostBtn>
+              ) : undefined}
+            />
+            {basicEdit && basicView ? (
+              <SaleBasicInfoEditor saleId={saleId} token={token} view={basicView}
+                onCancel={() => setBasicEdit(false)}
+                onReload={async () => { await loadBasic(); await fetchDetail({ silent: true }); }}
+                onSaved={(msg, next) => { setBasicView(next); setBasicEdit(false); setToast(msg); fetchDetail({ silent: true }); }} />
+            ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px 20px' }}>
               <ReadField label="견적서 유형" value={QUOTE_TYPE_LABEL[quote.quoteType] ?? quote.quoteType} />
               <ReadField label="견적일" value={quote.issueDate} />
@@ -453,10 +479,13 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
               <ReadField label="견적번호" value={quote.quoteNumber ? (formatDocNumber('Q', quote.quoteNumber, quote.issueDate) || quote.quoteNumber) : undefined} />
               <ReadField label="상태" value={<StatusBadge status={project.status} />} />
             </div>
+            )}
+            {!basicEdit && <SaleBasicInfoNotes view={basicView} />}
           </Card>
 
           {/* 견적서 수신자 고정값 ≠ 현재 담당자일 때만 '담당자 정보 갱신' 안내(사용자 선택 시에만 변경) */}
-          <QuoteRecipientRefreshBar quoteId={quote.id} token={token} onToast={setToast} refreshKey={project.contactId ?? null} />
+          <QuoteRecipientRefreshBar quoteId={quote.id} token={token} onToast={setToast} refreshKey={`${project.contactId ?? ''}:${recipientVer}`}
+            onRefreshed={() => { fetchDetail({ silent: true }); loadBasic(); }} />
 
           {/* ── B. 판매정보 ─────────────────────────────────────────────── */}
           {/* 조회모드: 읽기전용 뷰(QuoteItemsView). 수정모드: 견적관리와 공용 편집 그리드(QuoteItemsEditor).

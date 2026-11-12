@@ -226,10 +226,10 @@ export async function buildActivationPlan(dbx: Dbx, legacyRowId: number) {
       .map((m: string) => m.match(EMAIL_RE)![0].toLowerCase()))];
     if (emails.length === 1) Object.assign(contactInfo, { email: emails[0], emailFrom: "source", ...(contactInfo.from ? {} : { from: "source" }) });
   }
-  // 담당자 이메일 자동 결정: 담당자 Master → 과거 CRM 원본 → 같은 거래처 Master 이메일(업무용 — 공유·대표 이메일 허용)
+  // 담당자 이메일: 담당자 Master → 과거 CRM 원본(비고)까지만. 거래처 Master 이메일은 담당자 이메일로 대체하지 않는다
+  //   (대표·다른 담당자 개인 이메일이 고객 담당자 이메일로 견적서에 고정되는 문제 — 코트라 김민정 건). 참고값으로만 미리보기에 준다.
   const [coRow] = company.matchedId ? await rows(dbx, sql`SELECT email FROM companies WHERE id = ${company.matchedId}`) : [];
   const companyEmail: string | null = coRow?.email && String(coRow.email).trim() ? String(coRow.email).trim() : null;
-  if (!contactInfo.email && companyEmail) Object.assign(contactInfo, { email: companyEmail, emailFrom: "company" });
   const matchTr = await loadTranslatorIndex(dbx);
   // 통번역사 Master 지급방식(원천세 3순위) — 연결된 통번역사만 미리 조회
   const trIds = [...new Set(prog.map((p: any) => matchTr(rawRowFromRecord(p.source_raw ?? {}, "진행관리", 0).translatorName).id).filter((x: number | null): x is number => x != null))];
@@ -388,14 +388,15 @@ export async function executeActivation(legacyRowId: number, planToken: string, 
       memo: null,   // 상품 비고도 고객용 출력 — 원본 특성(총액만, 공급가·부가세 구분 없음)은 이관 이력에 기록
 
     }).returning({ id: quoteItemsTable.id });
-    // 견적별 고객정보 고정 — 전환 시점의 거래처·담당자(보완 연결 포함)를 견적 수신자로 저장(새 견적: 담당자 이메일 자동 결정)
-    await captureIfMissing(tx, quote.id, "effective");
+    // 견적별 고객정보 고정 — 전환 시점의 거래처·담당자(보완 연결 포함)를 견적 수신자로 저장.
+    //   'display' = 담당자 Master 값 그대로(거래처 이메일로 대체하지 않음). 원본 이메일은 아래에서 plan.contact.email 로만 채운다.
+    await captureIfMissing(tx, quote.id, "display");
     // 담당자 Master 미연결: 원본 개인번호(미리보기에 보여 준 값)만 새 견적 수신자 연락처로 넣는다. 직원은 견적에서 확인·수정한다.
     if (!plan.contact.matchedId && plan.contact.from === "source" && (plan.contact.mobile || plan.contact.phone)) {
       await tx.execute(sql`UPDATE quotes SET customer_contact_mobile = COALESCE(customer_contact_mobile, ${plan.contact.mobile}),
           customer_contact_phone = COALESCE(customer_contact_phone, ${plan.contact.phone}) WHERE id = ${quote.id}`);
     }
-    // 담당자 이메일 — 미리보기에서 보여 준 자동 결정값(담당자 Master → 원본 → 거래처)을 새 견적 수신자 이메일로
+    // 담당자 이메일 — 미리보기에서 보여 준 값(담당자 Master → 과거 CRM 원본)을 새 견적 수신자 이메일로. 없으면 빈 칸.
     if (plan.contact.email) await tx.execute(sql`UPDATE quotes SET customer_contact_email = ${plan.contact.email} WHERE id = ${quote.id}`);
 
     const lineage: any[] = [{

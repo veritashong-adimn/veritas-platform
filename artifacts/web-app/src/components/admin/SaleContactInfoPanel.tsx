@@ -43,7 +43,7 @@ const row = (label: string, value: React.ReactNode, testId?: string) => (
 export function SaleContactInfoPanel({ companyName, info }: { companyName: string | null; info: ContactInfo }) {
   const m = info.linked;
   const tag = (t: string, color = '#6b7280') => <span style={{ marginLeft: 6, fontSize: 11, color }}>{t}</span>;
-  // 업무 화면 기본 표시 — 담당자 연락처·이메일은 서버가 정한 값(담당자 Master → 과거 CRM 원본 → 거래처 이메일)
+  // 업무 화면 기본 표시 — 담당자 연락처·이메일은 서버가 정한 값(이메일: 담당자 Master → 과거 CRM 원본. 거래처 이메일은 '출처 상세'에만 참고 표시)
   return (
     <div data-testid="sale-contact-info" style={{ fontSize: 13 }}>
       <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '5px 10px' }}>
