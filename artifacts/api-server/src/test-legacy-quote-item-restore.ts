@@ -33,7 +33,8 @@ async function main() {
   check("편집 상품(내용=번역) → restorable", decideItemDetail([{ ...KORAIL, "상품명": "텍스트편집", "수량": "1", "단가": "70,000" }], 70000).status === "restorable");
   check("복수 파일(행별 파일명 다름) → multiple_values", decideItemDetail([KORAIL, { ...KORAIL, "파일명": "다른파일.docx" }], 70000).status === "multiple_values");
   check("같은 값 반복 행(대표값) → 금액 일치 시에만 확정", decideItemDetail([KORAIL, KORAIL], 70000).status === "restorable" && decideItemDetail([KORAIL, KORAIL], 140000).status === "amount_mismatch");
-  check("통역 → not_document(자동 복원 제외)", decideItemDetail([{ ...KORAIL, "내용": "통역" }], 70000).status === "not_document");
+  check("통역 단일값 → restorable(수량·단가만, 파일명·단어수·글자수는 품목 정보 아님)", (() => { const d = decideItemDetail([{ ...KORAIL, "내용": "통역" }], 70000); return d.status === "restorable" && d.detail.fileName === null && d.detail.wordCount === null; })());
+  check("내용이 번역·통역이 아니면 → not_document", decideItemDetail([{ ...KORAIL, "내용": "장비" }], 70000).status === "not_document");
   check("수량×단가 ≠ 공급가액 → amount_mismatch", decideItemDetail([KORAIL], 30000).status === "amount_mismatch");
   check("원본 행 없음 → no_progress", decideItemDetail([], 70000).status === "no_progress");
   check("글자수 0·빈값은 없음으로(값 생성 없음)", (() => { const d = decideItemDetail([{ ...KORAIL, "글자수": "0", "단어수": null }], 70000); return d.status === "restorable" && d.detail.charCount === null && d.detail.wordCount === null; })());
@@ -120,8 +121,8 @@ async function main() {
     const names = ["TR", "REV", "INT", "MULTI", "EDIT", "TWO", "NOSRC", "AMT"].map(S);
     const plan1 = new Map((await planItemRestore(db, { saleNos: names })).map(r => [r.saleNo, r]));
     check("계획: 단위는 변경 대상 아님 + 단위 확인 사유 기록", plan1.get(S("TR"))?.after?.unit === "건" && !!plan1.get(S("TR"))?.unitCheck);
-    check("계획: 번역·감수 restorable / 통역 not_document / 복수행 multiple_values / 수정품목 edited / 복수품목 multi_item / 원본없음 no_progress / 금액불일치 amount_mismatch",
-      plan1.get(S("TR"))?.status === "restorable" && plan1.get(S("REV"))?.status === "restorable" && plan1.get(S("INT"))?.status === "not_document"
+    check("계획: 번역·감수 restorable / 통역 1×공급가(원본과 같음) already_restored / 복수행 multiple_values / 수정품목 edited / 복수품목 multi_item / 원본없음 no_progress / 금액불일치 amount_mismatch",
+      plan1.get(S("TR"))?.status === "restorable" && plan1.get(S("REV"))?.status === "restorable" && plan1.get(S("INT"))?.status === "already_restored"
       && plan1.get(S("MULTI"))?.status === "multiple_values" && plan1.get(S("EDIT"))?.status === "edited_after_activation" && plan1.get(S("TWO"))?.status === "multi_item"
       && plan1.get(S("NOSRC"))?.status === "no_progress" && plan1.get(S("AMT"))?.status === "amount_mismatch", [...plan1.values()].map(r => [r.saleNo.slice(-6), r.status]));
 

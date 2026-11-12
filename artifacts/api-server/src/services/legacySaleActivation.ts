@@ -36,7 +36,7 @@ import { maskSourceRawForRead } from "./legacyArchiveResolve";
 import { ACTIVATION_MODULE, activatedSaleExists, decideLegacyWithholding, comparePostTax } from "./legacyActivationLineage";
 import { legacyActivationNote, LEGACY_ACTIVATION_ITEM_MEMO } from "./customerDocText";
 import { captureIfMissing } from "./quoteRecipientSnapshot";
-import { decideItemDetail, encodeDocMemo } from "./legacyQuoteItemRestore";
+import { decideItemDetail, encodeDocMemo, kindMatchesItemType } from "./legacyQuoteItemRestore";
 import { personKey, normPhone, phoneType, loadPhoneIndex } from "./legacyContactRestore";
 export { ACTIVATION_MODULE, activatedSaleExists };
 const SRC = "old_crm";
@@ -385,7 +385,8 @@ export async function executeActivation(legacyRowId: number, planToken: string, 
     }).returning({ id: quotesTable.id });
     // 원본 상세가 확인된 문서형 품목은 원본 수량·단가·파일명·단어수·글자수를 그대로(공급가액·부가세·총액은 아래 값 그대로).
     //   단위: 원본 '단위'(단어·글자)는 분량 산정 기준이라 거래 단위로 쓰지 않는다 — 기본 '건' 유지, 실제 단위는 확인 대상으로 근거에 기록
-    const det = plan.itemDetail.status === "restorable" && itemTypeOf(plan.productName) === "translation" ? plan.itemDetail.detail : null;
+    // 원본 '내용'(번역·통역)과 상품명으로 정한 품목 유형이 같을 때만(통역 = 판매 수량·단가, 예: 105 × 400,000)
+    const det = plan.itemDetail.status === "restorable" && kindMatchesItemType(plan.itemDetail.detail.kind, itemTypeOf(plan.productName)) ? plan.itemDetail.detail : null;
     const [item] = await tx.insert(quoteItemsTable).values({
       quoteId: quote.id, productId: null, productName: plan.productName, unit: "건", quantity: det ? String(det.quantity) : "1",
       // 공급가·부가세: 원본 진행관리로 확인된 경우만 분리(amountSplit.basis="progress"), 아니면 총액 그대로(부가세 0, 구분 미확인)
