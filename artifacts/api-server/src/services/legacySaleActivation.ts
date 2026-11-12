@@ -37,6 +37,7 @@ import { ACTIVATION_MODULE, activatedSaleExists, decideLegacyWithholding, compar
 import { legacyActivationNote, LEGACY_ACTIVATION_ITEM_MEMO } from "./customerDocText";
 import { captureIfMissing } from "./quoteRecipientSnapshot";
 import { decideItemDetail, encodeDocMemo, kindMatchesItemType } from "./legacyQuoteItemRestore";
+import { applyBillingRestore } from "./legacySaleRepair";
 import { personKey, normPhone, phoneType, loadPhoneIndex } from "./legacyContactRestore";
 export { ACTIVATION_MODULE, activatedSaleExists };
 const SRC = "old_crm";
@@ -491,7 +492,13 @@ export async function executeActivation(legacyRowId: number, planToken: string, 
     await tx.insert(importRowSourcesTable).values(lineage);
     await tx.update(importBatchesTable).set({ successRows: lineage.length, status: "completed" }).where(eq(importBatchesTable.id, batch.id));
 
-    return { projectId: project.id, quoteId: quote.id, itemId: item.id, batchId: batch.id, paymentRecordId, performances: created, plan: publicPlan(plan) };
+    // 세금계산서 발행정보 — 원본 발행일이 있고 입금 대조가 안 된 판매도 발행 내역(청구 1회차·입금예정)을 남긴다.
+    //   과거 CRM 전체 공통 규칙(planBillingRestore): 발행일 충돌·금액 근거 불명확·원본 입금기록 있음이면 만들지 않는다.
+    const billingRestore = plan.taxInvoiceDate && plan.collection.status !== "matched"
+      ? await applyBillingRestore(tx as any, { userId, saleNos: [plan.saleNo], reason: "전환 시 세금계산서 발행정보", executedVia: "activation" })
+      : null;
+
+    return { projectId: project.id, quoteId: quote.id, itemId: item.id, batchId: batch.id, paymentRecordId, billingRestore, performances: created, plan: publicPlan(plan) };
   });
 }
 

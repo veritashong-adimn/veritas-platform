@@ -87,8 +87,12 @@ async function main() {
     check("품목 105 × 400,000 · 단위 '건'(원본 단위 없음 — 임의 생성 안 함) · 비고 없음", Number(it.quantity) === 105 && Number(it.unit_price) === 400000 && it.unit === "건" && it.memo == null, it);
     check("공급가액 42,000,000 · 부가세 0 · 총액 42,000,000", Number(it.supply_amount) === 42000000 && Number(it.tax_amount) === 0 && Number(it.total_amount) === 42000000, it);
     check("수행정보 36건 그대로(판매수량 105로 추가 생성 없음)", Number((await one(sql`SELECT count(*) n FROM performance_assignments WHERE project_id = ${act.projectId}`)).n) === 36);
-    const bNew = (await planBillingRestore(db, { saleNos: [S("KNEW")] }))[0];
-    check("전환 직후 청구 계획 = restorable(2026-11-09, 42,000,000, 부가세 0)", bNew?.status === "restorable" && bNew.after?.issueDate === "2026-11-09" && bNew.after?.amount === 42000000 && bNew.after?.vat === 0, bNew);
+    // 전환 시 공통 규칙으로 발행정보(청구 1회차) 생성 — 이후 계획은 already_billed(중복 없음)
+    if ((act as any).billingRestore) made.batches.push((act as any).billingRestore.batchId);
+    const kNewPay = await rows(sql`SELECT issue_date, amount, vat_amount, deposit_status FROM project_payments WHERE project_id = ${act.projectId}`);
+    check("전환 시 청구 1회차 생성(2026-11-09, 42,000,000, 부가세 0, 입금예정)", (act as any).billingRestore?.restored === 1 && kNewPay.length === 1 && String(kNewPay[0].issue_date).slice(0, 10) === "2026-11-09"
+      && Number(kNewPay[0].amount) === 42000000 && Number(kNewPay[0].vat_amount) === 0 && kNewPay[0].deposit_status === "scheduled", { br: (act as any).billingRestore, kNewPay });
+    check("전환 후 청구 계획 = already_billed(재실행해도 중복 없음)", (await planBillingRestore(db, { saleNos: [S("KNEW")] }))[0]?.status === "already_billed");
 
     console.log("\n[C] 기존 전환 판매 품목 복원(킨텍스형)");
     await legacySale(S("KOLD"), "일본어상담회통역", 42000000, kintexRows(), { "세금계산서발행(예정)일": "2026-11-09" });
