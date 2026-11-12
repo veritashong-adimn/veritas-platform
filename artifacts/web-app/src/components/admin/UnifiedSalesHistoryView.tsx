@@ -1,7 +1,7 @@
 // ─── Current + Legacy 통합 판매이력 뷰 (C-4C) ─────────────────────────────────
 // 판매관리 화면에서 자료범위 [전체자료]/[과거 CRM] 선택 시 사용. [현재] 는 기존 ProjectManagementTab 가 담당.
 // /api/admin/sales-history(server-side 통합 pagination) 소비. Current row → /sales/:id, Legacy row → /legacy-archive/:id.
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { api } from '../../lib/constants';
 import { Pagination } from '../ui/Paginator';
 import { SaleContactPicker } from './SaleContactPicker';
@@ -36,7 +36,9 @@ type Result = { rows: Row[]; pagination: { page: number; pageSize: number; total
 const PAGE_SIZE = 50;
 const WORKFLOW_KR: Record<string, string> = { created: '접수', quoted: '견적', approved: '확정', paid: '입금', matched: '배정', in_progress: '진행중', completed: '완료', cancelled: '취소' };
 
-export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, range, search, onOpenSalesDetail, onOpenLegacyDetail }: {
+export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, range, search, onOpenSalesDetail, onOpenLegacyDetail, returnTick = 0 }: {
+  // 판매 상세에서 돌아올 때마다 증가 — 마지막 조회 조건(검색어·페이지·페이지당)으로 조용히 재조회 + 표 스크롤 복원
+  returnTick?: number;
   authHeaders: Record<string, string>; setToast: (m: string) => void; adminUsers: AdminUser[];
   range: 'all' | 'legacy'; search: string;
   onOpenSalesDetail: (id: number) => void; onOpenLegacyDetail: (id: number) => void;
@@ -53,7 +55,11 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
 
   const adminName = (id: number | null) => (id == null ? null : adminUsers.find(u => u.id === id)?.name || null);
 
+  const lastLoad = useRef<{ page: number; keyword: string; size: number }>({ page: 1, keyword: q, size: pageSize });
+  const tableScrollRef = useRef<HTMLDivElement>(null);
+  const tableScrollTop = useRef(0);
   const load = useCallback(async (page = 1, keyword = q, size = pageSize) => {
+    lastLoad.current = { page, keyword, size };
     setLoading(true);
     try {
       const p = new URLSearchParams();
@@ -69,6 +75,13 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
   }, [range, q, pageSize, authHeaders]);
 
   useEffect(() => { load(1, q); /* range 변경 시 재조회 */ }, [range]); // eslint-disable-line
+  // 판매 상세 → 뒤로가기: 숨겨 두었던 목록 그대로 표 스크롤 복원 → 같은 조건 재조회(행은 비우지 않음 → 위치 유지, 수정된 값만 바뀜)
+  useLayoutEffect(() => {
+    if (returnTick <= 0) return;
+    if (tableScrollRef.current) tableScrollRef.current.scrollTop = tableScrollTop.current;
+    const l = lastLoad.current;
+    load(l.page, l.keyword, l.size);
+  }, [returnTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const p = result?.pagination;
   const srcCurrentFailed = result && !result.sources.current.ok && range !== 'legacy';
@@ -95,7 +108,8 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
       {result?.sources.legacy.truncated && <div style={{ padding: '8px 12px', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8, color: '#9a3412', fontSize: 13, marginBottom: 10 }}>과거 CRM 자료가 많아 일부만 통합 표시됩니다(검색으로 범위를 좁혀주세요).</div>}
 
       {/* 표 자체 스크롤 영역(세로/가로). 헤더는 이 영역 상단에 sticky — 페이지 상단 메뉴·검색영역과 겹치지 않음. */}
-      <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 300px)', border: '1px solid #e5e7eb', borderRadius: 10 }}>
+      <div ref={tableScrollRef} onScroll={e => { tableScrollTop.current = e.currentTarget.scrollTop; }}
+           style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 300px)', border: '1px solid #e5e7eb', borderRadius: 10 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, tableLayout: 'fixed' }}>
           <thead>
             <tr style={{ textAlign: 'left' }}>

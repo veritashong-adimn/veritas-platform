@@ -227,10 +227,12 @@ interface Props {
   /** 과거 CRM(Legacy) 판매 클릭 시 /legacy-archive/:id 로 이동 (C-4C) */
   onOpenLegacyDetail?: (id: number) => void;
   onProjectCreated?: () => void;
+  // 판매 상세에서 목록으로 돌아올 때마다 증가 — 검색조건·페이지 유지한 채 같은 조건으로 조용히 재조회(수정된 데이터 반영)
+  returnTick?: number;
 }
 
 // ─── 컴포넌트 ──────────────────────────────────────────────────────────────────
-export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeaders, adminUsers, openDetail, onOpenSalesDetail, onOpenLegacyDetail, onProjectCreated }: Props) {
+export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeaders, adminUsers, openDetail, onOpenSalesDetail, onOpenLegacyDetail, onProjectCreated, returnTick = 0 }: Props) {
   // 판매건 진입: 판매 상세페이지(/sales/:id)로 이동. 미연결 시 기존 모달로 폴백.
   const goToDetail = (id: number) => (onOpenSalesDetail ? onOpenSalesDetail(id) : openDetail(id));
   // 자료범위(C-4C): 전체자료(Current+Legacy) / 현재(기존 경로 그대로) / 과거 CRM(Legacy only).
@@ -371,9 +373,10 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
   };
 
   // ── 프로젝트 조회 ─────────────────────────────────────────────────────────
-  const fetchProjects = useCallback(async () => {
-    setLoading(true);
-    setSelectedIds(new Set()); // 재조회(필터/작업 후) 시 선택 초기화
+  //  silent: 상세에서 복귀 시 재조회 — '불러오는 중' 으로 표를 비우지 않아 페이지·스크롤 유지, 선택도 유지
+  const fetchProjects = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = opts?.silent === true;
+    if (!silent) { setLoading(true); setSelectedIds(new Set()); } // 재조회(필터/작업 후) 시 선택 초기화
     try {
       const params = new URLSearchParams();
       params.set("salesOnly", "true");
@@ -392,7 +395,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
       const data = await res.json();
       if (res.ok) setProjects(Array.isArray(data) ? data : []);
     } catch { setToast("오류: 판매 조회 실패"); }
-    finally { setLoading(false); }
+    finally { if (!silent) setLoading(false); }
   }, [token, projectSearch, projectFilter, dateFrom, dateTo, assignedAdminFilter, projectFinancialFilter, projectQuickFilter, projectBillingTypeFilter, projectPaymentDueDateFrom, projectPaymentDueDateTo, projectCompanyIdFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 거래처/담당자/고객 데이터 로드 (모달용) ──────────────────────────────
@@ -420,6 +423,11 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
   useEffect(() => {
     if (fetchTrigger > 0) fetchProjects();
   }, [fetchTrigger]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 판매 상세 → 뒤로가기: [현재] 목록은 같은 조건으로 조용히 재조회(전체자료·과거 CRM 은 UnifiedSalesHistoryView 가 처리)
+  useEffect(() => {
+    if (returnTick > 0 && salesRange === "current") fetchProjects({ silent: true });
+  }, [returnTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 일괄 판매취소 실행 (선택 = approved/paid 만, 서버에서도 재검증) ────────
   const handleBulkCancel = async () => {
@@ -840,7 +848,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
       {salesRange !== "current" && (
         <UnifiedSalesHistoryView
           authHeaders={authHeaders} setToast={setToast} adminUsers={adminUsers}
-          range={salesRange} search={projectSearch}
+          range={salesRange} search={projectSearch} returnTick={returnTick}
           onOpenSalesDetail={goToDetail}
           onOpenLegacyDetail={(id) => onOpenLegacyDetail?.(id)}
         />
@@ -869,7 +877,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
               style={{ ...inputStyle, maxWidth: 320, flex: "1 1 180px", padding: "7px 11px", fontSize: 13 }}
               onKeyDown={e => e.key === "Enter" && fetchProjects()}
             />
-            <PrimaryBtn onClick={fetchProjects} disabled={loading} style={{ padding: "7px 14px", fontSize: 13 }}>
+            <PrimaryBtn onClick={() => fetchProjects()} disabled={loading} style={{ padding: "7px 14px", fontSize: 13 }}>
               {loading ? "검색 중..." : "검색"}
             </PrimaryBtn>
             {(projectSearch || dateFrom || dateTo || assignedAdminFilter !== "all" || projectFilter !== "all" || projectFinancialFilter !== "all" || projectQuickFilter !== "all" || projectBillingTypeFilter !== "all" || projectPaymentDueDateFrom || projectPaymentDueDateTo || projectCompanyIdFilter) && (

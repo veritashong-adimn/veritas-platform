@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import { formatDisplayDate } from '../lib/dateFormat';
 import { ADMIN_NAV_GROUPS, ADMIN_PAGE_TITLE, STAFF_DEFAULT_PERMS, navItemVisible, navItemMatches, findNavItem } from '../config/adminNav';
 import {
@@ -247,6 +247,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       const restore = sessionStorage.getItem("veritasRestoreTab");
       if (restore) { sessionStorage.removeItem("veritasRestoreTab"); return restore as any; }
     } catch { /* 세션 사용 불가 시 무시 */ }
+    // 판매 상세 deep link(/sales/:id · /legacy-archive/:id)로 바로 열면 뒤로가기 시 판매관리 목록으로
+    if (/^\/(sales|legacy-archive)\/\d+$/.test(window.location.pathname)) return "projects";
     return isCompanyPath(window.location.pathname) ? "companies" : "dashboard";
   });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -442,12 +444,31 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     return m ? Number(m[1]) : null;
   };
   const [salesDetailId, setSalesDetailId] = useState<number | null>(parseSalesId);
+  // ── 상세 ↔ 목록 상태 보존 ──
+  //  · 상세가 열려 있는 동안 진입 전 화면(판매관리 목록·수금 등)은 언마운트하지 않고 숨긴다 → 탭·검색어·결과·페이지 유지.
+  //  · 진입한 메뉴(adminTab)는 바꾸지 않는다 → 뒤로가기 시 진입 경로로 복귀(수금관리에서 열면 수금관리로).
+  //  · 스크롤: 메인 스크롤 위치를 진입 시 저장 → 복귀 시 복원. 복귀 시 listReturnTick 으로 같은 조건 재조회(수정된 데이터만 반영).
+  //  · 사이드바 메뉴 이동은 기존처럼 새 목록(listKey 로 재마운트).
+  const mainScrollRef = useRef<HTMLDivElement>(null);
+  const savedMainScroll = useRef(0);
+  const [listReturnTick, setListReturnTick] = useState(0);
+  const [listKey, setListKey] = useState(0);
+  const rememberListScroll = () => {
+    if (salesDetailId === null && legacyArchiveDetailId === null) savedMainScroll.current = mainScrollRef.current?.scrollTop ?? 0;
+  };
   const openSalesDetail = (id: number) => {
+    rememberListScroll();
     if (window.location.pathname !== `/sales/${id}`) {
-      window.history.pushState({}, "", `/sales/${id}`);
+      window.history.pushState({ veritasDetail: true }, "", `/sales/${id}`);
     }
-    setAdminTab("projects");
     setSalesDetailId(id);
+  };
+  // 상세 화면 '뒤로가기' 버튼 — 앱 안에서 연 상세면 브라우저 뒤로가기와 동일(history.back → popstate 가 화면 동기화).
+  //  URL 로 바로 연 상세(이전 항목 없음)는 기존처럼 목록 URL 로 바꾸고 닫는다.
+  const backFromDetail = () => {
+    if ((window.history.state as any)?.veritasDetail) { window.history.back(); return; }
+    window.history.replaceState({}, "", "/");
+    setSalesDetailId(null); setLegacyArchiveDetailId(null);
   };
   const closeSalesDetail = () => {
     if (parseSalesId() !== null) window.history.pushState({}, "", "/");
@@ -460,10 +481,21 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   };
   const [legacyArchiveDetailId, setLegacyArchiveDetailId] = useState<number | null>(parseLegacyArchiveId);
   const openLegacyDetail = (id: number) => {
-    if (window.location.pathname !== `/legacy-archive/${id}`) window.history.pushState({}, "", `/legacy-archive/${id}`);
-    setAdminTab("projects");
+    rememberListScroll();
+    if (window.location.pathname !== `/legacy-archive/${id}`) window.history.pushState({ veritasDetail: true }, "", `/legacy-archive/${id}`);
     setLegacyArchiveDetailId(id);
   };
+  const detailOpen = salesDetailId !== null || legacyArchiveDetailId !== null;
+  const prevDetailOpen = useRef(detailOpen);
+  useLayoutEffect(() => {
+    if (prevDetailOpen.current === detailOpen) return;
+    prevDetailOpen.current = detailOpen;
+    if (detailOpen) { if (mainScrollRef.current) mainScrollRef.current.scrollTop = 0; return; }
+    // 판매관리 목록은 숨겨 둔 그대로(같은 높이) 스크롤 복원 + 같은 조건 재조회. 다른 메뉴(수금 등)는 기존처럼 새로 불러온다(재마운트).
+    if (adminTab !== "projects") { setListKey(k => k + 1); return; }
+    if (mainScrollRef.current) mainScrollRef.current.scrollTop = savedMainScroll.current;
+    setListReturnTick(t => t + 1);
+  }, [detailOpen]); // eslint-disable-line react-hooks/exhaustive-deps
   const closeLegacyDetail = () => {
     if (parseLegacyArchiveId() !== null) window.history.pushState({}, "", "/");
     setLegacyArchiveDetailId(null);
@@ -471,6 +503,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   // 사이드바 관리자 메뉴 공통 이동 — 판매 상세(/sales/:id)에 있던 경우 함께 닫는다.
   // (closeSalesDetail 이 URL(/sales/:id → /)과 salesDetailId 초기화를 담당하므로 중복 없음)
   const navigateToAdminTab = (tabId: typeof adminTab) => {
+    if (salesDetailId !== null || legacyArchiveDetailId !== null) setListKey(k => k + 1);   // 메뉴 이동 = 새 목록
     closeSalesDetail();
     closeLegacyDetail();
     // 거래처 탭은 URL(/admin/companies)로 라우팅한다. 다른 탭으로 나갈 때 거래처 경로에 있었다면
@@ -1315,14 +1348,14 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           </div>
 
           {/* 스크롤 컨텐츠 */}
-          <div style={{ flex: 1, overflowY: "auto", padding: `${ADMIN_SCROLL_PADDING_TOP}px ${ADMIN_SCROLL_PADDING_X}px`, background: "#f9fafb" }}>
+          <div ref={mainScrollRef} style={{ flex: 1, overflowY: "auto", padding: `${ADMIN_SCROLL_PADDING_TOP}px ${ADMIN_SCROLL_PADDING_X}px`, background: "#f9fafb" }}>
 
           {legacyArchiveDetailId !== null ? (
             <LegacyArchiveDetailPage
               id={legacyArchiveDetailId}
               token={token}
               setToast={setToast}
-              onBack={closeLegacyDetail}
+              onBack={backFromDetail}
               onOpenSale={(projectId) => { setLegacyArchiveDetailId(null); openSalesDetail(projectId); }}
             />
           ) : salesDetailId !== null ? (
@@ -1330,9 +1363,11 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               saleId={salesDetailId}
               token={token}
               adminUsers={adminUsers}
-              onBack={closeSalesDetail}
+              onBack={backFromDetail}
             />
-          ) : (<>
+          ) : null}
+          {/* 상세가 열려 있어도 진입 전 화면은 숨김 상태로 유지(상태 보존). 보일 때는 display: contents 로 기존 레이아웃 그대로 */}
+          <div key={listKey} style={{ display: detailOpen ? "none" : "contents" }} data-testid="admin-tab-content">
 
           {/* 대시보드 탭 */}
           {adminTab === "dashboard" && (() => {
@@ -1710,6 +1745,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           onOpenSalesDetail={openSalesDetail}
           onOpenLegacyDetail={openLegacyDetail}
           onProjectCreated={fetchAll}
+          returnTick={listReturnTick}
         />
       )}
 
@@ -3249,7 +3285,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           setToast={setToast} onNavigate={(v) => setAdminTab(`archive-${v}` as any)} />
       )}
 
-          </>)}
+          </div>
           </div>{/* /스크롤 컨텐츠 */}
         </div>{/* /메인 컨텐츠 */}
       </div>{/* /풀스크린 레이아웃 */}
