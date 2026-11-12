@@ -21,6 +21,8 @@ type Plan = {
   legacyRowId: number; saleNo: string; saleDate: string | null; existing: { projectId: number } | null;
   title: string; productName: string; total: number;
   amountSplit?: { supply: number; vat: number; basis: "progress" | "zero_vat" | "total_only" };
+  // 견적 품목 상세 — 진행관리표 원본에서 하나로 확인될 때만 restorable(그 외는 기존처럼 1 × 공급가액)
+  itemDetail?: { status: string; reason?: string; detail?: { quantity: number | null; unitPrice: number | null; volumeBasis: string | null; fileName: string | null; charCount: string | null; wordCount: string | null } };
   company: { name: string | null; matchedId: number | null; matchedName: string | null; method: string; email?: string | null };
   contact: { name: string | null; matchedId: number | null; method: string; phone?: string | null; mobile?: string | null; email?: string | null; from?: 'master' | 'source' | null; phoneShared?: boolean };
   pm: { name: string | null; matchedId: number | null };
@@ -102,6 +104,14 @@ export function LegacySaleActivationModal({ legacyRowId, token, onClose, onActiv
               ["담당자 이메일", plan.contact.email || "-"],
               ["담당 PM(내부)", plan.pm.name ? `${plan.pm.name}${plan.pm.matchedId ? "" : " (직원 미연결)"}` : "-"],
               ["상품(1개 항목)", plan.productName],
+              ["견적 품목 상세", plan.itemDetail?.status === "restorable" && plan.itemDetail.detail
+                // 단위: 원본 '단위'(단어·글자)는 분량 산정 기준이라 거래 단위로 쓰지 않는다 — 품목은 기본 '건', 실제 단위는 전환 후 확인
+                ? [`${plan.itemDetail.detail.quantity}건 × ${won(plan.itemDetail.detail.unitPrice)}원`,
+                    plan.itemDetail.detail.fileName && `파일 ${plan.itemDetail.detail.fileName}`,
+                    plan.itemDetail.detail.wordCount && `${Number(plan.itemDetail.detail.wordCount).toLocaleString()}단어`,
+                    plan.itemDetail.detail.charCount && `${Number(plan.itemDetail.detail.charCount).toLocaleString()}글자`].filter(Boolean).join(" · ")
+                  + ` (진행관리표 원본${plan.itemDetail.detail.volumeBasis ? ` · 분량 기준 '${plan.itemDetail.detail.volumeBasis}' — 거래 단위는 견적서로 확인` : ""})`
+                : `1 × 공급가액 (${plan.itemDetail?.reason ?? "원본 상세 확인 불가"})`],
             ] as [string, string][]).map(([k, v]) => (
               <div key={k} style={{ padding: "7px 10px", background: "#f9fafb", border: "1px solid #f0f0f0", borderRadius: 8 }}>
                 <div style={{ fontSize: 11, color: "#6b7280" }}>{k}</div>

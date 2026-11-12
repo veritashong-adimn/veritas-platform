@@ -36,6 +36,7 @@ import { maskSourceRawForRead } from "./legacyArchiveResolve";
 import { ACTIVATION_MODULE, activatedSaleExists, decideLegacyWithholding, comparePostTax } from "./legacyActivationLineage";
 import { legacyActivationNote, LEGACY_ACTIVATION_ITEM_MEMO } from "./customerDocText";
 import { captureIfMissing } from "./quoteRecipientSnapshot";
+import { decideItemDetail, encodeDocMemo } from "./legacyQuoteItemRestore";
 import { personKey, normPhone, phoneType, loadPhoneIndex } from "./legacyContactRestore";
 export { ACTIVATION_MODULE, activatedSaleExists };
 const SRC = "old_crm";
@@ -291,6 +292,8 @@ export async function buildActivationPlan(dbx: Dbx, legacyRowId: number) {
       else if (v === 0) amountSplit = { supply: total, vat: 0, basis: "zero_vat" };
     }
   }
+  // 견적 품목 상세(수량·단가·단위·파일명·단어수·글자수) — 연결 진행행에서 값이 하나로 확인되고 수량×단가 = 공급가액일 때만(추정 없음)
+  const itemDetail = decideItemDetail(prog.map((p: any) => p.source_raw ?? {}), amountSplit.supply);
   const warnings: string[] = [
     amountSplit.basis === "progress"
       ? `원본 진행관리의 공급가액 ${amountSplit.supply.toLocaleString()}원 · 부가세 ${amountSplit.vat.toLocaleString()}원(과세 10%, 합계 = 판매 총액)으로 1개 항목을 만듭니다. 원본 Excel 에 개별 판매항목(통역료·출장비 등) 구분이 없어 항목별 복원은 판매 상세에서 직접 입력해야 합니다.`
@@ -320,7 +323,7 @@ export async function buildActivationPlan(dbx: Dbx, legacyRowId: number) {
 
   return {
     legacyRowId: sale.id, saleNo, saleDate, existing,
-    title: opportunity || productName, productName, total, amountSplit,
+    title: opportunity || productName, productName, total, amountSplit, itemDetail,
     company: { name: companyName, ...company, email: companyEmail }, contact: { name: contactName, ...contact, ...contactInfo },
     pm: { name: pmName, matchedId: pmId }, taxInvoiceDate,
     performances, perfSummary,
@@ -380,12 +383,15 @@ export async function executeActivation(legacyRowId: number, planToken: string, 
       issueDate: plan.saleDate ?? new Date().toISOString().slice(0, 10), validUntil: plan.saleDate ?? new Date().toISOString().slice(0, 10),
       batchItemCount: 1,
     }).returning({ id: quotesTable.id });
+    // 원본 상세가 확인된 문서형 품목은 원본 수량·단가·파일명·단어수·글자수를 그대로(공급가액·부가세·총액은 아래 값 그대로).
+    //   단위: 원본 '단위'(단어·글자)는 분량 산정 기준이라 거래 단위로 쓰지 않는다 — 기본 '건' 유지, 실제 단위는 확인 대상으로 근거에 기록
+    const det = plan.itemDetail.status === "restorable" && itemTypeOf(plan.productName) === "translation" ? plan.itemDetail.detail : null;
     const [item] = await tx.insert(quoteItemsTable).values({
-      quoteId: quote.id, productId: null, productName: plan.productName, unit: "건", quantity: "1",
+      quoteId: quote.id, productId: null, productName: plan.productName, unit: "건", quantity: det ? String(det.quantity) : "1",
       // 공급가·부가세: 원본 진행관리로 확인된 경우만 분리(amountSplit.basis="progress"), 아니면 총액 그대로(부가세 0, 구분 미확인)
-      unitPrice: String(plan.amountSplit.supply), supplyAmount: String(plan.amountSplit.supply), taxAmount: String(plan.amountSplit.vat), totalAmount: String(plan.total),
+      unitPrice: det ? String(det.unitPrice) : String(plan.amountSplit.supply), supplyAmount: String(plan.amountSplit.supply), taxAmount: String(plan.amountSplit.vat), totalAmount: String(plan.total),
       itemType: itemTypeOf(plan.productName), taxType: "taxable", isCustomProduct: true,
-      memo: null,   // 상품 비고도 고객용 출력 — 원본 특성(총액만, 공급가·부가세 구분 없음)은 이관 이력에 기록
+      memo: det ? encodeDocMemo(null, det) : null,   // 문서정보만(파일·단어수·글자수). 진행관리표 '비고'는 판매 내부 메모라 넣지 않음. 상품 비고도 고객용 출력 — 원본 특성(총액만, 공급가·부가세 구분 없음)은 이관 이력에 기록
 
     }).returning({ id: quoteItemsTable.id });
     // 견적별 고객정보 고정 — 전환 시점의 거래처·담당자(보완 연결 포함)를 견적 수신자로 저장.
@@ -408,7 +414,12 @@ export async function executeActivation(legacyRowId: number, planToken: string, 
         taxBreakdown: plan.amountSplit.basis === "progress" ? "split_from_progress" : "unknown",
         originalSupply: plan.amountSplit.basis === "progress" ? plan.amountSplit.supply : null,
         originalVat: plan.amountSplit.basis === "progress" ? plan.amountSplit.vat : null,
-        internalNote: legacyActivationNote(plan.saleNo), internalItemMemo: LEGACY_ACTIVATION_ITEM_MEMO },
+        internalNote: legacyActivationNote(plan.saleNo), internalItemMemo: LEGACY_ACTIVATION_ITEM_MEMO,
+        // 품목 상세 근거 — 원본 값·적용 여부(파일형식은 원본에 없어 비움). 원본 '단위'는 분량 기준(volumeBasis)으로만 기록하고,
+        //   거래 단위는 원본에 없어 기본 '건'으로 두고 확인 대상으로 남긴다(unitCheck).
+        itemDetail: { status: det ? "restored_from_progress" : plan.itemDetail.status, reason: "reason" in plan.itemDetail ? plan.itemDetail.reason : null,
+          source: "detail" in plan.itemDetail ? plan.itemDetail.detail ?? null : null,
+          unitCheck: det ? { appliedUnit: "건", unitSource: "platform_default", crmVolumeBasis: det.volumeBasis, note: "원본에 거래 단위 없음 — CRM 견적서로 확인 필요" } : null } },
     }];
 
     const ctx: ApplyRowCtx = { userId, isHoliday: (d: string) => holidaySet.has(d), mayConfirm: true, priorById: new Map() };
