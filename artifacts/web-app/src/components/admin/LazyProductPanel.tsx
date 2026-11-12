@@ -47,6 +47,8 @@ const LANG_SUBTYPES: Record<LangPairType, LangSubtypeEntry[]> = {
     { label: "기타번역",  lazyService: null,        mainCategory: "기타번역", isCustom: true },
   ],
   "통역": [
+    // 일반 통역 — 서버 lazy 타입 "통역"(중분류 일반통역, IN:general). 기존 중복검사 그대로 적용.
+    { label: "통역",        lazyService: "통역",        mainCategory: "일반통역" },
     { label: "동시통역",    lazyService: "동시통역",    mainCategory: "동시통역" },
     { label: "위스퍼링통역", lazyService: "위스퍼링통역", mainCategory: "위스퍼링통역" },
     { label: "순차통역",    lazyService: "순차통역",    mainCategory: "순차통역" },
