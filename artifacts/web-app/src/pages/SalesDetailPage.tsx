@@ -520,7 +520,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
 
           {/* ── C. 수행정보 (통번역사·외주업체 배정/지급 — 원가) ───────────── */}
           {/* 끊어진 판매상품 연결(삭제된 품목 참조)이 있을 때만 표시 — 확인 후 재연결 */}
-          <StaleSaleLinkNotice performances={project.performances ?? []} items={items} token={token}
+          <StaleSaleLinkNotice projectId={saleId} performances={project.performances ?? []} items={items} token={token}
             onDone={() => fetchDetail({ silent: true })} onToast={setToast} />
           <PerformanceSection
             projectId={saleId}

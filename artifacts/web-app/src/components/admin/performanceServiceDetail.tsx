@@ -195,8 +195,10 @@ export default function ServiceDetailCell({ r, editable, patch, onEndDateChange 
   };
   const qtyUnit = (
     <>
+      {/* 판매수량 복사값(과거 CRM 전환)은 개별 수행 수량이 아니므로 비워 보여준다 — 입력하기 전까지 저장값은 그대로 */}
       <input type="number" min={0} inputMode="numeric" style={{ ...mini, width: 72, textAlign: 'right' }}
-        value={r.quantity == null || r.quantity === '' ? '' : String(r.quantity)} onChange={e => patch({ quantity: e.target.value })} aria-label="수량" placeholder="수량" />
+        value={r.quantityFromSale || r.quantity == null || r.quantity === '' ? '' : String(r.quantity)} onChange={e => patch({ quantity: e.target.value, quantityFromSale: false })} aria-label="수량"
+        placeholder={r.quantityFromSale ? '미상' : '수량'} title={r.quantityFromSale ? `판매수량(${r.quantity}) 복사값 — 개별 수행 수량 미상` : undefined} />
       <div style={{ width: 76 }}><ClickSelect value={r.unit ?? ''} onChange={(v: string) => patch({ unit: v })} triggerStyle={mini} menuStyle={{ fontSize: 12 }} options={UNIT_OPTS} /></div>
     </>
   );

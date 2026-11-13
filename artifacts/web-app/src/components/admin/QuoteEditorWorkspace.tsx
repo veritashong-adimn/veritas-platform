@@ -2275,7 +2275,9 @@ export function QuoteEditorWorkspace({
         : !!it.productName.trim() && (isPriceBlank(it.unitPrice) || Number(it.unitPrice.replace?.(/,/g, '') || 0) >= 0);
     const vi = items.filter(isValidItem);
     if (vi.length === 0) { onToast('품목명을 입력하세요.'); return null; }
-    const itemsBody  = vi.map(it => toApiItem(it, vatType));
+    // 판매상세와 같은 본문 빌더 — 기존 품목 id(sourceItemId)·서비스 그룹(parentItemIndex)을 함께 보내
+    //   서버가 품목 재삽입 후 수행정보의 판매상품 연결(sale_item_id)을 새 품목으로 승계한다(누락 시 연결 끊김).
+    const itemsBody  = buildQuoteItemsBody(vi, vatType);
     const commonBody = {
       items: itemsBody, quoteType,
       billingType: 'postpaid_per_project', taxCategory: 'normal',

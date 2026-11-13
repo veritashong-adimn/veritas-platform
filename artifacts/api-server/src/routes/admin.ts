@@ -46,6 +46,7 @@ import { createDerivedSplit, approveDerived, rejectDerived, calculateAllocation,
 import { evaluateProjectDependencies, buildGuardMessage } from "../services/saleDependency";
 import { planCustomer, executeCustomer, unresolved, type CustomerChoice, type CustomerSnapshot } from "../services/quoteCustomerResolve";
 import { validateItemStatuses } from "../services/quoteItemStatus";
+import { loadPerformanceAnnotations } from "../services/legacyPayoutStatus";
 import { legacyOriginOfProject, customerNoteOf, customerMemoOf } from "../services/customerDocText";
 import { captureIfMissing, recaptureRecipient, freezeProjectQuotes, liveRecipientOf, hasSnapshot } from "../services/quoteRecipientSnapshot";
 import { restoredCustomerNameOfProject, linkedContactNameOfSaleNo } from "../services/legacyContactRestore";
@@ -664,7 +665,9 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
     );
 
     // 수행정보(원가) — 추가비용·차감 하위행 포함, soft-delete 제외. 암호문 제외(마스킹값만).
-    const performances = await loadPerformanceRows(projectId);
+    // + 표시용 추가 필드(기존 응답 형태 유지): legacyPayout(과거 CRM 지급확인 상태: 지급완료/지급예정/확인 필요) · quantityFromSale(판매수량 복사 수량)
+    const perfNotes = await loadPerformanceAnnotations(db, projectId);
+    const performances = (await loadPerformanceRows(projectId)).map((p: any) => ({ ...p, ...(perfNotes.get(Number(p.id)) ?? { legacyPayout: null, quantityFromSale: false }) }));
     // 결제정보(고객 수금) — 회차 오름차순. 기존 payments(요청/승인 흐름)와는 별개 테이블.
     const paymentRecords = await loadPaymentRecords(projectId);
 
@@ -922,6 +925,8 @@ router.get("/admin/projects/:id/performance-summary", ...adminGuard, async (req,
         costTotal: r0(totalCost),
         paidCount: rows.filter(r => r.paymentStatus === "paid").length,
         unpaidCount: rows.filter(r => r.paymentStatus === "unpaid").length,
+        // 추가 필드: 지급보류(과거 CRM 지급 확인 대기 포함) — 지급완료·미지급 어느 쪽에도 넣지 않는다
+        holdCount: rows.filter(r => r.paymentStatus === "payment_hold").length,
       },
       // §15 프로젝트 손익 요약 (부가세 제외, 공급가액 기준)
       profit: {
@@ -3511,6 +3516,7 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
     res.status(400).json({ error: "판매 확정 건의 금액을 변경하려면 변경사유를 입력하세요.", code: "REASON_REQUIRED" }); return;
   }
   let recipientChanged = false;
+  let insertedItemIds: number[] = [];   // 감사로그: 저장 후 품목 id(수행정보 연결 추적 근거)
   try {
     await db.transaction(async tx => {
       // 거래처/브랜드/담당자/담당PM 연결 처리
@@ -3604,6 +3610,7 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
       }))).returning({ id: quoteItemsTable.id });
       // 서비스 그룹 링크 재확정(수정 시 전량 재삽입 → 인덱스 기반 재연결). 삽입 순서 = items 순서.
       await applyParentIndexLinks(tx, putInserted.map(r => r.id), items);
+      insertedItemIds = putInserted.map(r => r.id);
       // 수행정보 판매항목 연결 승계 — 편집 화면이 보낸 기존 품목 id(sourceItemId)가 이 견적의 수정 전 품목이면
       //   그 품목을 가리키던 수행정보의 sale_item_id 만 새 품목 id 로 옮긴다(그 외 수행정보 값은 변경 없음).
       //   삭제된 품목·새 품목·출처 불명 품목은 옮기지 않는다(기존 동작 유지). 같은 기존 id 는 1회만 승계.
@@ -3659,7 +3666,7 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
       projectId: qBefore?.projectId ?? null, reason: versionReason?.trim() || null,
       // 공급가액·부가세도 기록(총액이 같은 공급가/부가세 정정도 감사로그에서 확인 가능). 기존 키(productName·totalAmount) 유지.
       before: { price: qBefore ? Number(qBefore.price) : null, items: itemsBefore.map(i => ({ id: i.id, productName: i.productName, supplyAmount: Number(i.supplyAmount), taxAmount: Number(i.taxAmount), totalAmount: Number(i.totalAmount) })) },
-      after: { price: totalPrice, items: calcItems.map(i => ({ productName: i.productName, supplyAmount: i.supplyAmount, taxAmount: i.taxAmount, totalAmount: i.totalAmount })) },
+      after: { price: totalPrice, items: calcItems.map((i, k) => ({ id: insertedItemIds[k] ?? null, productName: i.productName, supplyAmount: i.supplyAmount, taxAmount: i.taxAmount, totalAmount: i.totalAmount })) },
     }));
     res.json({ id: quoteId, price: totalPrice });
   } catch (err) {

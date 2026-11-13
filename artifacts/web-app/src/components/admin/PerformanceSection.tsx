@@ -26,7 +26,7 @@ import {
   CATEGORY_OPTS, TREATMENT_OPTS, normalizeTreatment, effectiveTreatment,
   PERFORMER_TYPE_OPTS, resolvePerformerType, performerTypeLabel, canonicalLineCategory,
   PAYMENT_STATUS_OPTS, PAYMENT_STATUS_SELECTABLE_OPTS,
-  PaymentBadge,
+  PaymentBadge, LegacyPayoutBadge,
 } from './performanceShared';
 import { DateField } from './DatePickerShared';
 import { exportPerformances, type PerformanceExportMeta } from '../../lib/performanceExcel';
@@ -657,7 +657,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
       <th style={{ ...thBase, width: LW.product }}>상품·업무</th>
       <th style={{ ...thBase, width: 330 }}>서비스별 상세정보</th>
       <th style={{ ...thBase, width: 136 }}>{editable ? '납품일 · 확인' : sortBtn('납품일', 'deliveryDate')}</th>
-      <th style={{ ...thBase, width: 106 }}>{editable ? '지급일' : sortBtn('지급일', 'expectedPaymentDate')}</th>
+      <th style={{ ...thBase, width: 106 }} title="지급예정일(자동계산·수동지정). 실제 지급일은 확정 기록이 있을 때 아래에 '실지급'으로 표시">{editable ? '지급예정일' : sortBtn('지급예정일', 'expectedPaymentDate')}</th>
       {/* 통역 전용 금액 컬럼(§1) — 요금(100%)·통역료(85%)·추가통역료·출장비·교통비·기타비용 */}
       <th style={{ ...thBase, width: 112, textAlign: 'right' }}>요금(100%)</th>
       <th style={{ ...thBase, width: 112, textAlign: 'right' }}>통역료(85%)</th>
@@ -786,7 +786,9 @@ export default function PerformanceSection({ projectId, token, performances, onC
             ? <DateField style={{ ...inp, ...(r.payDateManual ? {} : { background: C.g50 }) }} disabled={locked} value={payShown}
                 onChange={v => changePayDate(i, v)} testid={`perf-paydate-row-${i}`} ariaLabel="지급일"
                 title={locked ? dateTitle : (r.payDateManual ? '수동변경' : '자동계산(납품일 기준·직전 영업일)')} />
-            : <span title={r.payDateManual ? '수동변경' : '자동계산'} style={{ color: dateVal(r.expectedPaymentDate) ? undefined : C.g400 }}>{payShown ? formatDisplayDate(payShown) : '—'}</span>}
+            : <span title={r.payDateManual ? '지급예정일(수동변경)' : '지급예정일(자동계산)'} style={{ color: dateVal(r.expectedPaymentDate) ? undefined : C.g400 }}>{payShown ? formatDisplayDate(payShown) : '—'}</span>}
+          {/* 실제 지급확정 기록(실제 지급일)이 있으면 예정일과 구분해 표시 */}
+          {!editable && r.actualPaymentDate && <div data-testid={`perf-actual-paid-${i}`} style={{ fontSize: 11, color: C.successText, whiteSpace: 'nowrap' }}>실지급 {formatDisplayDate(String(r.actualPaymentDate).slice(0, 10))}</div>}
         </td>
         {/* ⑧ 요금(100%) — 통역: 독립 입력(통역료 자동계산 없음). 번역: 협의 총액(§3·§4A, base=directAmount). 외주·경비·일반개인: 금액상세 팝업. 장비: '-'. */}
         <td style={tdR}>
@@ -849,7 +851,8 @@ export default function PerformanceSection({ projectId, token, performances, onC
                 ? <input type="number" min={0} inputMode="numeric" data-testid={`perf-qty-${i}`} aria-label="수량"
                     style={{ ...inp, textAlign: 'right' }}
                     value={r.quantity == null || r.quantity === '' ? '' : String(r.quantity)} onChange={e => patchRow(i, { quantity: e.target.value })} />
-                : <span>{r.quantity != null && r.quantity !== '' ? won(r.quantity) : muted}</span>)
+                : (r.quantityFromSale ? <span title={`판매수량(${r.quantity}) 복사값 — 개별 수행 수량 미상(지급액 계산 미사용)`} data-testid={`perf-qty-from-sale-${i}`}>—</span>
+                  : <span>{r.quantity != null && r.quantity !== '' ? won(r.quantity) : muted}</span>))
             : muted}
         </td>
         {/* ⑮ 단위 — 번역: 글자/단어 선택. 장비: 저장 단위 표시(읽기전용). */}
@@ -882,7 +885,10 @@ export default function PerformanceSection({ projectId, token, performances, onC
         <td style={{ ...tdBase, width: RW.pay }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
             {/* 지급완료(paid)는 직접 선택·변경 불가 → 배지로 표시만. 정산 지급회차 처리로만 변경된다. */}
-            {editable && (r.paymentStatus ?? 'unpaid') !== 'paid'
+            {/* 과거 CRM 지급 확인 대기 건은 [과거 지급 확인 필요] 영역(실제 지급일·지급액·근거 기록)으로만 처리 — 여기서 직접 변경 불가 */}
+            {r.legacyPayout?.display
+              ? <LegacyPayoutBadge display={r.legacyPayout.display} label={r.legacyPayout.label} />
+              : editable && (r.paymentStatus ?? 'unpaid') !== 'paid'
               ? <ClickSelect value={r.paymentStatus ?? 'unpaid'} onChange={(v: string) => patchRow(i, { paymentStatus: v })} triggerStyle={inp} options={PAYMENT_STATUS_SELECTABLE_OPTS} />
               : <PaymentBadge value={r.paymentStatus} />}
             {/* §18 회차 배정 표시(최소) — 지급회차에 포함된 건 표기. 상세는 정산 화면에서 관리. */}

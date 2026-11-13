@@ -26,7 +26,8 @@ import {
 } from "@workspace/db";
 import { sql, eq } from "drizzle-orm";
 import { normalizeCompanyName } from "../lib/normalizeCompany";
-import { isLegacyPaidForDisplay } from "../lib/legacyPayoutRule";
+import { isLegacyConfirmedPaid } from "../lib/legacyPayoutRule";
+import { legacyPayoutDisplay, suggestedPaidAmount } from "./legacyPayoutStatus";
 import { getSettings } from "../lib/getSettings";
 import { generateQuoteNumber } from "../routes/admin";
 import { applyPerformanceRow, loadKrHolidaySet, type ApplyRowCtx } from "../routes/performances";
@@ -130,6 +131,9 @@ export function buildLegacyPayload(rr: ReturnType<typeof rawRowFromRecord>, tran
   const z = (v: number | null) => (v == null || v === 0 ? null : v);
   const clean = { ...rr, fee100: z(rr.fee100), fee85: z(rr.fee85), perfUnitPrice: z(rr.perfUnitPrice), perfQuantity: z(rr.perfQuantity), quantity: z(rr.quantity) };
   let payload: any = buildAssignPayload(clean, translatorId);
+  // 진행관리 '수행 수량'이 없으면 buildAssignPayload 가 판매수량(전체 행사 수량)을 대신 넣는다 — 직접금액(요금) 행은
+  //   지급액 계산에 수량을 쓰지 않으므로 판매수량을 개별 수행 수량으로 복사하지 않는다(2026-11-13, 이후 전환분부터).
+  if (clean.perfQuantity == null && payload.isDirectAmount) payload = { ...payload, quantity: null };
   let gross = computeAssignPreview(payload).gross;
   const original = rr.preTaxPayout != null && rr.preTaxPayout > 0 ? rr.preTaxPayout : null;
   let basis: "breakdown" | "original" = "breakdown";
@@ -249,7 +253,9 @@ export async function buildActivationPlan(dbx: Dbx, legacyRowId: number) {
     //   · 그 외 지급일 有 또는 금액 有 → payout_review(지급 확인 필요 · 보류) — 이중지급·허위 지급완료 방지.
     //   · (2026-11-08) 지급회차 지급일 경과 건도 과거 지급완료(별도 지급파일 처리분 — 지급회차 조회 규칙과 동일, lib/legacyPayoutRule).
     //     전환 후 지급보류로 남아 실수로 '미지급' 처리되면 이중 지급될 수 있어 지급완료로 둔다.
-    const planned: PlannedPayStatus = rr.payDate && isLegacyPaidForDisplay(rr.deliveryDate, rr.payDate) ? "legacy_paid"
+    //   · (2026-11-13 대표 결정) 지급예정일 경과만으로는 지급완료로 보지 않는다 → 확인 필요(payout_review). 대표 확인 cutoff 만 지급완료.
+    //     확인 전 지급보류는 지급회차·대량이체에서 제외되므로 이중 지급되지 않는다.
+    const planned: PlannedPayStatus = rr.payDate && isLegacyConfirmedPaid(rr.deliveryDate) ? "legacy_paid"
       : (rr.payDate || hasAmount) ? "payout_review" : "unpaid";
     return {
       progressRowId: Number(p.id), rowHash: p.row_hash as string,
@@ -518,7 +524,9 @@ export async function getLegacyOrigin(dbx: Dbx, projectId: number) {
   const sourceChanged = !cur || Number(cur.id) !== Number(saleLin?.source_raw?.legacyRowId) || cur.row_hash !== saleLin?.source_raw?.rowHash
     || JSON.stringify(curProg) !== JSON.stringify(origProg);
   const perfIds = lin.filter(l => String(l.row_key).startsWith("progress:")).map(l => Number(l.entity_id));
-  const perfNow = perfIds.length ? await rows(dbx, sql`SELECT id, performer_name_snapshot, individual_user_id, cost_total, payment_status, payout_round_id, deleted_at, remark
+  const perfNow = perfIds.length ? await rows(dbx, sql`SELECT id, performer_name_snapshot, individual_user_id, cost_total, payment_status, payout_round_id, deleted_at, remark,
+      to_char(expected_payment_date, 'YYYY-MM-DD') AS expected_payment_date, to_char(actual_payment_date, 'YYYY-MM-DD') AS actual_payment_date,
+      actual_payment_amount, net_payment, withholding_tax, withholding_treatment
     FROM performance_assignments WHERE id IN (${sql.join(perfIds.map(i => sql`${i}`), sql`, `)})`) : [];
   const byId = new Map(perfNow.map(r => [Number(r.id), r]));
   const payoutItems = lin.filter(l => String(l.row_key).startsWith("progress:")).map(l => {
@@ -531,6 +539,11 @@ export async function getLegacyOrigin(dbx: Dbx, projectId: number) {
       computedPostTax: l.source_raw?.computedPostTax ?? null, postTaxStatus: l.source_raw?.postTaxStatus ?? null,
       performerName: a?.performer_name_snapshot ?? null, translatorId: a?.individual_user_id ?? null,
       costTotal: a ? Number(a.cost_total) : null, paymentStatus: a?.payment_status ?? null, deleted: !!a?.deleted_at,
+      // 지급예정일(확인 전 표시 기준) · 실제 지급확정 기록 · 표시 상태(지급완료/지급예정/확인 필요) · 확인 시 기본 지급액 제안
+      expectedPaymentDate: a?.expected_payment_date ?? null, actualPaymentDate: a?.actual_payment_date ?? null,
+      actualPaymentAmount: a?.actual_payment_amount != null ? Number(a.actual_payment_amount) : null,
+      payoutDisplay: legacyPayoutDisplay(l.status, a?.payment_status, a?.expected_payment_date ?? l.source_raw?.payDate ?? null),
+      suggestedPaidAmount: a ? suggestedPaidAmount({ originalPostTax: l.source_raw?.originalPostTax ?? null, netPayment: a.net_payment, costTotal: a.cost_total, withholdingTax: a.withholding_tax, withholdingTreatment: a.withholding_treatment }) : null,
     };
   });
   const colLin = lin.find(l => String(l.row_key).startsWith("collection:"));
@@ -559,7 +572,11 @@ export async function getLegacyOrigin(dbx: Dbx, projectId: number) {
 // ── 과거 지급 확인 필요 건 처리(관리자 승인) ─────────────────────────────────
 //   decision=paid   → 과거에 이미 지급됨 확인: 지급완료(paid) 고정(지급회차·송금기록 생성 없음 → 중복 지급 차단)
 //   decision=unpaid → 미지급 확인: 지급보류 해제(unpaid) → 기존 지급회차 자동수집 대상
-export async function resolvePayoutReview(assignmentId: number, decision: "paid" | "unpaid", reason: string, performer: { id: number | null }) {
+//   (2026-11-13) 지급완료 확인은 실제 지급확정 기록을 함께 남긴다: 실제 지급일(actual_payment_date)·실제 지급액(actual_payment_amount)
+//   필수. 지급예정일·원가·원천세 등 기존 값은 변경하지 않는다. 확인자·확인일시·근거는 감사로그(legacy_payout_review_resolved).
+export async function resolvePayoutReview(assignmentId: number, decision: "paid" | "unpaid", reason: string, performer: { id: number | null },
+  paid?: { actualPaymentDate: string; actualPaymentAmount: number }, expectProjectId?: number) {
+  if (decision === "paid" && !paid) throw new ActivationError(400, "실제 지급일과 지급액을 입력하세요.");
   return db.transaction(async (tx: any) => {
     const [lin] = await rows(tx, sql`SELECT id, status FROM import_row_sources WHERE module = ${ACTIVATION_MODULE} AND row_key LIKE 'progress:%' AND entity_id = ${assignmentId} FOR UPDATE`);
     if (!lin) throw new ActivationError(404, "과거 CRM 전환 수행정보가 아닙니다.");
@@ -570,13 +587,16 @@ export async function resolvePayoutReview(assignmentId: number, decision: "paid"
     if (lin.status !== "payout_review") throw new ActivationError(409, "이미 확인 처리된 수행정보입니다.");
     const [a] = await tx.select().from(performanceAssignmentsTable).where(eq(performanceAssignmentsTable.id, assignmentId));
     if (!a || a.deletedAt) throw new ActivationError(404, "수행정보를 찾을 수 없습니다.");
+    if (expectProjectId != null && a.projectId !== expectProjectId) throw new ActivationError(409, "다른 판매건의 수행정보입니다.");
     if (a.paymentStatus !== "payment_hold" || a.payoutRoundId != null) throw new ActivationError(409, "지급보류 상태(지급회차 미배정)인 건만 처리할 수 있습니다.");
     await tx.update(performanceAssignmentsTable).set({
-      paymentStatus: decision === "paid" ? "paid" : "unpaid", ...(decision === "paid" ? { status: "paid" } : {}),
+      paymentStatus: decision === "paid" ? "paid" : "unpaid",
+      ...(decision === "paid" ? { status: "paid", actualPaymentDate: paid!.actualPaymentDate, actualPaymentAmount: String(paid!.actualPaymentAmount) } : {}),
       remark: `${a.remark ?? ""} · 과거 지급 확인: ${decision === "paid" ? "지급완료 확인" : "미지급 확인"}(${reason})`.slice(0, 1000),
       updatedBy: performer.id ?? null, updatedAt: new Date(),
     }).where(eq(performanceAssignmentsTable.id, assignmentId));
     await tx.update(importRowSourcesTable).set({ status: decision === "paid" ? "payout_review_paid" : "payout_review_unpaid" }).where(eq(importRowSourcesTable.id, lin.id));
-    return { projectId: a.projectId as number, before: { paymentStatus: a.paymentStatus, costTotal: a.costTotal } };
+    return { projectId: a.projectId as number, performerName: a.performerNameSnapshot ?? null,
+      before: { paymentStatus: a.paymentStatus, costTotal: a.costTotal, expectedPaymentDate: a.expectedPaymentDate, actualPaymentDate: a.actualPaymentDate, actualPaymentAmount: a.actualPaymentAmount } };
   });
 }

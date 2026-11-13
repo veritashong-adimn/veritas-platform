@@ -18,7 +18,7 @@ interface Summary {
   header: {
     rowCount: number; individualCount: number; vendorCount: number; expenseCount: number;
     costTotal: number;
-    paidCount: number; unpaidCount: number;
+    paidCount: number; unpaidCount: number; holdCount?: number;
   };
   profit: {
     saleSupplyAmount: number; totalCost: number; basePerformanceFeeTotal: number;
@@ -78,6 +78,7 @@ export default function PerformanceProfitSummary({ projectId, token, refreshKey 
         {chip('원가 합계', `${won(header.costTotal)}원`)}
         {chip('지급완료', `${header.paidCount}건`)}
         {chip('미지급', `${header.unpaidCount}건`)}
+        {(header.holdCount ?? 0) > 0 && chip('지급보류·확인 필요', `${header.holdCount}건`)}
       </div>
 
       {/* 프로젝트 손익 요약 (§15) — 아코디언(기본 접힘). 접힘/펼침은 화면 상태로만 관리(DB 저장 안 함) → 다시 열면 항상 접힘. */}

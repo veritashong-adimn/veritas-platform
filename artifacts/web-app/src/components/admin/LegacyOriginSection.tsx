@@ -1,6 +1,7 @@
 // 운영 판매 상세 — 과거 CRM 에서 전환된 판매건의 출처·확인 대상·CRM 원본정보(원본은 조회 전용).
 //   과거 지급 확인 필요 건은 여기서 관리자 확인(지급완료 확인 / 미지급 확인)으로만 처리한다(서버 settlement.pay 권한 검증).
 import React, { useCallback, useEffect, useState } from "react";
+import { LegacyPayoutReviewPanel, type PayoutReviewItem } from "./LegacyPayoutReviewPanel";
 import { api } from "../../lib/constants";
 import { Card, GhostBtn, promptDialog, confirmDialog, alertDialog } from "../ui";
 
@@ -9,7 +10,8 @@ type Origin = {
   amountBasis?: { originalProductName: string | null; originalTotal: number | null; taxBreakdown: string; originalSupply?: number | null; originalVat?: number | null };
   sourceRaw: Record<string, unknown> | null;
   payoutItems: { assignmentId: number; legacyStatus: string; payDate: string | null; originalPreTax: number | null; performerName: string | null;
-    withholdingBasis?: string | null; originalPostTax?: number | null; computedPostTax?: number | null; postTaxStatus?: string | null; costTotal: number | null; paymentStatus: string | null; deleted: boolean }[];
+    withholdingBasis?: string | null; originalPostTax?: number | null; computedPostTax?: number | null; postTaxStatus?: string | null; costTotal: number | null; paymentStatus: string | null; deleted: boolean;
+    expectedPaymentDate?: string | null; actualPaymentDate?: string | null; actualPaymentAmount?: number | null; payoutDisplay?: PayoutReviewItem['payoutDisplay']; suggestedPaidAmount?: number | null }[];
   payoutSummary: { legacyPaid: number; reviewPending: number; reviewResolved: number };
   collection: { status: string; reason?: string | null; parsedAmount?: number | null; total?: number; depositDate?: string | null } | null;
 };
@@ -138,22 +140,8 @@ export function LegacyOriginSection({ projectId, token, onChanged, onToast, onLo
       </div>
 
       {pending.length > 0 && (
-        <div style={{ border: "1px solid #fde68a", borderRadius: 8, marginBottom: 12, overflow: "hidden" }}>
-          <div style={{ padding: "6px 10px", background: "#fffbeb", fontSize: 12, fontWeight: 700, color: "#92400e" }}>과거 지급 확인 필요 — 확인 전에는 지급회차·기업은행 대량이체에서 제외됩니다</div>
-          {pending.map(p => (
-            <div key={p.assignmentId} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 10px", borderTop: "1px solid #fef3c7", fontSize: 12 }}>
-              <span style={{ minWidth: 120 }}>{p.performerName ?? "-"}</span>
-              <span>원가합계 {won(p.costTotal)}</span>
-              <span style={{ color: "#6b7280" }}>원본 지급액(세전) {won(p.originalPreTax)}</span>
-              <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-                <GhostBtn onClick={() => resolve(p.assignmentId, "paid")} disabled={busyId === p.assignmentId} style={{ fontSize: 11, padding: "3px 8px" }}
-                  data-testid={`btn-legacy-paid-${p.assignmentId}`} aria-label="과거 지급완료로 확인">지급완료 확인</GhostBtn>
-                <GhostBtn onClick={() => resolve(p.assignmentId, "unpaid")} disabled={busyId === p.assignmentId} style={{ fontSize: 11, padding: "3px 8px" }}
-                  data-testid={`btn-legacy-unpaid-${p.assignmentId}`} aria-label="미지급으로 확인">미지급 확인</GhostBtn>
-              </span>
-            </div>
-          ))}
-        </div>
+        <LegacyPayoutReviewPanel projectId={projectId} token={token} items={pending} onToast={onToast} busyId={busyId}
+          onUnpaid={(id) => resolve(id, "unpaid")} onDone={async () => { await load(); onChanged(); }} />
       )}
 
       {origin.payoutItems.length > 0 && (
@@ -164,7 +152,8 @@ export function LegacyOriginSection({ projectId, token, onChanged, onToast, onLo
               <div key={p.assignmentId} style={{ display: "flex", gap: 10, padding: "3px 0", borderBottom: "1px solid #f3f4f6" }}>
                 <span style={{ minWidth: 120 }}>{p.performerName ?? "-"}</span>
                 <span style={{ minWidth: 150 }}>{LEGACY_LABEL[p.legacyStatus] ?? p.legacyStatus}</span>
-                <span>지급일 {p.payDate ?? "-"}</span>
+                <span>원본 지급예정일 {p.payDate ?? "-"}</span>
+                {p.actualPaymentDate && <span data-testid={`legacy-origin-actual-${p.assignmentId}`} style={{ color: "#15803d" }}>실제 지급 {p.actualPaymentDate} · {won(p.actualPaymentAmount ?? null)}</span>}
                 <span>원본 지급액 {won(p.originalPreTax)}</span>
                 {p.originalPostTax != null && (
                   <span data-testid={`legacy-origin-post-${p.assignmentId}`}>

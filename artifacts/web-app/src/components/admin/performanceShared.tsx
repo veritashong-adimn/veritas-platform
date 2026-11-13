@@ -323,6 +323,11 @@ export interface Row {
   purchaseEvidenceType?: string | null;
   purchaseInvoiceDate?: string | null;
   actualPaymentDate?: string | null;
+  // 표시 전용(판매 상세 API 추가 필드 — 저장 payload 에 포함하지 않음)
+  //  · legacyPayout: 과거 CRM 전환 수행정보의 지급확인 상태(지급완료/지급예정/확인 필요) — 지급예정일만으로 지급완료 아님
+  //  · quantityFromSale: 진행관리 '수행 수량'이 없어 판매수량(전체 행사 수량)이 복사된 값 — 개별 수행 수량 아님(표시 '—')
+  legacyPayout?: { lineageStatus: string; display: 'paid' | 'scheduled' | 'review' | null; label: string | null } | null;
+  quantityFromSale?: boolean;
   // 정산요약(읽기전용)
   grossPayment?: string | number | null;
   withholdingTax?: string | number | null;
@@ -371,6 +376,7 @@ export const toRow = (p: any): Row => ({
   copyrightFee: p.copyrightFee, travelDayCompensation: p.travelDayCompensation, cancellationCompensation: p.cancellationCompensation,
   vendorCompanyId: p.vendorCompanyId, vendorTypeSnapshot: p.vendorTypeSnapshot,
   purchaseEvidenceType: p.purchaseEvidenceType, purchaseInvoiceDate: p.purchaseInvoiceDate, actualPaymentDate: p.actualPaymentDate,
+  legacyPayout: p.legacyPayout ?? null, quantityFromSale: p.quantityFromSale ?? false,
   grossPayment: p.grossPayment, withholdingTax: p.withholdingTax, netPayment: p.netPayment,
   supplyAmount: p.supplyAmount, vatAmount: p.vatAmount, totalPurchaseAmount: p.totalPurchaseAmount,
   expenses: Array.isArray(p.expenses) ? p.expenses.map((e: any) => ({
@@ -656,3 +662,11 @@ export function Badge({ label, tone }: { label: string; tone: Tone }) {
 }
 export const PaymentBadge = ({ value }: { value?: string | null }) =>
   <Badge label={PAYMENT_STATUS_LABEL[value ?? 'unpaid'] ?? '미지급'} tone={PAYMENT_TONE[value ?? 'unpaid'] ?? 'gray'} />;
+// 과거 CRM 전환 수행정보 — 확인 전: 지급예정(예정일 도래 전) / 확인 필요(예정일 경과·없음). 지급완료는 실제 확정 기록이 있을 때만.
+const LEGACY_PAYOUT_TONE: Record<string, Tone> = { paid: 'green', scheduled: 'blue', review: 'amber' };
+export const LegacyPayoutBadge = ({ display, label }: { display: 'paid' | 'scheduled' | 'review'; label?: string | null }) => (
+  <span title={display === 'paid' ? '실제 지급확정 기록 있음' : '과거 CRM 지급 확인 전 — 아래 [과거 지급 확인 필요] 영역에서 실제 지급일·지급액·근거를 확인하세요(지급회차·대량이체 제외 중)'}
+    data-testid="legacy-payout-badge">
+    <Badge label={label ?? { paid: '지급완료', scheduled: '지급예정', review: '확인 필요' }[display]} tone={LEGACY_PAYOUT_TONE[display]} />
+  </span>
+);

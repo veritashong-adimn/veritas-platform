@@ -86,14 +86,28 @@ const PROG = sql`
       (nullif(btrim(source_raw->>'입금일'),'') IS NOT NULL OR nullif(btrim(source_raw->>'입금내역'),'') IS NOT NULL) AS has_deposit,
       -- 지급완료 판정(과거 CRM): 납품일 ≤ 2026-09-15(대표 확인)만. 납품일 누락/무효 → false(자동 지급완료 안 함).
       --   + (2026-11-08) 지급회차 지급일 경과(지급일 < 오늘 KST) — 과거 CRM 지급건 한정(별도 지급파일 처리분). 지급일 당일은 지급예정.
-      (coalesce(substring(source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') <= ${LEGACY_PAID_DELIVERY_CUTOFF}, false)
-        OR coalesce(substring(source_raw->>'통번역사지급일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') < to_char((now() AT TIME ZONE 'Asia/Seoul')::date, 'YYYY-MM-DD'), false)) AS legacy_paid,
+      --   (2026-11-13 대표 결정) 운영 판매로 전환된 원본 행은 전환 수행정보의 실제 지급확정 기록만 따른다:
+      --   지급완료 = 수행정보 payment_status='paid'(cutoff 지급완료 또는 [지급완료 확인] 기록). 지급예정일 경과만으로 지급완료 아님 → 확인 필요.
+      --   전환되지 않은 원본 조회 판매는 기존 규칙(2026-11-08) 그대로.
+      CASE WHEN act.payment_status IS NOT NULL THEN act.payment_status = 'paid'
+        OR coalesce(substring(source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') <= ${LEGACY_PAID_DELIVERY_CUTOFF}, false)
+      ELSE (coalesce(substring(source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') <= ${LEGACY_PAID_DELIVERY_CUTOFF}, false)
+        OR coalesce(substring(source_raw->>'통번역사지급일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') < to_char((now() AT TIME ZONE 'Asia/Seoul')::date, 'YYYY-MM-DD'), false)) END AS legacy_paid,
+      (act.payment_status = 'paid' AND act.actual_payment_date IS NOT NULL) AS legacy_paid_confirmed,
+      to_char(act.actual_payment_date, 'YYYY-MM-DD') AS actual_payment_date,
       coalesce(substring(source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') <= ${LEGACY_PAID_DELIVERY_CUTOFF}, false) AS legacy_paid_cutoff,
       -- 지급예정: 지급일이 오늘(KST) 당일 또는 이후. 지급일 미상은 지급확인 필요(지급일 경과는 위 legacy_paid).
       coalesce(substring(source_raw->>'통번역사지급일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') >= to_char((now() AT TIME ZONE 'Asia/Seoul')::date, 'YYYY-MM-DD'), false) AS payout_future,
       coalesce(nullif(regexp_replace(coalesce(source_raw->>'지급액(세전)',''), '[^0-9.-]', '', 'g'), '')::numeric, 0) AS pretax,
       coalesce(nullif(regexp_replace(coalesce(source_raw->>'지금액(세후)',''), '[^0-9.-]', '', 'g'), '')::numeric, 0) AS posttax
-    FROM legacy_archive_rows WHERE source_type = 'progress' AND is_effective = true
+    FROM legacy_archive_rows
+    -- 운영 판매 전환 수행정보(확인 대기·확인 완료·과거 지급완료) — 지급상태 판정에만 사용(원본 불변)
+    --   (원본 행마다 재조회하지 않도록 전환 이력을 한 번만 모아 해시 조인 — 원본 행 id 기준 최신 1건)
+    LEFT JOIN (SELECT DISTINCT ON (s.row_key) s.row_key, xpa.payment_status::text AS payment_status, xpa.actual_payment_date
+      FROM import_row_sources s JOIN performance_assignments xpa ON xpa.id = s.entity_id AND xpa.deleted_at IS NULL
+      WHERE s.module = 'legacy_sale_activation' AND s.row_key LIKE 'progress:%' AND s.status <> 'payout_review_unpaid'
+      ORDER BY s.row_key, s.id DESC) act ON act.row_key = 'progress:' || legacy_archive_rows.id
+    WHERE source_type = 'progress' AND is_effective = true
       -- 운영 지급으로 넘어간 과거 수행행 제외(중복 집계 방지): 과거 판매 운영 전환 후 '과거 지급 확인 → 미지급'으로 처리된 건
       --   (과거 CRM 지급 전환 승인 포함)은 운영 수행정보(cur)로만 집계한다. 원본 행은 그대로 보존.
       AND NOT EXISTS (SELECT 1 FROM import_row_sources s JOIN performance_assignments xpa ON xpa.id = s.entity_id AND xpa.deleted_at IS NULL
@@ -340,7 +354,7 @@ export async function collectUnifiedItems(opts: {
       const masterKey = r.mapped_user_id != null ? `m:${r.mapped_user_id}` : `n:${r.translator ?? "?"}`;
       // 지급상태(과거 CRM, PROG 판정과 동일) — 지급완료는 납품일 ≤ cutoff(대표 확인)만. 입금내역(고객 수금)은 근거 아님.
       const status: PayStatus = legacyStatus(r);
-      const paidBasis: string | null = !r.legacy_paid ? null : r.legacy_paid_cutoff ? LEGACY_PAID_BASIS : LEGACY_PAID_BY_ROUND_BASIS;
+      const paidBasis: string | null = !r.legacy_paid ? null : r.legacy_paid_confirmed ? `VERITAS OS 지급완료 확인(실제 지급일 ${r.actual_payment_date})` : r.legacy_paid_cutoff ? LEGACY_PAID_BASIS : LEGACY_PAID_BY_ROUND_BASIS;
       return {
         source: "legacy", sourceKey: r.source_key, id: num(r.id),
         deliveryDate: r.delivery_date ?? null, payoutDate: r.payout_date ?? null,
