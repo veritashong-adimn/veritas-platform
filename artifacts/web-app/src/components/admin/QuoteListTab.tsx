@@ -138,9 +138,12 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
   const [bulkDeleteOpen, setBulkDeleteOpen]     = useState(false);
   const [bulkDeleteReason, setBulkDeleteReason] = useState('');
   const [bulkDeleting, setBulkDeleting]         = useState(false);
+  // 선택삭제 사전검사(서버 delete-check) — 삭제 가능/불가 건과 사유. null = 검사 중
+  const [bulkDeleteCheck, setBulkDeleteCheck]   = useState<Array<{ q: QuoteRow; ok: boolean; reasons: string[] }> | null>(null);
 
-  const fetchQuotes = useCallback(async () => {
-    setLoading(true);
+  // silent: 작업(삭제 등) 후 재조회 — 로딩 화면으로 표를 내리지 않아 스크롤·검색·필터 상태가 그대로 유지된다.
+  const fetchQuotes = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
     setSelectedIds(new Set()); // 재조회(필터/작업 후) 시 선택 초기화
     try {
       // 상태/유형/검색은 클라이언트에서 family 단위로 적용한다(관계견적 부모가 필터에서 빠져 자식이 고아가 되지 않도록).
@@ -376,16 +379,35 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
   };
 
   // 일괄 선택삭제 — 판매전환 완료(approved)는 삭제 불가, 섞이면 차단. 삭제사유 필수(≥2자).
-  const openBulkDelete = () => {
+  //  열 때 선택 건마다 서버 delete-check 로 삭제 가능 여부·사유를 확인하고, 삭제 가능한 건만 휴지통으로 이동한다(불가 건은 사유만 안내).
+  const openBulkDelete = async () => {
     if (selectedCount === 0) return;
     if (selectedQuotes.some(q => q.status === 'approved')) { onToast('선택한 견적 중 삭제할 수 없는 상태(판매전환 완료)가 포함되어 있습니다. 먼저 판매취소가 필요합니다.'); return; }
     setBulkDeleteReason('');
+    setBulkDeleteCheck(null);
     setBulkDeleteOpen(true);
+    const targets = [...selectedQuotes];
+    const checked = await Promise.all(targets.map(async q => {
+      try {
+        const res = await fetch(api(`/api/admin/quotes/${q.id}/delete-check`), { headers: authH });
+        const d = await res.json().catch(() => null);
+        if (!res.ok) return { q, ok: false, reasons: [d?.error ?? '삭제 가능 여부를 확인하지 못했습니다.'] };
+        return { q, ok: !!d?.ok, reasons: (d?.reasons ?? []) as string[] };
+      } catch { return { q, ok: false, reasons: ['네트워크 오류'] }; }
+    }));
+    setBulkDeleteCheck(checked);
   };
+  const bulkDeletable = (bulkDeleteCheck ?? []).filter(c => c.ok);
+  const bulkBlocked   = (bulkDeleteCheck ?? []).filter(c => !c.ok);
+  // 삭제 대상 중 관계견적(변경/추가/분할)의 원견적 번호 — '원견적은 유지됩니다' 안내용
+  const bulkRootsKept = Array.from(new Set(bulkDeletable
+    .filter(c => c.q.relationType != null && c.q.rootQuoteId != null && !bulkDeletable.some(o => o.q.id === c.q.rootQuoteId))
+    .map(c => quotes.find(r => r.id === c.q.rootQuoteId)?.quoteNumber ?? `#${c.q.rootQuoteId}`)));
   const handleBulkDelete = async () => {
     const reason = bulkDeleteReason.trim();
     if (reason.length < 2) { onToast('삭제 사유를 2자 이상 입력해 주세요.'); return; }
-    const targets = selectedQuotes.filter(q => q.status !== 'approved');
+    const targets = bulkDeletable.map(c => c.q);
+    if (targets.length === 0) return;
     setBulkDeleting(true);
     try {
       const results = await Promise.all(targets.map(async q => {
@@ -406,8 +428,9 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
       // 일괄 삭제는 안내만(자동 취소 없음) — 빈 프로젝트가 남으면 번호를 알려 취소 여부를 판단하도록 한다
       const orphans = results.map(r => r.orphanProjectId).filter((x): x is number => x != null);
       if (orphans.length) msg += ` ※ 유효 견적·판매 기록이 없는 프로젝트가 남았습니다: ${orphans.map(id => `#${id}`).join(', ')} — 필요 시 프로젝트 취소로 정리해 주세요.`;
+      if (bulkBlocked.length) msg += ` (삭제 불가 ${bulkBlocked.length}건은 그대로 유지)`;
       onToast(msg);
-      fetchQuotes();
+      fetchQuotes({ silent: true });
     } finally { setBulkDeleting(false); }
   };
 
@@ -863,10 +886,36 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
         onClick={() => { if (!bulkDeleting) { setBulkDeleteOpen(false); setBulkDeleteReason(''); } }}>
         <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: '26px 30px', width: 460, maxWidth: '92vw', boxShadow: '0 20px 60px rgba(0,0,0,0.25)' }} data-testid="modal-bulk-quote-delete">
           <h2 style={{ margin: '0 0 8px', fontSize: 18, fontWeight: 800, color: '#dc2626' }}>선택한 {selectedCount}건의 견적을 삭제하시겠습니까?</h2>
-          <p style={{ margin: '0 0 16px', fontSize: 13, color: '#374151', lineHeight: 1.6 }}>
+          <p style={{ margin: '0 0 12px', fontSize: 13, color: '#374151', lineHeight: 1.6 }}>
             삭제된 견적서는 휴지통으로 이동되며, 기본 목록에서 제외됩니다.<br />
             필요한 경우 휴지통에서 복원할 수 있습니다.
           </p>
+          {bulkDeleteCheck == null ? (
+            <p data-testid="bulk-quote-delete-checking" style={{ margin: '0 0 14px', fontSize: 12.5, color: '#6b7280' }}>삭제 가능 여부 확인 중…</p>
+          ) : (
+            <div style={{ maxHeight: 200, overflowY: 'auto', marginBottom: 14, fontSize: 12.5, lineHeight: 1.6 }}>
+              {bulkDeletable.length > 0 && (
+                <div data-testid="bulk-quote-delete-targets" style={{ color: '#111827' }}>
+                  <b>삭제 대상 {bulkDeletable.length}건:</b> {bulkDeletable.map(c => c.q.quoteNumber ?? `#${c.q.id}`).join(', ')}
+                </div>
+              )}
+              {bulkRootsKept.length > 0 && (
+                <div data-testid="bulk-quote-delete-root-kept" style={{ color: '#2563eb', marginTop: 4 }}>
+                  ※ 원견적({bulkRootsKept.join(', ')})과 다른 관계견적은 삭제되지 않고 그대로 유지됩니다.
+                </div>
+              )}
+              {bulkBlocked.length > 0 && (
+                <div data-testid="bulk-quote-delete-blocked" style={{ marginTop: 8, padding: '8px 10px', borderRadius: 8, background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b' }}>
+                  <b>삭제할 수 없는 견적 {bulkBlocked.length}건 (삭제하지 않고 유지)</b>
+                  {bulkBlocked.map(c => (
+                    <div key={c.q.id} style={{ marginTop: 4 }}>
+                      · {c.q.quoteNumber ?? `#${c.q.id}`}: {c.reasons.join(' / ') || '삭제할 수 없습니다.'}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           <label style={{ display: 'block', fontSize: 13, fontWeight: 700, color: '#374151', marginBottom: 6 }}>
             삭제 사유 <span style={{ color: '#dc2626' }}>*</span>
           </label>
@@ -883,13 +932,14 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
             <button onClick={() => { setBulkDeleteOpen(false); setBulkDeleteReason(''); }} disabled={bulkDeleting}
               style={{ padding: '9px 20px', borderRadius: 8, border: '1px solid #d1d5db', background: '#f9fafb', fontSize: 13, fontWeight: 600, cursor: bulkDeleting ? 'not-allowed' : 'pointer', color: '#374151' }}>취소</button>
-            <button onClick={handleBulkDelete} disabled={bulkDeleteReason.trim().length < 2 || bulkDeleting} data-testid="confirm-bulk-quote-delete"
+            <button onClick={handleBulkDelete} disabled={bulkDeleteReason.trim().length < 2 || bulkDeleting || bulkDeletable.length === 0} data-testid="confirm-bulk-quote-delete"
+              aria-label="선택 견적 삭제 확인"
               style={{
                 padding: '9px 20px', borderRadius: 8, border: 'none', color: '#fff', fontSize: 13, fontWeight: 700,
-                background: bulkDeleteReason.trim().length >= 2 && !bulkDeleting ? '#dc2626' : '#fca5a5',
-                cursor: bulkDeleteReason.trim().length >= 2 && !bulkDeleting ? 'pointer' : 'not-allowed',
+                background: bulkDeleteReason.trim().length >= 2 && !bulkDeleting && bulkDeletable.length > 0 ? '#dc2626' : '#fca5a5',
+                cursor: bulkDeleteReason.trim().length >= 2 && !bulkDeleting && bulkDeletable.length > 0 ? 'pointer' : 'not-allowed',
               }}>
-              {bulkDeleting ? '삭제 중…' : '삭제'}
+              {bulkDeleting ? '삭제 중…' : (bulkBlocked.length > 0 && bulkDeletable.length > 0 ? `삭제 가능 ${bulkDeletable.length}건 삭제` : '삭제')}
             </button>
           </div>
         </div>

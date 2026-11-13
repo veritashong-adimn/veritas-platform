@@ -2,7 +2,8 @@
  * 견적서 삭제(논리 삭제) + 의뢰건·프로젝트 상태 원복.
  *
  *  · 견적만 삭제 표시(quotes.deleted_at/deleted_by/deletion_reason — 기존 컬럼). 견적번호는 재사용하지 않는다.
- *  · 삭제 가능: 저장만 된 견적(status=pending) — 발송·승인·배정·작업·결제·정산·청구 증빙·선입금 차감이 없을 때.
+ *  · 삭제 가능: 대기(pending)·거절(rejected) 견적 — 발송중·승인·배정·작업·결제·정산·청구 증빙·선입금 차감이 없을 때.
+ *    하위 관계견적(R/A/분할)이 살아 있는 원견적은 삭제 불가(관계견적 개별 삭제는 가능).
  *  · 원복: 연결된 의뢰건(inquiries.quote_id)은 같은 프로젝트의 다른 유효 견적으로 다시 연결하고, 없으면 연결을 해제한다
  *          (의뢰건 처리상태는 quote_id 로 파생 → '견적 생성 가능'으로 돌아감). 프로젝트는 삭제·신규 생성하지 않고 ID 유지,
  *          다른 유효 견적이 없을 때만 '견적'(quoted) → '접수'(created).
@@ -32,6 +33,7 @@ export async function checkQuoteDeletable(quoteId: number): Promise<QuoteDeletab
   const [q] = await db.select({
     id: quotesTable.id, quoteNumber: quotesTable.quoteNumber, status: quotesTable.status, projectId: quotesTable.projectId,
     deletedAt: quotesTable.deletedAt, batchClosedAt: quotesTable.batchClosedAt,
+    rootQuoteId: quotesTable.rootQuoteId, relationType: quotesTable.relationType,
   }).from(quotesTable).where(eq(quotesTable.id, quoteId));
   const empty: QuoteDeletable = { ok: false, reasons: ["견적을 찾을 수 없습니다."], quote: null, project: null, inquiryIds: [], otherActiveQuotes: [] };
   if (!q) return empty;
@@ -39,8 +41,17 @@ export async function checkQuoteDeletable(quoteId: number): Promise<QuoteDeletab
   if (q.deletedAt) reasons.push("이미 삭제된 견적입니다.");
   if (q.status === "approved") reasons.push("고객 승인(판매전환)된 견적서입니다 — 먼저 판매취소를 진행해 주세요.");
   if (q.status === "sent") reasons.push("고객에게 발송된 견적서입니다 — 삭제 대신 거절 처리 또는 변경견적(정정)으로 처리해 주세요.");
-  if (q.status === "rejected") reasons.push("발송 후 거절 처리된 견적서입니다 — 발송 이력 보존을 위해 삭제할 수 없습니다.");
+  // 거절(rejected)은 상태만으로 차단하지 않는다 — 판매·청구·입금·정산 등 실제 연결 기록으로 판단(아래 검사).
+  //  논리 삭제(휴지통)라 견적 행·번호·발송/거절 이력(logs)은 그대로 보존된다.
   if (q.batchClosedAt) reasons.push("누적 마감된 견적서입니다 — 청구 단위가 확정되어 삭제할 수 없습니다.");
+
+  // 원견적(family root) — 살아 있는 변경·추가·분할 견적이 있으면 원견적만 삭제하지 않는다(하위 견적이 고아가 되는 것 방지).
+  //  변경견적(R1 등) 자체는 원견적과 독립적으로 삭제 가능 — 원견적·다른 관계견적은 건드리지 않는다.
+  if (q.relationType == null) {
+    const kids = await db.select({ quoteNumber: quotesTable.quoteNumber }).from(quotesTable)
+      .where(and(eq(quotesTable.rootQuoteId, quoteId), ne(quotesTable.id, quoteId), isNull(quotesTable.deletedAt)));
+    if (kids.length > 0) reasons.push(`변경·추가·분할 견적(${kids.map(k => k.quoteNumber ?? "-").join(", ")})이 연결된 원견적입니다 — 원견적은 유지되어야 하므로 하위 견적만 삭제할 수 있습니다.`);
+  }
 
   // 청구·세금계산서 묶음 / 선입금 차감 / 통번역사 실적·지급 (견적 단위 기록)
   if (await count(sql`SELECT count(*) n FROM billing_batches WHERE quote_id = ${quoteId}`) + await count(sql`SELECT count(*) n FROM billing_batch_items WHERE quote_id = ${quoteId}`) > 0)
@@ -96,7 +107,7 @@ export async function deleteQuoteAndRevert(quoteId: number, userId: number | nul
     const [q] = await tx.select({ id: quotesTable.id, status: quotesTable.status, deletedAt: quotesTable.deletedAt, projectId: quotesTable.projectId, quoteNumber: quotesTable.quoteNumber })
       .from(quotesTable).where(eq(quotesTable.id, quoteId)).for("update");
     if (!q || q.deletedAt) throw new QuoteDeleteError(409, "이미 삭제된 견적입니다.");
-    if (q.status !== "pending") throw new QuoteDeleteError(409, "견적 상태가 변경되었습니다(발송·승인 등) — 화면을 새로고침한 뒤 다시 확인해 주세요.");
+    if (q.status !== "pending" && q.status !== "rejected") throw new QuoteDeleteError(409, "견적 상태가 변경되었습니다(발송·승인 등) — 화면을 새로고침한 뒤 다시 확인해 주세요.");
 
     const [del] = await tx.update(quotesTable)
       .set({ deletedAt: new Date(), deletedBy: userId, deletionReason: reason })

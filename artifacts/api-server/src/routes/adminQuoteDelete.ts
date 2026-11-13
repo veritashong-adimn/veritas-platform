@@ -15,7 +15,7 @@ const adminGuard = [requireAuth, requireRole("admin", "staff")];
 // ─── 견적 삭제 (Soft Delete) + 의뢰건·프로젝트 원복 ─────────────────────────────
 // 물리 삭제하지 않고 deletedAt/deletedBy/deletionReason 만 기록한다(견적번호 재사용 없음).
 // 삭제 가능 조건·원복 규칙은 services/quoteDeletion(checkQuoteDeletable / deleteQuoteAndRevert) — 화면 검사와 별개로 서버에서 다시 검증.
-//   저장만 된 견적(pending)만 — 발송·승인·거절·누적마감·배정·작업·결제·정산·청구 증빙·선입금 차감이 있으면 409 + 사유.
+//   대기(pending)·거절(rejected) 견적 — 발송중·승인·누적마감·배정·작업·결제·정산·청구 증빙·선입금 차감이 있으면 409 + 사유.
 router.get("/admin/quotes/:id/delete-check", ...adminGuard, requirePermission("quote.update"), async (req, res) => {
   const quoteId = Number(req.params.id);
   if (isNaN(quoteId) || quoteId <= 0) { res.status(400).json({ error: "유효하지 않은 견적 id." }); return; }
@@ -116,10 +116,25 @@ router.post("/admin/quotes/:id/restore", ...adminGuard, requirePermission("quote
   const restoreReason = ((req.body?.reason ?? "") as string).trim();
   try {
     const [quote] = await db
-      .select({ id: quotesTable.id, deletedAt: quotesTable.deletedAt, quoteNumber: quotesTable.quoteNumber })
+      .select({ id: quotesTable.id, deletedAt: quotesTable.deletedAt, quoteNumber: quotesTable.quoteNumber,
+        status: quotesTable.status, rootQuoteId: quotesTable.rootQuoteId, relationType: quotesTable.relationType })
       .from(quotesTable).where(eq(quotesTable.id, quoteId));
     if (!quote) { res.status(404).json({ error: "견적을 찾을 수 없습니다." }); return; }
     if (!quote.deletedAt) { res.status(400).json({ error: "휴지통에 있는 견적이 아닙니다." }); return; }
+
+    // 관계견적(R/A/분할) 복원 시 family 정합성 — 원견적이 휴지통에 있으면 고아가 되므로 원견적부터 복원,
+    //  미확정(대기) 변경견적은 family 당 1건만 허용(createRevision 규칙과 동일).
+    if (quote.relationType != null && quote.rootQuoteId != null) {
+      const [root] = await db.select({ quoteNumber: quotesTable.quoteNumber, deletedAt: quotesTable.deletedAt })
+        .from(quotesTable).where(eq(quotesTable.id, quote.rootQuoteId));
+      if (root?.deletedAt) { res.status(409).json({ error: `원견적(${root.quoteNumber ?? quote.rootQuoteId})이 휴지통에 있습니다 — 원견적을 먼저 복원해 주세요.` }); return; }
+      if (quote.relationType === "revision" && quote.status === "pending") {
+        const [pend] = await db.select({ quoteNumber: quotesTable.quoteNumber }).from(quotesTable)
+          .where(and(eq(quotesTable.rootQuoteId, quote.rootQuoteId), eq(quotesTable.relationType, "revision"), eq(quotesTable.status, "pending"), isNull(quotesTable.deletedAt)))
+          .limit(1);
+        if (pend) { res.status(409).json({ error: `미확정(대기) 변경견적(${pend.quoteNumber ?? "-"})이 이미 있습니다 — 먼저 승인·거절 또는 삭제한 뒤 복원해 주세요.` }); return; }
+      }
+    }
 
     await db.update(quotesTable)
       .set({ deletedAt: null, deletedBy: null, deletionReason: null })

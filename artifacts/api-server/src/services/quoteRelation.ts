@@ -84,7 +84,19 @@ export async function generateRelationQuoteNumber(
     .select({ cnt: sql<number>`count(*)::int` })
     .from(quotesTable)
     .where(sql`COALESCE(${quotesTable.rootQuoteId}, ${quotesTable.id}) = ${rootQuoteId} AND ${quotesTable.relationType} = ${relationType}`);
-  const index = Number(cnt ?? 0) + 1;
+  // 번호 재사용 방지 강화 — 개수(count)만으로는 중간 번호가 영구삭제된 경우(R1·R2 중 R1 영구삭제 → count=1 → R2 중복)를
+  //  막지 못한다. family 내 현존(휴지통 포함) 최대 접미 번호와 영구삭제 감사로그(quote_purged)의 번호까지 반영한다.
+  const prefix = relationType === "revision" ? `${base}-R` : relationType === "additional" ? `${base}-A` : `${base}-`;
+  // 영구삭제 로그 metadata 는 JSON 문자열 — jsonb 캐스팅 없이 정규식으로 번호만 추출(형식이 다른 로그가 있어도 오류 없음).
+  const maxRow = (await tx.execute(sql`
+    SELECT COALESCE(MAX(substring(num FROM ${prefix.length + 1}::int)::int), 0)::int AS mx FROM (
+      SELECT quote_number AS num FROM quotes WHERE left(quote_number, ${prefix.length}::int) = ${prefix}
+      UNION ALL
+      SELECT substring(metadata FROM '"quoteNumber":"([^"]*)"') FROM logs
+       WHERE entity_type = 'quote' AND action = 'quote_purged'
+    ) t
+    WHERE left(num, ${prefix.length}::int) = ${prefix} AND substring(num FROM ${prefix.length + 1}::int) ~ '^[0-9]{1,6}$'`)).rows[0] as { mx: number } | undefined;
+  const index = Math.max(Number(cnt ?? 0), Number(maxRow?.mx ?? 0)) + 1;
 
   switch (relationType) {
     case "revision":   return `${base}-R${index}`;
