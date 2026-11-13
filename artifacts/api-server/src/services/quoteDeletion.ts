@@ -4,6 +4,7 @@
  *  · 견적만 삭제 표시(quotes.deleted_at/deleted_by/deletion_reason — 기존 컬럼). 견적번호는 재사용하지 않는다.
  *  · 삭제 가능: 대기(pending)·거절(rejected) 견적 — 발송중·승인·배정·작업·결제·정산·청구 증빙·선입금 차감이 없을 때.
  *    하위 관계견적(R/A/분할)이 살아 있는 원견적은 삭제 불가(관계견적 개별 삭제는 가능).
+ *    프로젝트 단계는 접수·견적·취소만 허용 — 취소는 실제 연결 기록(작업·수행·청구·입금·지급·정산)이 없을 때만.
  *  · 원복: 연결된 의뢰건(inquiries.quote_id)은 같은 프로젝트의 다른 유효 견적으로 다시 연결하고, 없으면 연결을 해제한다
  *          (의뢰건 처리상태는 quote_id 로 파생 → '견적 생성 가능'으로 돌아감). 프로젝트는 삭제·신규 생성하지 않고 ID 유지,
  *          다른 유효 견적이 없을 때만 '견적'(quoted) → '접수'(created).
@@ -25,6 +26,11 @@ export interface QuoteDeletable {
   inquiryIds: number[];
   otherActiveQuotes: Array<{ id: number; quoteNumber: string | null; status: string; isCurrent: boolean }>;
 }
+
+// 견적 삭제 허용 프로젝트 단계 — 접수·견적 + 취소(cancelled).
+//  취소는 '상태만으로' 판단하지 않는다: 판매취소 등으로 과거 업무 기록이 남아 있을 수 있으므로
+//  아래 실제 연결 데이터(작업·수행·청구·입금·지급·정산) 검사로 차단 여부를 결정한다. 프로젝트 자체는 변경하지 않는다.
+const DELETABLE_PROJECT_STATUSES = ["created", "quoted", "cancelled"];
 
 const count = async (q: ReturnType<typeof sql>) => Number(((await db.execute(q)).rows[0] as { n: string | number } | undefined)?.n ?? 0);
 
@@ -67,13 +73,20 @@ export async function checkQuoteDeletable(quoteId: number): Promise<QuoteDeletab
     const [p] = await db.select({ id: projectsTable.id, status: projectsTable.status }).from(projectsTable).where(eq(projectsTable.id, q.projectId));
     if (p) {
       project = p;
-      if (!["created", "quoted"].includes(p.status)) reasons.push(`프로젝트가 '${PROJECT_STATUS_KR[p.status] ?? p.status}' 단계입니다 — 견적승인·배정·진행 이후에는 삭제할 수 없습니다.`);
+      if (!DELETABLE_PROJECT_STATUSES.includes(p.status)) reasons.push(`프로젝트가 '${PROJECT_STATUS_KR[p.status] ?? p.status}' 단계입니다 — 견적승인·배정·진행 이후에는 삭제할 수 없습니다.`);
       const tasks = await count(sql`SELECT count(*) n FROM tasks WHERE project_id = ${p.id}`);
       if (tasks > 0) reasons.push(`통번역사 배정(작업) 기록 ${tasks}건이 있습니다.`);
       const settle = await count(sql`SELECT count(*) n FROM settlements WHERE project_id = ${p.id}`);
       if (settle > 0) reasons.push(`정산 기록 ${settle}건이 있습니다.`);
       const pays = await count(sql`SELECT count(*) n FROM payments WHERE project_id = ${p.id}`);
       if (pays > 0) reasons.push(`결제 기록 ${pays}건이 있습니다.`);
+      // 판매 단계 기록(취소 프로젝트에 남아 있을 수 있음) — 청구정보·수행정보·지급회차 편입. 접수·견적 단계에는 원래 없다.
+      const bills = await count(sql`SELECT count(*) n FROM project_payments WHERE project_id = ${p.id}`);
+      if (bills > 0) reasons.push(`연결된 판매의 청구·입금 정보 ${bills}건이 있어 삭제할 수 없습니다.`);
+      const perfP = await count(sql`SELECT count(*) n FROM performance_assignments WHERE project_id = ${p.id} AND deleted_at IS NULL`);
+      if (perfP > 0) reasons.push(`연결된 판매의 수행정보 ${perfP}건이 있어 삭제할 수 없습니다.`);
+      const roundP = await count(sql`SELECT count(*) n FROM payout_round_items WHERE project_id = ${p.id}`);
+      if (roundP > 0) reasons.push(`연결된 판매의 지급회차 기록 ${roundP}건이 있어 삭제할 수 없습니다.`);
       // 기존 판매 의존성 가드(입금·지급·지급회차 — 미확정 포함)
       const guard = await evaluateQuoteDependencies(quoteId);
       if (!guard.canDelete) reasons.push(...guard.blockingReasons);
@@ -138,7 +151,7 @@ export async function deleteQuoteAndRevert(quoteId: number, userId: number | nul
         await tx.update(projectsTable).set({ status: "created" }).where(eq(projectsTable.id, q.projectId));
         after = "created";
       }
-      if (p && !["created", "quoted"].includes(p.status)) throw new QuoteDeleteError(409, `프로젝트가 '${PROJECT_STATUS_KR[p.status] ?? p.status}' 단계로 변경되어 삭제할 수 없습니다.`);
+      if (p && !DELETABLE_PROJECT_STATUSES.includes(p.status)) throw new QuoteDeleteError(409, `프로젝트가 '${PROJECT_STATUS_KR[p.status] ?? p.status}' 단계로 변경되어 삭제할 수 없습니다.`);
     }
     return {
       quoteId, quoteNumber: q.quoteNumber, projectId: q.projectId,

@@ -2974,9 +2974,12 @@ export function QuoteEditorWorkspace({
       const others = (c.otherActiveQuotes ?? []) as Array<{ quoteNumber: string | null }>;
       const reason = await promptDialog({
         title: '견적서 삭제 확인',
-        message: '이 견적서를 삭제하시겠습니까?\n\n'
-          + '삭제하면 해당 견적서는 목록에서 제외되며,\n다른 유효 견적서가 없는 경우\n프로젝트 상태가 \'접수됨\'으로 변경됩니다.\n\n'
-          + '기존 고객정보, 의뢰내용, 첨부파일 및\nAI 분석 결과는 유지됩니다.'
+        message: `이 견적서${meMember?.quoteNumber ? `(${meMember.quoteNumber})` : ''}를 삭제하시겠습니까?\n\n`
+          + '삭제하면 해당 견적서는 휴지통으로 이동되어 목록에서 제외됩니다(휴지통에서 복원 가능).\n'
+          // 프로젝트 상태 안내는 실제 처리와 일치하게 — '견적' 단계 + 다른 유효 견적 없음일 때만 '접수'로 변경(취소 등은 그대로 유지)
+          + (c.projectStatus === 'quoted' && !others.length ? '다른 유효 견적서가 없어 프로젝트 상태가 \'접수됨\'으로 변경됩니다.\n' : '')
+          + ((isRevision || isDerived || meMember?.relationType === 'additional') && rootMember?.quoteNumber ? `원견적(${rootMember.quoteNumber})과 다른 관계견적은 그대로 유지됩니다.\n` : '')
+          + '\n기존 고객정보, 의뢰내용, 첨부파일 및\nAI 분석 결과는 유지됩니다.'
           + (others.length ? `\n\n※ 같은 의뢰의 다른 유효 견적서 ${others.length}건(${others.map(o => o.quoteNumber ?? '-').join(', ')})이 있어 프로젝트 상태는 유지됩니다.` : ''),
         label: '삭제 사유 (선택)', placeholder: '예: 견적서 디자인 확인용 임시 저장', multiline: true,
         confirmLabel: '견적서 삭제', cancelLabel: '취소', variant: 'danger',
