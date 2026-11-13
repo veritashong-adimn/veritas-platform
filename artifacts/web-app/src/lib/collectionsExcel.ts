@@ -7,6 +7,7 @@
 //  · 선입금·차감 견적은 collections 에서 이미 제외됨 → 일반 수금과 분리 유지(§12).
 import { exportDataset, todayStamp, type ExcelColumn } from './excelExport';
 import { displayPaymentMethod } from './paymentMethodDisplay';
+import { VAT_MODE_LABEL, type VatMode } from './quoteTaxType';
 
 export interface CollectionExportRow {
   quoteNumber: string | null;
@@ -92,6 +93,7 @@ export interface SaleCollectionExportRow {
   companyName: string | null;
   projectTitle: string | null;
   saleTotal: number;
+  saleTaxType?: string | null;   // 판매 세금 유형(현재 판매만, 과거 CRM 목록은 없음)
   paidAmount: number | null;
   receivable: number | null;
   paidRate: number | null;
@@ -121,6 +123,7 @@ const SALE_COLUMNS: ExcelColumn<SaleCollectionExportRow>[] = [
   { header: '거래처명', value: (r) => r.companyName ?? '' },
   { header: '프로젝트명', value: (r) => r.projectTitle ?? '' },
   { header: '총 판매금액(VAT 포함)', value: (r) => num(r.saleTotal), type: 'number' },
+  { header: '세금 유형', value: (r) => (r.saleTaxType ? (VAT_MODE_LABEL[r.saleTaxType as VatMode] ?? r.saleTaxType) : '') },
   { header: '누적 입금액', value: (r) => num(r.paidAmount), type: 'number' },
   { header: '잔여 미수금', value: (r) => num(r.receivable), type: 'number' },
   { header: '입금률(%)', value: (r) => num(r.paidRate), type: 'number', numFmt: '0.0' },

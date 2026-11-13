@@ -14,6 +14,7 @@ import './readTableView.css';
 import { formatDisplayDate } from '../../lib/dateFormat';
 import { exportSaleCollections, installmentSummary, SALE_STATUS_LABEL, INSTALLMENT_STATUS_LABEL, type SaleCollectionExportRow } from '../../lib/collectionsExcel';
 import { displayPaymentMethod } from '../../lib/paymentMethodDisplay';
+import { VAT_MODE_LABEL, type VatMode } from '../../lib/quoteTaxType';
 
 type Installment = SaleCollectionExportRow['installments'][number] & {
   id: number; paidAmount: number; receivable: number; paymentMethod: string | null;
@@ -145,7 +146,7 @@ export function CollectionsSaleView({ token, onToast, onOpenSalesDetail, onOpenL
 
   const headers: { label: string; align?: 'right'; sortKey?: SortKey; title?: string }[] = [
     { label: '판매번호' }, { label: '거래처명' }, { label: '프로젝트명' },
-    { label: '총 판매금액', align: 'right', title: 'VAT 포함 · 판매상세 총 판매금액' },
+    { label: '총 판매금액', align: 'right', title: '판매상세 총 판매금액(일반과세 VAT 포함 · 영세율/면세는 부가세 0원)' },
     { label: '누적 입금액', align: 'right' },
     { label: '잔여 미수금', align: 'right', sortKey: 'receivable', title: '총 판매금액 − 실제 누적 입금액' },
     { label: '입금률', align: 'right', sortKey: 'paidRate', title: '실제 누적 입금액 ÷ 총 판매금액 × 100' },
@@ -252,7 +253,11 @@ export function CollectionsSaleView({ token, onToast, onOpenSalesDetail, onOpenL
                       </td>
                       <td style={{ ...td, whiteSpace: 'nowrap' }}>{r.companyName ?? '-'}</td>
                       <td style={{ ...td, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.projectTitle ?? '(제목 없음)'}</td>
-                      <td style={{ ...tdNum, fontWeight: 700, color: '#0891b2' }}>{formatWon(r.saleTotal)}</td>
+                      <td style={{ ...tdNum, fontWeight: 700, color: '#0891b2' }}>{formatWon(r.saleTotal)}
+                        {/* 세금 유형 — 일반과세(기본)는 표시 생략, 영세율·면세·확인 필요만 표시 */}
+                        {r.saleTaxType && r.saleTaxType !== 'taxable' && (
+                          <div data-testid={`sale-tax-type-${r.rowKey}`} style={{ fontSize: 11, fontWeight: 600, color: r.saleTaxType === 'unknown' ? '#b45309' : '#6b7280' }}>{r.saleTaxType === 'unknown' ? '세금 유형 확인 필요' : VAT_MODE_LABEL[r.saleTaxType as VatMode]}</div>
+                        )}</td>
                       <td style={tdNum} title={r.status === 'review' && r.parsedDepositAmount != null ? `입금내역에서 읽힌 금액 ${formatWon(r.parsedDepositAmount)} (미확정 — 집계 제외)` : undefined}>{wonOrDash(r.paidAmount)}</td>
                       <td style={{ ...tdNum, fontWeight: hasRecv ? 700 : 400, color: hasRecv ? '#dc2626' : '#9ca3af' }}>{wonOrDash(r.receivable)}</td>
                       <td style={tdNum}><RateCell rate={r.paidRate} overpaid={r.overpaid} /></td>

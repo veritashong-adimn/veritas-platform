@@ -11,6 +11,7 @@ import { Card, GhostBtn, PrimaryBtn, ClickSelect, confirmDialog } from '../ui';
 import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
 import { DateField } from './DatePickerShared';
 import { saleSplitOf, amountsFromSupply, amountsFromTotal, splitMatched, isInvoiceMethod, isZeroVatMethod, methodVatWarning, METHOD_ZERO_RATED, METHOD_EXEMPT } from '../../lib/paymentSplit';
+import { BILLING_METHOD_BY_KIND, type VatMode } from '../../lib/quoteTaxType';
 import './readTableView.css';
 
 export interface PayTxn {
@@ -68,6 +69,8 @@ interface Props {
   //  (영세율·해외 통역 등 부가세 0원 판매를 10%로 재계산하지 않기 위함). 없으면 기존 총액÷1.1 분해.
   saleSupplyAmount?: number | null;
   saleVatAmount?: number | null;
+  // 판매 견적 세금 유형(견적 품목 저장값 기준) — 신규 청구행 기본 결제·발행 유형 결정용. 기존 청구행·금액은 바꾸지 않는다.
+  saleTaxType?: VatMode;
   defaultCompany?: { id: number; name: string } | null;   // 판매정보 거래처(일반청구 기본 청구업체)
   // 차감견적을 판매전환한 판매건 전용 — 하단 요약을 '이번 서비스 사용액/총 선입금액/사용가능잔액'으로 대체.
   //  (일반/누적 견적 판매건은 isPrepaidSale=false → 기존 미수금/입금완료율 요약 그대로 유지)
@@ -221,7 +224,7 @@ function CompanyPicker({ token, companyName, onPick, style }: {
   );
 }
 
-export default function PaymentInfoSection({ projectId, token, paymentRecords, saleTotal, saleSupplyAmount = null, saleVatAmount = null, defaultCompany, isPrepaidSale = false, prepaidDeposited = null, prepaidAvailable = null, onChanged, onToast }: Props) {
+export default function PaymentInfoSection({ projectId, token, paymentRecords, saleTotal, saleSupplyAmount = null, saleVatAmount = null, saleTaxType, defaultCompany, isPrepaidSale = false, prepaidDeposited = null, prepaidAvailable = null, onChanged, onToast }: Props) {
   const authH = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
   const [editMode, setEditMode] = useState(false);
   const [rows, setRows] = useState<PayRow[]>([]);
@@ -246,6 +249,8 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   const saleVat = split.vat;
   // 부가세 0원 판매(영세율·해외 통역 등) — 청구 금액 입력 시에도 부가세 0 유지(10% 자동계산 안 함)
   const zeroVatSale = split.zeroVat;
+  // 신규 청구행 기본 결제·발행 유형 — 영세율 판매=영세율 계산서, 면세 판매=면세 계산서, 그 외(일반과세·확인 필요)=세금계산서(기존)
+  const defaultMethod = saleTaxType === 'zero_rate' || saleTaxType === 'exempt' ? BILLING_METHOD_BY_KIND[saleTaxType] : '세금계산서';
 
   // 회사 담당자 로드(캐시). 회사 선택 시 대표 담당자 자동 선택용.
   const loadContacts = async (companyId: number): Promise<{ value: string; label: string; primary?: boolean }[]> => {
@@ -293,7 +298,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     if (mapped.length === 0) {
       mapped.push({
         paymentCategory: CAT_GENERAL, payer: PAYER_CUSTOMER, depositItem: ITEM_TOTAL,
-        paymentMethod: '세금계산서', paymentType: 'lump_sum', depositStatus: 'scheduled',
+        paymentMethod: defaultMethod, paymentType: 'lump_sum', depositStatus: 'scheduled',
         billingCompanyId: defaultCompany?.id ?? null, billingCompanyName: defaultCompany?.name ?? null,
         supplyAmount: String(saleSupply), vatAmount: String(saleVat), amount: String(num(saleTotal)),
       });
@@ -316,7 +321,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
       supplyAmount: String(saleSupply), vatAmount: '0', amount: String(saleSupply) },
   ]);
   const generalRow = (): PayRow => ({
-    paymentCategory: CAT_GENERAL, payer: PAYER_CUSTOMER, depositItem: ITEM_TOTAL, paymentMethod: '세금계산서', paymentType: 'lump_sum', depositStatus: 'scheduled',
+    paymentCategory: CAT_GENERAL, payer: PAYER_CUSTOMER, depositItem: ITEM_TOTAL, paymentMethod: defaultMethod, paymentType: 'lump_sum', depositStatus: 'scheduled',
     billingCompanyId: defaultCompany?.id ?? null, billingCompanyName: defaultCompany?.name ?? null,
     supplyAmount: String(saleSupply), vatAmount: String(saleVat), amount: String(num(saleTotal)),
   });
@@ -382,7 +387,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     }));
   };
   // 새 청구 기본값 — 청구업체=판매 거래처, 결제방법 세금계산서, 결제구분 일괄결제, 입금주체 고객사, 입금항목 전체금액.
-  const addRow = () => setRows(prev => [...prev, { depositStatus: 'scheduled', supplyAmount: '', vatAmount: '', amount: '', paymentMethod: '세금계산서', paymentType: 'lump_sum', paymentCategory: category, payer: PAYER_CUSTOMER, depositItem: ITEM_TOTAL, billingCompanyId: defaultCompany?.id ?? null, billingCompanyName: defaultCompany?.name ?? null }]);
+  const addRow = () => setRows(prev => [...prev, { depositStatus: 'scheduled', supplyAmount: '', vatAmount: '', amount: '', paymentMethod: category === CAT_GENERAL ? defaultMethod : '세금계산서', paymentType: 'lump_sum', paymentCategory: category, payer: PAYER_CUSTOMER, depositItem: ITEM_TOTAL, billingCompanyId: defaultCompany?.id ?? null, billingCompanyName: defaultCompany?.name ?? null }]);
   const removeRow = (i: number) => setRows(prev => {
     const target = prev[i];
     if (target?.id != null) setDeletedIds(d => [...d, target.id!]);

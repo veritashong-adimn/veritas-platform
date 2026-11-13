@@ -3,15 +3,17 @@
 // 내부 화면 전용 — 고객용 견적서·거래명세서에는 출력하지 않는다.
 import React, { useEffect, useState } from 'react';
 import { api } from '../../lib/constants';
+import { deriveVatMode } from '../../lib/quoteTaxType';
 
-export function LegacyVatNotice({ quoteId, token }: { quoteId: number; token: string }) {
+export function LegacyVatNotice({ quoteId, token, refreshKey = 0 }: { quoteId: number; token: string; refreshKey?: number }) {
   const [price, setPrice] = useState<number | null>(null);
   useEffect(() => {
     fetch(api(`/api/admin/quotes/${quoteId}`), { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.ok ? r.json() : null)
-      .then(d => setPrice(d?.legacyOrigin?.taxBreakdown === 'unknown' ? Number(d.price ?? 0) : null))
+      // 세금 유형 확인 절차로 확정된 견적(품목 유형 확정)은 안내하지 않는다
+      .then(d => setPrice(d?.legacyOrigin?.taxBreakdown === 'unknown' && deriveVatMode(d.items ?? []) === 'unknown' ? Number(d.price ?? 0) : null))
       .catch(() => setPrice(null));
-  }, [quoteId, token]);
+  }, [quoteId, token, refreshKey]);
   if (price == null) return null;
   return (
     <div data-testid="legacy-vat-notice" style={{ padding: '10px 14px', marginBottom: 12, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, fontSize: 13, color: '#92400e', lineHeight: 1.6 }}>

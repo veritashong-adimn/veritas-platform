@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp, varchar, integer, boolean } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp, varchar, integer, boolean, date } from "drizzle-orm/pg-core";
 
 export const companiesTable = pgTable("companies", {
   id: serial("id").primaryKey(),
@@ -37,6 +37,15 @@ export const companiesTable = pgTable("companies", {
   // 최종 수정일시. nullable — 기존 거래처는 이 기능 도입 시점에 임의 backfill 하지 않고 null 로 둔다(§16).
   // 신규 생성 및 수정 API 에서만 값이 채워진다. 등록일(registeredAt)·createdAt 과 혼용하지 않는다(§2).
   updatedAt: timestamp("updated_at"),
+
+  // ── 기본 세금 유형(견적 작성 시 추천용) ─────────────────
+  //  'taxable'(일반과세) | 'zero_rate'(영세율) | 'exempt'(면세) | NULL(미확인 — 기존 거래처 전부, backfill 하지 않음).
+  //  추천값일 뿐: 견적에는 담당자가 최종 선택한 유형이 quote_items.tax_type 으로 저장되며,
+  //  이 값을 바꿔도 기존 견적·판매·청구의 세금 유형은 자동 변경하지 않는다.
+  defaultTaxType: varchar("default_tax_type", { length: 20 }),
+  taxTypeBasis: text("tax_type_basis"),                 // 적용 근거·확인 자료
+  taxTypeConfirmedAt: date("tax_type_confirmed_at"),    // 확인일
+  taxTypeConfirmedBy: integer("tax_type_confirmed_by"), // 확인 담당자(users.id)
 
   // ── Soft Delete (휴지통) ────────────────────────────────
   // 물리 삭제하지 않고 목록·검색에서만 제외한다(레코드·연결관계는 모두 보존).

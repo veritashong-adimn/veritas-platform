@@ -11,6 +11,7 @@ import { CompanyDocumentAnalyzePanel, type CompanyOcrDocType } from "./CompanyDo
 import { CompanyAliasSection } from "./CompanyAliasSection";
 import { CompanyPaymentAccountSection } from "./CompanyPaymentAccountSection";
 import { CompanyVendorProfileSection } from "./CompanyVendorProfileSection";
+import { CompanyTaxTypeSection } from "./CompanyTaxTypeSection";
 import { VendorDocumentsSection } from "./VendorDocumentsSection";
 
 const inputStyle: React.CSSProperties = {
@@ -577,6 +578,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                     </span>
                   </div>
                 </div>
+                {(detail as any).companyType !== "vendor" && <CompanyTaxTypeSection companyId={companyId} token={token} onToast={onToast} />}
                 {/* 상호 변경 이력 */}
                 {(() => {
                   const history = (detail as any).nameHistory ?? [];

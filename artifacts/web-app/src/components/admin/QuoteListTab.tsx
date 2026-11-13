@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { api } from '../../lib/constants';
 import { ClickSelect } from '../ui';
-import { QuoteEditorWorkspace, type QuoteItemForm, type VatType, type QuoteType } from './QuoteEditorWorkspace';
+import { QuoteEditorWorkspace, type QuoteItemForm, type QuoteType } from './QuoteEditorWorkspace';
+import { deriveVatMode, type VatMode } from '../../lib/quoteTaxType';
 import QuotePdfPreviewModal from './QuotePdfPreviewModal';
 import { QuoteTrashTab } from './QuoteTrashTab';
 import { buildQuotePdfData, type QuoteDetail, type QuoteDetailItem } from '../../lib/quotePdf';
@@ -124,7 +125,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
   const [editQuoteId,  setEditQuoteId]  = useState<number | null>(null);
   const [editInitData, setEditInitData] = useState<{
     items: QuoteItemForm[]; title: string; note: string;
-    quoteType: QuoteType; issueDate: string; vatType: VatType;
+    quoteType: QuoteType; issueDate: string; vatType: VatMode;
     companyId: number | null; contactId: number | null; divisionId: number | null;
     adminId: number | null; versionReason: string;
     status: string;
@@ -218,8 +219,8 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
       if (!res.ok) { onToast('견적 조회 실패'); return; }
       const detail = await res.json() as QuoteDetail & { items: Array<QuoteDetailItem & { productId?: number | null; taxType?: string | null }> };
       const formItems = detail.items.map(it => convertToFormItem(it));
-      // 부가세 유형: items 중 taxable이 있으면 taxable, 없으면 exempt
-      const vatType: VatType = formItems.some(it => it.taxType === 'taxable') ? 'taxable' : 'exempt';
+      // 부가세 유형: 저장된 품목의 세금 유형·금액으로 판정(영세율·면세 구분 유지, 불명확하면 '확인 필요' — 10% 임의 적용 금지)
+      const vatType: VatMode = deriveVatMode(detail.items);
       setEditQuoteId(quoteId);
       setEditInitData({
         items:     formItems,

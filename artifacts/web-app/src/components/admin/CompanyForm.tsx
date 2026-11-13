@@ -21,6 +21,7 @@ import { CompanyDocumentAnalyzePanel, type CompanyOcrDocType } from "./CompanyDo
 import { AiTextPasteBox, AiInputModeTabs, COMPANY_MATCH_LABEL, isStrongCompanyMatch, type TextAnalyzeResult } from "./AiTextPasteBox";
 import { CompanyAliasSection } from "./CompanyAliasSection";
 import { DateField } from "./DatePickerShared";
+import { CompanyTaxTypeFields, companyTaxDraftError, saveCompanyTaxDraft, type CompanyTaxDraft } from "./CompanyTaxTypeSection";
 
 const inputStyle: React.CSSProperties = {
   width: "100%", padding: "9px 12px", borderRadius: 8,
@@ -147,6 +148,19 @@ export function CompanyForm({
   const [nameChangeReason, setNameChangeReason] = useState("");
   // 등록 화면 전용: 아직 거래처 id가 없으므로 별칭을 로컬 목록으로 모아두었다가 저장 직후 반영한다.
   const [aliasDrafts, setAliasDrafts] = useState<string[]>([]);
+  // 기본 세금 유형(견적 추천용) — 저장은 거래처 저장 성공 후 PUT /tax-type(변경 시만). 고객사만 표시.
+  const [taxDraft, setTaxDraft] = useState<CompanyTaxDraft>({ type: "", basis: "" });
+  const [taxInitial, setTaxInitial] = useState<CompanyTaxDraft>({ type: "", basis: "" });
+  const [taxConfirmed, setTaxConfirmed] = useState<{ at: string | null; by: string | null } | null>(null);
+  useEffect(() => {
+    if (mode !== "edit" || companyId == null) return;
+    fetch(api(`/api/admin/companies/${companyId}/tax-type`), { headers: authHeaders }).then(r => r.ok ? r.json() : null).then(d => {
+      if (!d) return;
+      const v = { type: d.defaultTaxType ?? "", basis: d.taxTypeBasis ?? "" };
+      setTaxDraft(v); setTaxInitial(v); setTaxConfirmed({ at: d.taxTypeConfirmedAt ?? null, by: d.confirmedByName ?? null });
+    }).catch(() => {});
+  }, [mode, companyId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const showTaxType = form.companyType !== "vendor";
 
   // 메모 자동 확장(Auto Resize) — 기본은 낮게 시작하고 내용에 맞춰 최대 220px까지 늘어난다.
   const notesRef = useRef<HTMLTextAreaElement>(null);
@@ -286,6 +300,8 @@ export function CompanyForm({
 
   // ── 저장 ──
   const doSubmit = async () => {
+    const taxErr = showTaxType ? companyTaxDraftError(taxDraft) : null;
+    if (taxErr) { onToast(taxErr); return; }
     setSaving(true);
     try {
       const body: Record<string, any> = { ...form, vendorType: finalVendorType(form.vendorType, vendorTypeCustom) };
@@ -299,7 +315,8 @@ export function CompanyForm({
         });
         const data = await res.json();
         if (!res.ok) { onToast(`오류: ${data?.error ?? "수정 실패"}`); return; }
-        onToast("거래처 정보가 수정되었습니다.");
+        const taxSaveErr = showTaxType ? await saveCompanyTaxDraft(companyId!, token, taxDraft, taxInitial) : null;
+        onToast(taxSaveErr ? `거래처 정보는 수정되었으나 세금 유형 저장 실패: ${taxSaveErr}` : "거래처 정보가 수정되었습니다.");
         onSaved({ id: companyId!, name: data?.name ?? form.name });
       } else {
         const res = await fetch(api("/api/admin/companies"), {
@@ -317,7 +334,8 @@ export function CompanyForm({
             }).catch(() => { /* 개별 별칭 실패는 무시(거래처 등록 자체는 성공) */ })
           ));
         }
-        onToast("거래처가 등록되었습니다.");
+        const taxSaveErr = showTaxType ? await saveCompanyTaxDraft(data.id, token, taxDraft, { type: "", basis: "" }) : null;
+        onToast(taxSaveErr ? `거래처는 등록되었으나 세금 유형 저장 실패: ${taxSaveErr}` : "거래처가 등록되었습니다.");
         onSaved({ id: data.id, name: data.name });
       }
     } catch { onToast(mode === "edit" ? "오류: 수정 실패" : "오류: 거래처 등록 실패"); }
@@ -788,6 +806,20 @@ export function CompanyForm({
 
           </div>
         </div>
+
+        {/* ── 기본 세금 유형(고객사) — 견적 작성 시 추천값 ── */}
+        {showTaxType && (
+          <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}>
+            <div style={{ padding: "10px 16px", borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ width: 3, height: 18, background: "#6366f1", borderRadius: 2, display: "inline-block", flexShrink: 0 }} />
+              <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#111827" }}>기본 세금 유형</p>
+              <span style={{ fontSize: 12, color: "#9ca3af" }}>(선택 · 견적 추천용)</span>
+            </div>
+            <div style={{ padding: "12px 16px" }}>
+              <CompanyTaxTypeFields value={taxDraft} onChange={setTaxDraft} confirmedInfo={taxConfirmed} inputStyle={inputStyle} />
+            </div>
+          </div>
+        )}
 
         {/* ── Card 3: 메모 ── */}
         <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}>

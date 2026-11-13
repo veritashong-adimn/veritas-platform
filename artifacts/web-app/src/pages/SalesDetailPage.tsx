@@ -29,6 +29,7 @@ import { StaleSaleLinkNotice } from '../components/admin/StaleSaleLinkNotice';
 import PaymentInfoSection from '../components/admin/PaymentInfoSection';
 import { LegacyOriginSection } from '../components/admin/LegacyOriginSection';
 import { SaleBasicInfoEditor, SaleBasicInfoNotes, type BasicInfoView } from '../components/admin/SaleBasicInfoEditor';
+import { deriveVatMode, VAT_MODE_LABEL, VAT_ROW_LABEL, TAX_DOCUMENT_TYPE_BY_KIND } from '../lib/quoteTaxType';
 
 // ─── 로컬 라벨 맵 (견적관리 상세와 동일 문구) ────────────────────────────────
 const QUOTE_TYPE_LABEL: Record<string, string> = {
@@ -36,11 +37,6 @@ const QUOTE_TYPE_LABEL: Record<string, string> = {
   b2c_prepaid:       '차감(선입금) 견적서',
   prepaid_deduction: '선입금 차감 견적서',
   accumulated_batch: '누적 견적서',
-};
-const VAT_LABEL: Record<string, string> = {
-  taxable:   '부가세 10%',
-  exempt:    '면세',
-  zero_rate: '영세율',
 };
 
 // ─── CardSectionHeader — QuoteEditorWorkspace의 동일 컴포넌트 복제 ────────────
@@ -203,7 +199,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
   const saveSaleItems = async () => {
     if (!quote || saving) return;
     if (editItems.length === 0) { setToast('최소 1개 이상의 품목이 필요합니다.'); return; }
-    const vatForCheck = items[0]?.taxType ?? 'taxable';
+    const vatForCheck = deriveVatMode(items);   // 판매 견적 세금 유형(품목 저장값 기준, 불명확하면 '확인 필요' — 저장 금액 유지)
     let versionReason: string | undefined;
     // 판매 확정 건: 총액뿐 아니라 공급가액·부가세가 바뀌어도(총액 동일한 공급가/부가세 정정 포함) 변경 사유를 받는다.
     const editTotals = calcTotals(editItems, vatForCheck);
@@ -218,7 +214,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
     }
     setSaving(true);
     try {
-      const vat = items[0]?.taxType ?? 'taxable';   // 판매 견적의 부가세 유형(품목 기준)
+      const vat = vatForCheck;   // 판매 견적의 세금 유형 승계(영세율·면세가 10%로 되돌아가지 않음)
       const issue = quote.issueDate || undefined;
       const validUntil = issue
         ? (d => d.toISOString().split('T')[0])(new Date(new Date(issue).getTime() + 30 * 86400000))
@@ -231,7 +227,8 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
           items: buildQuoteItemsBody(editItems, vat),
           quoteType: quote.quoteType,
           billingType: 'postpaid_per_project',
-          taxDocumentType: 'tax_invoice',
+          // 발행 문서 유형 — 세금 유형과 연결('확인 필요'는 미전달 → 기존값 보존)
+          ...(vat !== 'unknown' ? { taxDocumentType: TAX_DOCUMENT_TYPE_BY_KIND[vat] } : {}),
           taxCategory: 'normal',
           issueDate: issue,
           validUntil,
@@ -366,7 +363,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
   const productSummary = items.length ? `${items[0]?.productName ?? ''}${items.length > 1 ? ` 외 ${items.length - 1}건` : ''}` : null;
   const pm = adminUsers.find(u => u.id === project.adminId);
   const pmName = pm ? (pm.name ?? pm.email) : (project.adminName ?? null);   // 관리자 목록에 없는 직원 PM 은 서버 표시명 사용
-  const vatType = items[0]?.taxType ?? 'taxable';
+  const vatType = deriveVatMode(items);
 
   // 수정모드 판매금액 요약 — 편집 항목의 실시간 계산(편집 그리드와 동일).
   // 조회모드 요약은 QuoteItemsView 내부에서 저장값으로 표시(테이블의 일부).
@@ -466,7 +463,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px 20px' }}>
               <ReadField label="견적서 유형" value={QUOTE_TYPE_LABEL[quote.quoteType] ?? quote.quoteType} />
               <ReadField label="견적일" value={quote.issueDate} />
-              <ReadField label="부가세" value={VAT_LABEL[vatType] ?? vatType} />
+              <ReadField label="부가세" value={VAT_MODE_LABEL[vatType]} />
               <div style={{ gridColumn: 'span 3' }}>
                 <ReadField label="견적서명" value={quote.title} />
               </div>
@@ -513,7 +510,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
                 {/* 수정모드 — 편집 그리드와 동일 폭의 overflow 안에 합계 행을 렌더해 공급가액 컬럼과 정렬.
                     조회모드는 QuoteItemsView 내부에 합계 행이 포함된다. */}
                 <div style={{ overflowX: 'auto', scrollbarWidth: 'thin' }}>
-                  <SaleTotalsRows supply={editTotals.supply} tax={editTotals.tax} total={editTotals.total} />
+                  <SaleTotalsRows supply={editTotals.supply} tax={editTotals.tax} total={editTotals.total} vatLabel={VAT_ROW_LABEL[vatType]} />
                 </div>
               </>
             ) : (
@@ -549,6 +546,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
             saleTotal={Number(quote?.price ?? 0)}
             saleSupplyAmount={items.length ? items.reduce((s: number, it: any) => s + Number(it.supplyAmount ?? 0), 0) : null}
             saleVatAmount={items.length ? items.reduce((s: number, it: any) => s + Number(it.taxAmount ?? 0), 0) : null}
+            saleTaxType={vatType}
             defaultCompany={project.companyId ? { id: project.companyId, name: companyName ?? '' } : null}
             /* 차감견적을 판매전환한 판매건에서만 '이번 서비스 사용액/총 선입금액/사용가능잔액' 요약 적용.
                일반·누적 견적 판매건은 isPrepaidSale=false → 기존 미수금/입금완료율 요약 그대로. */

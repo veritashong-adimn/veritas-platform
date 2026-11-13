@@ -7,7 +7,7 @@
  */
 import React, { useRef } from 'react';
 import type { QuotePdfData } from '../../lib/quotePdf';
-import { QUOTE_NOTES_BY_SERVICE, vatSummaryLabel } from '../../lib/quotePdf';
+import { QUOTE_NOTES_BY_SERVICE, vatSummaryLabel, quoteTotalLabel, pdfVatMode } from '../../lib/quotePdf';
 import { renderQuoteTitle, buildDocFileName, formatDocNumber } from '../../lib/quoteTitle';
 import { formatDisplayDate, formatScheduleRange } from '../../lib/dateFormat';
 import { alertDialog } from '../ui';
@@ -105,6 +105,13 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
         title="견적서 미리보기"
         subtitle={<>{(formatDocNumber('Q', data.quoteNumber, data.quoteDate) || data.quoteNumber)} · {renderQuoteTitle(quoteTitle)}</>}
         actions={<>
+          {/* 세금 유형 확인 필요 — 내부 안내(인쇄 영역 밖, 고객 문서에는 출력되지 않음). 금액은 저장값 그대로 */}
+          {pdfVatMode(data.items, data.taxTotal) === 'unknown' && (
+            <span data-testid="pdf-vat-unknown-notice" title="부가세 포함 여부·세금 유형이 확정되지 않았습니다. 견적 편집 화면에서 '세금 유형 확인'을 진행하세요."
+              style={{ fontSize: 12, fontWeight: 600, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '5px 10px', whiteSpace: 'nowrap' }}>
+              세금 유형 확인 필요 · 저장 금액 그대로 출력
+            </span>
+          )}
           <SealErrorNotice error={sealError} />
           <button
             onClick={handlePrint}
@@ -215,7 +222,7 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
               marginBottom: 18, display: 'flex', justifyContent: 'flex-end', alignItems: 'center',
             }}>
               <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: 10, color: '#6b7280', fontWeight: 600 }}>총 견적금액 (VAT 포함)</div>
+                <div data-testid="pdf-total-label" style={{ fontSize: 10, color: '#6b7280', fontWeight: 600 }}>{quoteTotalLabel(data.items, data.taxTotal)}</div>
                 <div style={{ fontSize: 20, fontWeight: 900, color: BRAND }}>
                   ₩{fmt(data.grandTotal)}
                 </div>

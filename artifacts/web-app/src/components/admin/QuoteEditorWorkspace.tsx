@@ -18,6 +18,8 @@ import { useInquiryCustomerPlan } from './useInquiryCustomerPlan';
 import { priceStatusOf, isPriceBlank, isHeadcountBlank } from '../../lib/quoteItemStatus';
 import { Card, DsButton, ClickSelect, NumericInput, confirmDialog, promptDialog, alertDialog } from '../ui';
 import { LegacyVatNotice, confirmLegacyVatChange } from './LegacyVatNotice';
+import { QuoteTaxConfirmPanel, QuoteTaxConfirmationInfo } from './QuoteTaxConfirm';
+import { convertToFormItem } from '../../lib/quoteItemForm';
 import { dsInput, dsInputStd, dsField, dsAmount, dsStickyPageHeader, C, BD, TBL, TYPO, SP, FORM, FIELD, CRM_FIELD_COLS } from '../../lib/ds';
 import { SVC_CFG, COL_H, SVC_FIELD_HINTS, tblRow, isDocumentInputProduct, hasDocumentFields } from './quoteItemsShared';
 import RowControls from './RowControls';
@@ -34,11 +36,14 @@ import { generateQuoteTitle } from '../../lib/quoteTitle';
 import QuotePdfPreviewModal from './QuotePdfPreviewModal';
 import { PageHeader } from './PageHeader';
 import { DateField } from './DatePickerShared';
+import { type VatMode, VAT_MODE_LABEL, VAT_ROW_LABEL, TAX_DOCUMENT_TYPE_BY_KIND, normalizeTaxKind, companyTaxTypeLabel } from '../../lib/quoteTaxType';
 
 // ─── 타입 ─────────────────────────────────────────────────────────────────────
 
 export type QuoteType    = 'b2b_standard' | 'b2c_prepaid' | 'accumulated_batch';
 export type VatType      = 'taxable' | 'exempt' | 'zero_rate';
+// 편집 화면 부가세 선택값 — VatType + 'unknown'(확인 필요: 저장 품목의 세금 유형이 불명확. lib/quoteTaxType)
+export type { VatMode } from '../../lib/quoteTaxType';
 export type ServiceType  = 'translation' | 'interpretation' | 'equipment' | 'expense' | 'discount';
 export type DiscountType  = 'amount' | 'percent';
 
@@ -54,6 +59,8 @@ export interface QuoteItemForm {
   unit:         string;
   unitPrice:    string;
   taxType:      VatType;
+  // 과세로 저장됐는데 공급가액이 있고 부가세 0원(과거 CRM 총액 이관 등) — '확인 필요' 상태에서 10% 재계산하지 않음
+  taxUnconfirmed?: boolean;
   memo:         string;
   // 번역 전용
   sourceLanguage: string;  // Language Policy 조회 키 (ko, en, ja, zh-hans …)
@@ -163,7 +170,12 @@ function calcDiscountAmount(it: QuoteItemForm, nonDiscountSupply: number): numbe
   return Math.max(0, Math.min(raw, nonDiscountSupply));
 }
 // baseSupply — 할인 항목(%)의 기준이 되는 '비할인 상품 공급가액 합계'. 비할인 항목엔 무영향.
-function calcItem(it: QuoteItemForm, vat: VatType, baseSupply = 0) {
+// 품목 부가세율 — 선택한 유형 기준. '확인 필요'(unknown)면 품목에 저장된 유형을 따르되 근거 미확인 품목은 0(저장 금액 유지).
+function itemTaxRate(it: QuoteItemForm, vat: VatMode): 0 | 0.1 {
+  if (vat !== 'unknown') return vat === 'taxable' ? 0.1 : 0;
+  return it.taxType === 'taxable' && !it.taxUnconfirmed ? 0.1 : 0;
+}
+function calcItem(it: QuoteItemForm, vat: VatMode, baseSupply = 0) {
   const p = Number(it.unitPrice.replace?.(/,/g, '') || 0);
   let s: number;
   if (it.productType === 'interpretation') {
@@ -187,11 +199,11 @@ function calcItem(it: QuoteItemForm, vat: VatType, baseSupply = 0) {
   } else {
     s = Math.round((Number(it.quantity) || 1) * p);
   }
-  const tax = vat === 'taxable' ? Math.round(s * 0.1) : 0;  // 할인이면 s<0 → tax도 음수로 상쇄
+  const tax = itemTaxRate(it, vat) ? Math.round(s * 0.1) : 0;  // 할인이면 s<0 → tax도 음수로 상쇄
   return { supply: s, tax, total: s + tax };
 }
 // 견적·판매 공용 — 폼 항목 배열의 공급가액/부가세/합계 총합(할인 반영). 판매정보 금액 요약에서도 재사용.
-export function calcTotals(items: QuoteItemForm[], vat: VatType) {
+export function calcTotals(items: QuoteItemForm[], vat: VatMode) {
   // 1) 비할인 상품 공급가 합계(할인 % 기준). 2) 할인 항목 포함 전체 합산.
   const nonDiscountSupply = items.reduce((a, it) => it.productType === 'discount' ? a : a + calcItem(it, vat).supply, 0);
   return items.reduce((a, it) => { const r = calcItem(it, vat, nonDiscountSupply); return { supply: a.supply + r.supply, tax: a.tax + r.tax, total: a.total + r.total }; }, { supply: 0, tax: 0, total: 0 });
@@ -269,15 +281,16 @@ function qty2(v: string): number {
   return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : 0;
 }
 
-function toApiItem(it: QuoteItemForm, vat: VatType) {
+function toApiItem(it: QuoteItemForm, vat: VatMode) {
   const base = {
     productId:  it.productId ?? undefined,
     productName: it.productName.trim(),
     unit:       it.unit || SVC_DEFAULT_UNIT[it.productType],
     quantity:   qty2(it.quantity) || 1,
     unitPrice:  Number(it.unitPrice.replace?.(/,/g, '') || 0),
-    taxRate:    (vat === 'taxable' ? 0.1 : 0) as 0 | 0.1,
-    taxType:    vat,
+    taxRate:    itemTaxRate(it, vat),
+    // '확인 필요'면 저장돼 있던 품목 유형 그대로(임의 변경 금지)
+    taxType:    vat === 'unknown' ? it.taxType : vat,
     itemType:   it.productType,
     // 단가 상태(unset=미입력·free=무상 확정·set) — 할인 행은 대상 아님
     ...(it.productType !== 'discount' ? { priceStatus: priceStatusOf(it.unitPrice) } : {}),
@@ -1393,7 +1406,7 @@ function ServiceFields({ it, update, products }: {
 // ─── 견적 항목 Row ────────────────────────────────────────────────────────────
 
 function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, parentOptions, updateItem, removeItem, addItemBelow, moveItem, duplicateItem, productCreate }: {
-  it: QuoteItemForm; idx: number; total: number; vatType: VatType; baseSupply: number; products: Product[];
+  it: QuoteItemForm; idx: number; total: number; vatType: VatMode; baseSupply: number; products: Product[];
   productCreate?: QuoteProductCreate;
   parentOptions: { lid: string; label: string }[];
   updateItem: (idx: number, p: Partial<QuoteItemForm>) => void;
@@ -1663,7 +1676,7 @@ type QuoteProductCreate = { canCreate: boolean; onCreate: (idx: number, query: s
 export function QuoteItemsEditor({ items, onItemsChange, vatType, products, productCreate }: {
   items: QuoteItemForm[];
   onItemsChange: (items: QuoteItemForm[]) => void;
-  vatType: VatType;
+  vatType: VatMode;
   products: Product[];
   productCreate?: QuoteProductCreate;
 }) {
@@ -1738,7 +1751,7 @@ export function QuoteItemsEditor({ items, onItemsChange, vatType, products, prod
 }
 
 // 폼 항목(QuoteItemForm[]) → 저장 API body(items) 매핑 — 견적·판매 저장에서 공용 사용.
-export function buildQuoteItemsBody(items: QuoteItemForm[], vat: VatType) {
+export function buildQuoteItemsBody(items: QuoteItemForm[], vat: VatMode) {
   // 서비스 그룹: parentLid(부모 _lid) → 같은 배열 내 인덱스로 변환해 parentItemIndex 로 전송(서버가 삽입 후 실제 id 로 재매핑).
   const idxByLid = new Map<string, number>();
   items.forEach((it, i) => { if (it._lid) idxByLid.set(it._lid, i); });
@@ -1777,7 +1790,7 @@ export interface QuoteEditorWorkspaceProps {
   initialNote?:      string;
   initialQuoteType?: QuoteType;
   initialIssueDate?: string;
-  initialVatType?:   VatType;
+  initialVatType?:   VatMode;
   /** 진입 시점의 견적 상태(status). 'approved' 이면 이미 판매전환된 견적 → 전환완료로 표시. */
   initialStatus?:    string;
   /** 누적 견적서 마감일시(있으면 마감완료). accumulated_batch 전용 — 마감 후 편집/저장 차단. */
@@ -1842,7 +1855,14 @@ export function QuoteEditorWorkspace({
   const [adminId,        setAdminId]       = useState<number | null>(initialAdminId ?? null);
   const [issueDate,      setIssueDate]     = useState(() => initialIssueDate ?? dateOffset(0));
   const [quoteType,      setQuoteType]     = useState<QuoteType>(initialQuoteType ?? 'b2b_standard');
-  const [vatType,        setVatType]       = useState<VatType>(initialVatType ?? 'taxable');
+  const [vatType,        setVatType]       = useState<VatMode>(initialVatType ?? 'taxable');
+  // 담당자가 부가세를 직접 선택했는지 — 선택 후에는 거래처 기본 세금 유형 추천으로 덮어쓰지 않는다(사용자 선택 우선)
+  const vatTouchedRef = useRef(false);
+  // 저장된 견적 기준 세금 유형 판정('확인 필요' 여부) — 확인 절차 완료 시 갱신. 화면 선택값(vatType)과 별개.
+  const [storedVatMode, setStoredVatMode] = useState<VatMode>(initialVatType ?? 'taxable');
+  const [taxConfirmKey, setTaxConfirmKey] = useState(0);
+  // 거래처 기본 세금 유형 안내(신규 견적 전용) — 확인된 유형이면 추천, 미확인이면 확인 필요 안내
+  const [companyTaxHint, setCompanyTaxHint] = useState<{ type: string | null; basis: string | null } | null>(null);
   const [note,           setNote]          = useState(inqPrefill?.note ?? initialNote ?? '');
   const [versionReason,  setVersionReason] = useState(initialVersionReason ?? '');
   // 의뢰건 handoff items 가 있으면 견적 항목으로 시드(각 항목을 defaultItem 위에 병합). 없으면 기존 로직 유지.
@@ -2144,6 +2164,24 @@ export function QuoteEditorWorkspace({
   }, [titlePickerOpen]);
 
   const handleCompanyChange  = (cid: number | null) => { setCompanyId(cid); setDivisionId(null); setContactId(null); setTitleEdited(false); };
+  // 거래처 기본 세금 유형 추천 — 신규 견적에서만. 확인된 유형이면 담당자가 직접 고르기 전까지 부가세 선택에 반영,
+  //  미확인이면 일반과세 기본값 유지 + 확인 안내. 기존 견적(initialQuoteId)의 세금 유형은 건드리지 않는다.
+  useEffect(() => {
+    if (initialQuoteId) return;
+    if (!companyId) { setCompanyTaxHint(null); if (!vatTouchedRef.current) setVatType('taxable'); return; }
+    let alive = true;
+    fetch(api(`/api/admin/companies/${companyId}/tax-type`), { headers: authH })
+      .then(r => r.ok ? r.json() : null)
+      .then((d: { defaultTaxType: string | null; taxTypeBasis: string | null } | null) => {
+        if (!alive || !d) return;
+        const t = d.defaultTaxType === 'taxable' || d.defaultTaxType === 'zero_rate' || d.defaultTaxType === 'exempt' ? d.defaultTaxType : null;
+        setCompanyTaxHint({ type: t, basis: d.taxTypeBasis });
+        // 담당자가 직접 고르기 전까지만 추천 반영 — 미확인 거래처로 바꾸면 기본값(일반과세)으로 복귀
+        if (!vatTouchedRef.current) setVatType(t ?? 'taxable');
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [companyId, initialQuoteId]); // eslint-disable-line react-hooks/exhaustive-deps
   // 브랜드 변경 시 담당자 재선택 유도 + 견적서명 재생성
   const handleDivisionChange = (did: number | null) => { setDivisionId(did); setContactId(null); setTitleEdited(false); };
   const isStandalone   = projectId === null;
@@ -2184,7 +2222,7 @@ export function QuoteEditorWorkspace({
       quantity:         String(d.quantity || 1),
       unit:             d.unit || defaultUnit[d.productType as ServiceType] || '건',
       unitPrice:        d.unitPrice > 0 ? String(d.unitPrice) : '',
-      taxType:          vatType,
+      taxType:          normalizeTaxKind(vatType),
       memo:             [d.memo, ...d.warnings].filter(Boolean).join(' / '),
       sourceLanguage:   d.sourceLanguage || 'ko',
       fileName:         d.fileName || '',
@@ -2240,7 +2278,9 @@ export function QuoteEditorWorkspace({
     const itemsBody  = vi.map(it => toApiItem(it, vatType));
     const commonBody = {
       items: itemsBody, quoteType,
-      billingType: 'postpaid_per_project', taxDocumentType: 'tax_invoice', taxCategory: 'normal',
+      billingType: 'postpaid_per_project', taxCategory: 'normal',
+      // 발행 문서 유형 — 세금 유형과 연결. '확인 필요'는 미전달(신규는 서버 기본값, 수정은 기존값 보존)
+      ...(vatType !== 'unknown' ? { taxDocumentType: TAX_DOCUMENT_TYPE_BY_KIND[vatType] } : {}),
       issueDate, validUntil: (() => { const d = new Date(issueDate); d.setDate(d.getDate() + 30); return d.toISOString().split('T')[0]; })(),
       note: note.trim() || undefined,
       // 차감 견적서: 선입/이월 라인(잔액 충전) — 서버가 reserved 예약으로 기록
@@ -2279,6 +2319,7 @@ export function QuoteEditorWorkspace({
                     : `서버 오류 (${res.status}): ${data.error ?? data.message ?? ''}`;
           onToast(`견적 수정 실패: ${msg}`); return null;
         }
+        if (vatType !== 'unknown') setStoredVatMode(vatType);   // 저장된 유형으로 확정(확인 필요 해제)
         return { quoteId: savedQuoteId, projectId: null };
       }
       // 신규 독립 견적 → 생성(POST) 후 id 기록
@@ -2664,9 +2705,37 @@ export function QuoteEditorWorkspace({
             </div>
             <div>
               {fLbl('부가세')}
-              <ClickSelect value={vatType} onChange={v => setVatType(v as VatType)}
+              <ClickSelect value={vatType} onChange={v => { vatTouchedRef.current = true; setVatType(v as VatMode); }}
+                data-testid="select-vat-type" aria-label="부가세 구분"
                 triggerStyle={dsField()}
-                options={[{ value: 'taxable', label: '부가세 10%' }, { value: 'exempt', label: '면세' }, { value: 'zero_rate', label: '영세율' }]} />
+                options={[
+                  { value: 'taxable', label: VAT_MODE_LABEL.taxable }, { value: 'zero_rate', label: VAT_MODE_LABEL.zero_rate }, { value: 'exempt', label: VAT_MODE_LABEL.exempt },
+                  // '확인 필요' — 저장된 견적의 세금 유형이 불명확할 때만(과거 CRM 등). 선택 시 저장 금액 그대로 유지
+                  ...(storedVatMode === 'unknown' ? [{ value: 'unknown', label: VAT_MODE_LABEL.unknown, sub: '저장 금액 유지(부가세 재계산 안 함)' }] : []),
+                ]} />
+              {vatType === 'unknown' && (
+                <div data-testid="vat-unknown-notice" style={{ marginTop: 4, fontSize: 11.5, color: '#b45309', lineHeight: 1.5 }}>
+                  세금 유형 확인 필요 — 저장된 금액을 그대로 유지합니다. 유형을 선택하면 금액이 다시 계산됩니다.
+                </div>
+              )}
+              {/* 확인 절차 — 원본 총액 유지하며 유형 확정(근거·담당자·확인일 감사로그 기록) */}
+              {vatType === 'unknown' && storedVatMode === 'unknown' && savedQuoteId != null && !batchClosed && (
+                <QuoteTaxConfirmPanel quoteId={savedQuoteId} token={token} onToast={onToast} canStart={() => !hasUnsavedChanges()}
+                  onConfirmed={async (t) => {
+                    const r = await fetch(api(`/api/admin/quotes/${savedQuoteId}`), { headers: authH });
+                    if (r.ok) { const d = await r.json(); setItems((d.items ?? []).map(convertToFormItem)); }
+                    setVatType(t); setStoredVatMode(t); setTaxConfirmKey(k => k + 1);
+                    baselineSigRef.current = null;   // 서버 확정값을 새 기준선으로(변경사항 없음)
+                  }} />
+              )}
+              {savedQuoteId != null && <QuoteTaxConfirmationInfo quoteId={savedQuoteId} token={token} refreshKey={taxConfirmKey} />}
+              {vatType !== 'unknown' && companyTaxHint && (
+                <div data-testid="vat-company-hint" style={{ marginTop: 4, fontSize: 11.5, color: companyTaxHint.type ? C.textSecondary : '#b45309', lineHeight: 1.5 }}>
+                  {companyTaxHint.type
+                    ? `거래처 기본 세금 유형: ${companyTaxTypeLabel(companyTaxHint.type)}${companyTaxHint.basis ? ` (${companyTaxHint.basis})` : ''}`
+                    : '거래처 세금 유형 미확인 — 영세율·면세 대상인지 확인이 필요할 수 있습니다.'}
+                </div>
+              )}
             </div>
           </div>
 
@@ -2759,7 +2828,7 @@ export function QuoteEditorWorkspace({
       )}
 
       {savedQuoteId != null && <QuoteRecipientRefreshBar quoteId={savedQuoteId} token={token} onToast={onToast} refreshKey={saving} />}
-      {savedQuoteId != null && <LegacyVatNotice quoteId={savedQuoteId} token={token} />}
+      {savedQuoteId != null && <LegacyVatNotice quoteId={savedQuoteId} token={token} refreshKey={taxConfirmKey} />}
 
       {/* ── B. 상품정보 ─────────────────────────────────────────────────── */}
       <Card>
@@ -2831,7 +2900,7 @@ export function QuoteEditorWorkspace({
           return gs.length > 1 ? <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>{gs}</div> : null;
         })()}
         <div style={{ display: 'flex', gap: SP[6], justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-          {[{ label: '공급가액', value: totals.supply }, { label: '부가세', value: totals.tax }].map(r => (
+          {[{ label: '공급가액', value: totals.supply }, { label: VAT_ROW_LABEL[vatType], value: totals.tax }].map(r => (
             <div key={r.label} style={{ textAlign: 'right', padding: `${SP[4]}px ${SP[5]}px`, borderRadius: BD.radius.lg, background: C.bgHover }}>
               <div style={{ ...TYPO.helper, marginBottom: 3 }}>{r.label}</div>
               <div style={{ ...TYPO.summaryAmount }}>{formatWon(r.value)}</div>

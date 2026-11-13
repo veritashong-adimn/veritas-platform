@@ -1850,7 +1850,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                 ) : (
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {detail.quotes.map((q, qIdx) => {
-                      const taxDocLabel: Record<string, string> = { tax_invoice: "세금계산서", zero_tax_invoice: "세금계산서(영세율)", bill: "계산서" };
+                      const taxDocLabel: Record<string, string> = { tax_invoice: "세금계산서", zero_tax_invoice: "세금계산서(영세율)", bill: "계산서", zero_rate_tax_invoice: "영세율 세금계산서", invoice: "계산서(면세)" };
                       const taxCatLabel: Record<string, string> = { normal: "일반", zero_rated: "영세율", consignment: "위수탁", consignment_zero_rated: "위수탁영세율" };
                       const qtLabel: Record<string, [string, string, string]> = {
                         b2b_standard:      ["일반 견적", "#eff6ff", "#1d4ed8"],
@@ -2229,7 +2229,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                   const payerDisplay = pCompName
                     ? (pDivName ? `${pCompName} / ${pDivName}` : pCompName)
                     : billingEffective;
-                  const taxDocLabel: Record<string, string> = { tax_invoice: "세금계산서", zero_tax_invoice: "세금계산서(영세율)", bill: "계산서" };
+                  const taxDocLabel: Record<string, string> = { tax_invoice: "세금계산서", zero_tax_invoice: "세금계산서(영세율)", bill: "계산서", zero_rate_tax_invoice: "영세율 세금계산서", invoice: "계산서(면세)" };
                   const btLabelMap: Record<string, string> = { postpaid_per_project: "건별 후불", monthly_billing: "누적 청구", prepaid_wallet: "선입금 차감", prepay_upfront: "선결제" };
                   const tdt = q0?.taxDocumentType;
                   const bt = q0?.billingType ?? (detail.company as any)?.billingType;

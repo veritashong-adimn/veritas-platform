@@ -765,6 +765,57 @@ router.delete("/admin/companies/:id/vendor-profile", ...adminGuard, requirePermi
 });
 
 // ─── 거래처 수정 ─────────────────────────────────────────────────────────────
+// ─── 거래처 기본 세금 유형(견적 작성 시 추천용) ─────────────────────────────────
+//  default_tax_type: 'taxable' | 'zero_rate' | 'exempt' | NULL(미확인). 근거·확인일·확인 담당자 함께 관리.
+//  추천값일 뿐 — 변경해도 기존 견적·판매·청구의 세금 유형은 자동 변경하지 않는다(견적 품목 tax_type 이 기준).
+const COMPANY_TAX_TYPES = new Set(["taxable", "zero_rate", "exempt"]);
+router.get("/admin/companies/:id/tax-type", ...adminGuard, async (req, res) => {
+  const companyId = Number(req.params.id);
+  if (!Number.isInteger(companyId) || companyId <= 0) { res.status(400).json({ error: "유효하지 않은 company id." }); return; }
+  try {
+    const [c] = await db.select({
+      defaultTaxType: companiesTable.defaultTaxType, taxTypeBasis: companiesTable.taxTypeBasis,
+      taxTypeConfirmedAt: companiesTable.taxTypeConfirmedAt, taxTypeConfirmedBy: companiesTable.taxTypeConfirmedBy,
+      confirmedByName: usersTable.name,
+    }).from(companiesTable).leftJoin(usersTable, eq(usersTable.id, companiesTable.taxTypeConfirmedBy)).where(eq(companiesTable.id, companyId));
+    if (!c) { res.status(404).json({ error: "거래처를 찾을 수 없습니다." }); return; }
+    res.json(c);
+  } catch (err) {
+    req.log.error({ err }, "Companies: failed to get tax type");
+    res.status(500).json({ error: "거래처 세금 유형 조회 실패." });
+  }
+});
+router.put("/admin/companies/:id/tax-type", ...adminGuard, requirePermission("company.update"), async (req, res) => {
+  const companyId = Number(req.params.id);
+  if (!Number.isInteger(companyId) || companyId <= 0) { res.status(400).json({ error: "유효하지 않은 company id." }); return; }
+  const { defaultTaxType, taxTypeBasis } = req.body as { defaultTaxType?: string | null; taxTypeBasis?: string | null };
+  const type = defaultTaxType ? String(defaultTaxType) : null;
+  if (type !== null && !COMPANY_TAX_TYPES.has(type)) { res.status(400).json({ error: "세금 유형은 일반과세·영세율·면세·미확인 중 하나여야 합니다." }); return; }
+  const performer = (req as any).user as { id: number; email: string } | undefined;
+  try {
+    const [before] = await db.select({ defaultTaxType: companiesTable.defaultTaxType, taxTypeBasis: companiesTable.taxTypeBasis }).from(companiesTable).where(eq(companiesTable.id, companyId));
+    if (!before) { res.status(404).json({ error: "거래처를 찾을 수 없습니다." }); return; }
+    const kstToday = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Seoul" }).format(new Date());
+    // 미확인으로 되돌리면 확인일·확인 담당자도 비운다(근거 메모는 입력값 그대로)
+    const [u] = await db.update(companiesTable).set({
+      defaultTaxType: type,
+      taxTypeBasis: taxTypeBasis?.trim() || null,
+      taxTypeConfirmedAt: type ? kstToday : null,
+      taxTypeConfirmedBy: type ? (performer?.id ?? null) : null,
+    }).where(eq(companiesTable.id, companyId)).returning({
+      defaultTaxType: companiesTable.defaultTaxType, taxTypeBasis: companiesTable.taxTypeBasis,
+      taxTypeConfirmedAt: companiesTable.taxTypeConfirmedAt, taxTypeConfirmedBy: companiesTable.taxTypeConfirmedBy,
+    });
+    await logEvent("company", companyId, "company_tax_type_changed", req.log, performer,
+      JSON.stringify({ from: before.defaultTaxType ?? null, to: type, basis: u.taxTypeBasis }));
+    const [who] = u.taxTypeConfirmedBy ? await db.select({ name: usersTable.name }).from(usersTable).where(eq(usersTable.id, u.taxTypeConfirmedBy)) : [];
+    res.json({ ...u, confirmedByName: who?.name ?? null });
+  } catch (err) {
+    req.log.error({ err }, "Companies: failed to update tax type");
+    res.status(500).json({ error: "거래처 세금 유형 저장 실패." });
+  }
+});
+
 router.patch("/admin/companies/:id", ...adminGuard, requirePermission("company.update"), async (req, res) => {
   const companyId = Number(req.params.id);
   if (isNaN(companyId) || companyId <= 0) {

@@ -1607,9 +1607,14 @@ router.get("/admin/quotes", ...adminGuard, async (req, res) => {
 // 반환 품목의 합(totalAmount)이 곧 quotes.price. 기존 VAT(항목별 taxRate)·계산식은 그대로.
 type CalcItemInput = {
   itemType?: string; quantity?: number | string; unitPrice?: number | string;
-  taxRate?: 0 | 0.1; interpreterCount?: number | string;
+  taxRate?: 0 | 0.1; taxType?: string; interpreterCount?: number | string;
   discountType?: string; discountValue?: number | string;
 };
+// 세금 유형 정합성 — 영세율·면세 품목은 클라이언트가 보낸 taxRate 와 무관하게 부가세 0(10% 저장 방지).
+//  taxType 미전달(bulkImport 등 기존 호출)은 기존처럼 taxRate 그대로.
+const TAX_DOCUMENT_TYPES = new Set(["tax_invoice", "zero_rate_tax_invoice", "invoice", "cash_receipt", "none"]);
+const effectiveTaxRate = (it: CalcItemInput): 0 | 0.1 =>
+  it.taxType === "exempt" || it.taxType === "zero_rate" ? 0 : (it.taxRate ?? 0);
 export function computeQuoteItemAmounts<T extends CalcItemInput>(
   items: T[],
 ): (T & { supplyAmount: number; taxAmount: number; totalAmount: number })[] {
@@ -1619,7 +1624,7 @@ export function computeQuoteItemAmounts<T extends CalcItemInput>(
     const qty = Number(it.quantity ?? 1);
     const up  = Number(it.unitPrice ?? 0);
     const mult = it.itemType === 'interpretation' && Number(it.interpreterCount) > 0 ? Number(it.interpreterCount) : 1;
-    const { supplyAmount, taxAmount } = calcQuoteItemAmounts(qty, up, it.taxRate ?? 0, mult);
+    const { supplyAmount, taxAmount } = calcQuoteItemAmounts(qty, up, effectiveTaxRate(it), mult);
     return { it, s: supplyAmount, t: taxAmount, isDiscount: false };
   });
   const nonDiscountSupply = pass1.reduce((a, x) => a + (x.isDiscount ? 0 : x.s), 0);
@@ -1631,7 +1636,7 @@ export function computeQuoteItemAmounts<T extends CalcItemInput>(
     let amount = dType === 'percent' ? Math.round(nonDiscountSupply * dVal / 100) : Math.round(dVal);
     amount = Math.max(0, Math.min(amount, nonDiscountSupply));   // 0 ~ 비할인합계로 클램프
     const supply = -amount;
-    const tax = Math.round(supply * (x.it.taxRate ?? 0));        // 음수 → VAT도 음수로 상쇄
+    const tax = Math.round(supply * effectiveTaxRate(x.it));        // 음수 → VAT도 음수로 상쇄
     return { ...x.it, supplyAmount: supply, taxAmount: tax, totalAmount: supply + tax };
   });
 }
@@ -3458,8 +3463,8 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
     parentItemIndex?: number | null;   // 서비스 그룹: 같은 items[] 내 본 서비스 인덱스(부대항목만 지정)
     sourceItemId?: number | null;      // 편집 전 기존 품목 id(편집 화면 _lid 'S{id}') — 수행정보 판매항목 연결 승계용
   };
-  const { title, items, note, quoteType, issueDate, validUntil, companyId, contactId, divisionId, adminId, versionReason, prepaidLines } = req.body as {
-    title?: string; items?: PutItemInput[]; note?: string;
+  const { title, items, note, quoteType, issueDate, validUntil, companyId, contactId, divisionId, adminId, versionReason, prepaidLines, taxDocumentType } = req.body as {
+    title?: string; items?: PutItemInput[]; note?: string; taxDocumentType?: string;
     quoteType?: string; issueDate?: string; validUntil?: string;
     companyId?: number | null; contactId?: number | null; divisionId?: number | null;
     adminId?: number | null; versionReason?: string;
@@ -3496,7 +3501,7 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
     const origin = await legacyOriginOfProject(db, qBefore.projectId);
     if (origin?.taxBreakdown === "unknown") {
       res.status(409).json({
-        error: `과거 CRM 원본 총액은 공급가·부가세 구분이 확인되지 않은 금액입니다. 저장하면 총액이 ${Math.round(Number(qBefore.price ?? 0)).toLocaleString()}원 → ${Math.round(totalPrice).toLocaleString()}원으로 바뀝니다. 부가세 포함 여부를 확인한 뒤 진행하세요.`,
+        error: `과거 CRM 원본 총액은 공급가·부가세 구분이 확인되지 않은 금액입니다. 저장하면 총액이 ${Math.round(Number(qBefore.price ?? 0)).toLocaleString()}원 → ${Math.round(totalPrice).toLocaleString()}원으로 바뀝니다(차액 ${(totalPrice - Number(qBefore.price ?? 0) >= 0 ? "+" : "")}${Math.round(totalPrice - Number(qBefore.price ?? 0)).toLocaleString()}원). 부가세 포함 여부·세금 유형(일반과세/영세율/면세)을 확인한 뒤 진행하세요.`,
         code: "LEGACY_VAT_UNCONFIRMED", before: Number(qBefore.price ?? 0), after: totalPrice,
       });
       return;
@@ -3553,6 +3558,9 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
         issueDate:  issueDate  ?? null,
         validUntil: validUntil ?? null,
         price:      String(totalPrice),
+        // 발행 문서 유형 — 견적 세금 유형과 연결(일반과세=tax_invoice·영세율=zero_rate_tax_invoice·면세=invoice).
+        //  전달된 경우에만 갱신(세금 유형 '확인 필요' 견적은 미전달 → 기존값 보존).
+        ...(taxDocumentType && TAX_DOCUMENT_TYPES.has(taxDocumentType) ? { taxDocumentType } : {}),
         // 변경사유(version_reason) — 전달된 경우에만 갱신(미전달 시 기존값 보존)
         ...(versionReason !== undefined ? { versionReason: versionReason.trim() || null } : {}),
       }).where(eq(quotesTable.id, quoteId));

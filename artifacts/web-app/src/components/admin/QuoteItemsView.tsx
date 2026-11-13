@@ -17,6 +17,7 @@ import { convertToFormItem } from '../../lib/quoteItemForm';
 import type { QuoteItemForm } from './QuoteEditorWorkspace';
 import { tblRow, COL_H, SVC_CFG, SVC_FIELD_HINTS, hasDocumentFields } from './quoteItemsShared';
 import { formatScheduleRange } from '../../lib/dateFormat';
+import { deriveVatMode, VAT_ROW_LABEL } from '../../lib/quoteTaxType';
 import './readTableView.css';
 
 // 판매정보 입력 원본 — 견적 품목(QuoteDetailItem) + 저장 금액 컬럼
@@ -183,7 +184,7 @@ function ReadOnlyRow({ raw, idx }: { raw: SaleItem; idx: number }) {
 // 바로 아래에 정확히 정렬된다(§2·§3·§8). 레이블은 공급가액 왼쪽(1~8열)에 우측정렬(§4).
 // 비고(10번째) 컬럼은 사용하지 않는다(§5). 총 판매금액만 Primary·Bold·+1단계 강조(§6).
 // 이 컴포넌트는 항목 행과 동일한 overflow/grid 컨텍스트 안에 렌더되어야 정렬이 맞는다.
-export function SaleTotalsRows({ supply, tax, total }: { supply: number; tax: number; total: number }) {
+export function SaleTotalsRows({ supply, tax, total, vatLabel = '부가세' }: { supply: number; tax: number; total: number; vatLabel?: string }) {
   const won = (n: number) => Math.round(n).toLocaleString();
   // 컴팩트 합계 행 — 그리드 템플릿·컬럼갭·가로 padding(8)은 상품 행과 동일(정렬 유지),
   // 세로 padding·행 높이·lineHeight만 최소화하여 3줄을 하나의 묶음처럼 압축(§1·§2).
@@ -206,7 +207,7 @@ export function SaleTotalsRows({ supply, tax, total }: { supply: number; tax: nu
       </div>
       {/* 부가세 */}
       <div style={rowBase}>
-        <div style={infoLabel}>부가세</div>
+        <div style={infoLabel} data-testid="sales-amount-tax-label">{vatLabel}</div>
         <div style={infoAmt} data-testid="sales-amount-tax">{won(tax)}원</div>
       </div>
       {/* 총 판매금액 — 위 구분선 + Primary 강조 */}
@@ -264,7 +265,7 @@ export default function QuoteItemsView({ items }: { items: SaleItem[] }) {
         </div>
 
         {/* 합계 행 — 동일 overflow/grid 안에서 렌더되어 상품별 공급가액 컬럼과 정확히 정렬(§2·§3·§8) */}
-        {items.length > 0 && <SaleTotalsRows supply={totals.supply} tax={totals.tax} total={totals.total} />}
+        {items.length > 0 && <SaleTotalsRows supply={totals.supply} tax={totals.tax} total={totals.total} vatLabel={VAT_ROW_LABEL[deriveVatMode(items)]} />}
       </div>
     </div>
   );

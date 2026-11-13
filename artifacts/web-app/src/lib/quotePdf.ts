@@ -5,6 +5,7 @@
  * 번역·통역·장비·기타 서비스별 상세 텍스트를 생성하고, 언어 코드를 한국어 이름으로 치환한다.
  */
 import { formatScheduleRange } from './dateFormat';
+import { type VatMode, VAT_ROW_LABEL, QUOTE_TOTAL_LABEL, normalizeTaxKind } from './quoteTaxType';
 
 // ─── FM장비 단위 표시 정규화 ─────────────────────────────────────────────────
 /**
@@ -687,12 +688,20 @@ export function buildQuotePdfData(source: QuoteDetail): QuotePdfData {
  *  · 면세만: "부가세 (면세)" / 영세율만: "부가세 (영세율)" / 섞여 있으면: "부가세"
  */
 export function vatSummaryLabel(items: Pick<QuotePdfItem, 'taxType' | 'supplyAmount' | 'productType'>[], taxTotal: number): string {
-  const kinds = new Set(items.filter(it => it.productType !== 'discount').map(it => it.taxType || 'taxable'));
-  if (kinds.size === 1 && kinds.has('exempt')) return '부가세 (면세)';
-  if (kinds.size === 1 && kinds.has('zero_rate')) return '부가세 (영세율)';
-  if (kinds.size > 1) return '부가세';
+  return VAT_ROW_LABEL[pdfVatMode(items, taxTotal)];
+}
+/** PDF 세금 유형 — 품목 저장값 기준. 과세인데 공급가액이 있고 부가세 0원이면 근거 확인 대상('unknown' — 세율 미표기) */
+export function pdfVatMode(items: Pick<QuotePdfItem, 'taxType' | 'supplyAmount' | 'productType'>[], taxTotal: number): VatMode {
+  const kinds = new Set(items.filter(it => it.productType !== 'discount').map(it => normalizeTaxKind(it.taxType)));
+  if (kinds.size > 1) return 'unknown';
+  const k = kinds.size === 1 ? [...kinds][0] : 'taxable';
+  if (k !== 'taxable') return k;
   const supply = items.reduce((a, it) => a + it.supplyAmount, 0);
-  return supply > 0 && taxTotal === 0 ? '부가세' : '부가세 (10%)';
+  return supply > 0 && taxTotal === 0 ? 'unknown' : 'taxable';
+}
+/** 견적서 상단 총액 라벨 — 일반과세 '(VAT 포함)' · 영세율 '(영세율 0%)' · 면세 '(면세)' · 확인 필요 '총 견적금액' */
+export function quoteTotalLabel(items: Pick<QuotePdfItem, 'taxType' | 'supplyAmount' | 'productType'>[], taxTotal: number): string {
+  return QUOTE_TOTAL_LABEL[pdfVatMode(items, taxTotal)];
 }
 
 export const ITEM_TYPE_LABEL: Record<string, string> = {

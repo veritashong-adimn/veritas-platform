@@ -43,7 +43,7 @@ const DEPOSIT_LABEL: Record<string, string> = {
   scheduled: '미입금', partial: '부분입금', completed: '입금완료',
 };
 const TAXDOC_LABEL: Record<string, string> = {
-  tax_invoice: '세금계산서', cash_receipt: '현금영수증', invoice: '계산서', none: '없음',
+  tax_invoice: '세금계산서', zero_rate_tax_invoice: '영세율 세금계산서', cash_receipt: '현금영수증', invoice: '계산서', none: '없음',
 };
 
 // numeric 셀은 실제 숫자만(문자열 "원" 금지, §20). 근거 없는 값은 blank.

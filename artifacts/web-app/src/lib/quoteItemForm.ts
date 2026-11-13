@@ -7,6 +7,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { parseMemoInfo, type QuoteDetailItem } from './quotePdf';
 import type { QuoteItemForm, ServiceType, VatType } from '../components/admin/QuoteEditorWorkspace';
+import { isTaxUnconfirmed } from './quoteTaxType';
 
 // QuoteDetailItem → QuoteItemForm 변환
 export function convertToFormItem(it: QuoteDetailItem & { productId?: number | null; taxType?: string | null }): QuoteItemForm {
@@ -64,6 +65,8 @@ export function convertToFormItem(it: QuoteDetailItem & { productId?: number | n
     // 단가 미입력(price_status=unset)은 0원이 아니라 빈 칸으로 복원 — 실제 0원(무상·기존 자료)과 구분
     unitPrice:        (it as { priceStatus?: string | null }).priceStatus === 'unset' ? '' : String(Number(it.unitPrice)),
     taxType,
+    // 과세 저장 + 부가세 0원(과거 CRM 총액 등) — 편집 화면 '확인 필요' 상태에서 10% 재계산 방지
+    ...(isTaxUnconfirmed(it.taxType, it.supplyAmount, it.taxAmount) ? { taxUnconfirmed: true } : {}),
     memo:             userMemo,
     sourceLanguage,
     fileName:         fields['파일']   ?? '',

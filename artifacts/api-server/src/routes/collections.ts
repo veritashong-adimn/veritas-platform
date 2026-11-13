@@ -235,6 +235,8 @@ router.get("/admin/collections", ...adminGuard, requireStaffPermission(["payment
 export type SaleBaseRow = {
   project_id: number; title: string | null; project_status: string; company_name: string | null;
   quote_number: string | null; price: string | null; pm_name: string | null;
+  // 판매 견적 세금 유형(조회 전용) — 품목 tax_type 기준. 과세 저장인데 부가세 0원·유형 혼재면 'unknown'(확인 필요). 금액 재계산 없음.
+  sale_tax_type?: string | null;
 };
 export type SalePayRow = {
   id: number; project_id: number; sequence: number; amount: string | null; payment_method: string | null;
@@ -288,6 +290,7 @@ export function summarizeSaleCollection(b: SaleBaseRow, rows: SalePayRow[], toda
     invoiceTargetAmount: invoiceTarget, unissuedAmount: unissued, issuedAwaitingAmount: issuedAwaiting,
     installments, lastPaidDate, nextExpectedDate, overdue: overdue && receivable > 0,
     pmName: b.pm_name, reviewReason: null as string | null,
+    saleTaxType: b.sale_tax_type ?? null,
   };
 }
 
@@ -296,11 +299,17 @@ router.get("/admin/collections/sales", ...adminGuard, requireStaffPermission(["p
     const base = await db.execute<SaleBaseRow>(sql`
       SELECT p.id AS project_id, p.title, p.status AS project_status,
         c.name AS company_name, q.quote_number, q.price,
-        (SELECT u.name FROM users u WHERE u.id = p.admin_id) AS pm_name
+        (SELECT u.name FROM users u WHERE u.id = p.admin_id) AS pm_name,
+        (SELECT CASE
+            WHEN COUNT(*) = 0 THEN NULL
+            WHEN bool_or(COALESCE(qi.tax_type, 'taxable') NOT IN ('zero_rate', 'exempt') AND abs(qi.supply_amount) >= 0.5 AND abs(qi.tax_amount) < 0.5) THEN 'unknown'
+            WHEN COUNT(DISTINCT CASE WHEN qi.tax_type IN ('zero_rate', 'exempt') THEN qi.tax_type ELSE 'taxable' END) > 1 THEN 'unknown'
+            ELSE MIN(CASE WHEN qi.tax_type IN ('zero_rate', 'exempt') THEN qi.tax_type ELSE 'taxable' END) END
+          FROM quote_items qi WHERE qi.quote_id = q.id AND COALESCE(qi.item_type, '') <> 'discount') AS sale_tax_type
       FROM projects p
       LEFT JOIN companies c ON c.id = p.company_id
       LEFT JOIN LATERAL (
-        SELECT q1.quote_number, q1.price FROM quotes q1
+        SELECT q1.id, q1.quote_number, q1.price FROM quotes q1
         WHERE q1.project_id = p.id AND q1.is_current = true AND q1.deleted_at IS NULL
           AND (q1.relation_type IS NULL OR q1.relation_type <> 'derived')
         ORDER BY q1.id DESC LIMIT 1
