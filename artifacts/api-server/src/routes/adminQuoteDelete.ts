@@ -47,8 +47,10 @@ router.delete("/admin/quotes/:id", ...adminGuard, requirePermission("quote.updat
       projectStatusBefore: r.projectStatusBefore, projectStatusAfter: r.projectStatusAfter,
       inquiryIds: r.inquiries.map(i => i.id), relinkedQuoteId: r.inquiries[0]?.relinkedQuoteId ?? null,
       otherActiveQuoteIds: r.otherActiveQuoteIds, reason: trimmedReason,
+      ...(r.restoredCurrentId ? { restoredCurrentId: r.restoredCurrentId } : {}),
     };
     await logEvent("quote", quoteId, "quote_deleted", req.log, req.user ?? undefined, JSON.stringify(meta));
+    if (r.restoredCurrentId) await logEvent("quote", r.restoredCurrentId, "quote_current_restored", req.log, req.user ?? undefined, JSON.stringify({ via: "revision_deleted", revisionId: quoteId }));
     for (const i of r.inquiries) {
       await logEvent("inquiry", i.id, "inquiry_quote_unlinked", req.log, req.user ?? undefined,
         JSON.stringify({ quoteId, quoteNumber: r.quoteNumber, projectId: r.projectId, relinkedQuoteId: i.relinkedQuoteId }));

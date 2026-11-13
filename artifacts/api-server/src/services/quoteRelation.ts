@@ -61,6 +61,31 @@ export function getCurrentRevision(family: any[]): any | null {
   return chain.find(q => q.isCurrent) ?? null;
 }
 
+// ── 리비전 체인 '유효본 공백' 판정 (화면·판매전환 API·거절/삭제 공통) ─────────────────
+// 변경견적이 승인(판매전환)되면 이전 유효본(원견적 등)은 is_current=false 가 된다. 이후 판매취소 → 변경견적 거절/삭제로
+//  그 변경견적이 유효본에서 빠지면, 체인에 유효본이 하나도 없는 상태가 된다(원견적이 '과거 견적'으로 남아 판매전환 불가).
+//  이때 유효본 후보 = 미삭제 체인 중 거절되지 않았고 미확정(대기) 변경견적이 아닌 최신 버전.
+//  (대기 변경견적은 '변경견적 승인'으로만 유효본이 된다.) 유효본이 이미 있으면 그대로(restored=false).
+export function resolveChainCurrent(family: any[]): { current: any | null; restored: boolean } {
+  const chain = family.filter(q => q.deletedAt == null && (q.relationType == null || q.relationType === "revision"));
+  const cur = chain.find(q => q.isCurrent === true);
+  if (cur) return { current: cur, restored: false };
+  const cand = chain
+    .filter(q => q.status !== "rejected" && !(q.relationType === "revision" && q.status === "pending"))
+    .sort((a, b) => Number(b.version) - Number(a.version) || b.id - a.id)[0] ?? null;
+  return { current: cand, restored: cand != null };
+}
+
+// 체인에 유효본이 없으면 후보를 유효본으로 되돌린다(변경견적 거절·삭제 트랜잭션 내부에서 호출).
+//  is_current 플래그만 변경 — 상태·금액·번호·프로젝트는 건드리지 않는다. 복구된 견적 id(없으면 null) 반환.
+export async function restoreChainCurrentIfVacant(tx: Db, rootId: number): Promise<number | null> {
+  const family = await getQuoteFamily(tx, rootId);
+  const { current, restored } = resolveChainCurrent(family);
+  if (!restored || !current) return null;
+  await tx.update(quotesTable).set({ isCurrent: true }).where(eq(quotesTable.id, current.id));
+  return current.id;
+}
+
 // ── 관계견적 번호 생성 (동시성 안전) ──────────────────────────────────────────
 // COUNT(*)+1 단순계산이 아니라, root 행을 FOR UPDATE 로 잠근 뒤 family 내 같은 relation 개수로 산출한다.
 //  → 동일 family 동시 생성 시 직렬화되어 R1/R1, A1/A1, -01/-01 중복이 발생하지 않는다.

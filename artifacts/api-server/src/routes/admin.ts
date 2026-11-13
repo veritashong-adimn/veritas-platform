@@ -39,7 +39,7 @@ import {
   type PrepaidLineInput,
 } from "../services/prepaidDeductionQuote";
 import { closeAccumulatedBatchQuote } from "../services/accumulatedBatch";
-import { effectiveQuoteConditions } from "../services/quoteRelation";
+import { effectiveQuoteConditions, getQuoteFamily, resolveChainCurrent } from "../services/quoteRelation";
 import { applyParentIndexLinks } from "../services/quoteItemGroup";
 import { createRevision, approveRevision, rejectRevision } from "../services/quoteRevision";
 import { createDerivedSplit, approveDerived, rejectDerived, calculateAllocation, generateDerivedBillingRows, type DerivedSplitInput } from "../services/quoteDerived";
@@ -1903,8 +1903,13 @@ router.patch("/admin/quotes/:quoteId/status", ...adminGuard, requirePermission("
     }
     // 견적 엔진: 현재 유효본이 아닌 견적(과거본/미확정 변경견적)은 이 경로로 판매전환 불가(§17/§28).
     //  변경견적 승인은 전용 엔드포인트(POST /admin/quotes/:id/approve-revision)를 사용한다.
+    //  예외: 체인에 유효본이 하나도 없는 '유효본 공백'(변경견적 승인→판매취소→거절/삭제) 상태에서 이 견적이 복구 후보이면
+    //  판매전환을 허용하고 같은 트랜잭션에서 유효본(is_current)을 되돌린다 — 화면(family API)과 동일 판정(resolveChainCurrent).
+    let restoreCurrent = false;
     if (status === "approved" && quote.isCurrent === false) {
-      res.status(409).json({ error: "현재 유효견적이 아닙니다. 변경견적은 '변경견적 승인'을 사용하세요." }); return;
+      const { current, restored } = resolveChainCurrent(await getQuoteFamily(db, quote.rootQuoteId ?? quote.id));
+      if (restored && current?.id === quoteId) restoreCurrent = true;
+      else { res.status(409).json({ error: "현재 유효견적이 아닙니다. 변경견적은 '변경견적 승인'을 사용하세요." }); return; }
     }
 
     const adminUser = (req as any).user as { id: number };
@@ -1953,9 +1958,9 @@ router.patch("/admin/quotes/:quoteId/status", ...adminGuard, requirePermission("
           status: "approved",
         }).returning();
 
-        // 견적에 projectId 연결 + status 업데이트
+        // 견적에 projectId 연결 + status 업데이트 (유효본 공백 복구 대상이면 유효본 플래그도 함께)
         const [updatedQuote] = await tx.update(quotesTable)
-          .set({ status: "approved", projectId: project.id })
+          .set({ status: "approved", projectId: project.id, ...(restoreCurrent ? { isCurrent: true } : {}) })
           .where(eq(quotesTable.id, quoteId))
           .returning();
 
@@ -1981,6 +1986,7 @@ router.patch("/admin/quotes/:quoteId/status", ...adminGuard, requirePermission("
         return { quote: updatedQuote, project, created: true };
       });
 
+      if (restoreCurrent && result.created) await logEvent("quote", quoteId, "quote_current_restored", req.log, req.user ?? undefined, JSON.stringify({ via: "sale_conversion" }));
       if (result.created) {
         await logEvent("project", result.project.id, "project_created", req.log, req.user ?? undefined);
         req.log.info({ quoteId, projectId: result.project.id }, "Admin: quote approved → project auto-created");
@@ -1995,7 +2001,7 @@ router.patch("/admin/quotes/:quoteId/status", ...adminGuard, requirePermission("
     const isPrepaidQ = isPrepaidDeductionQuoteType(quote.quoteType);
     const updatedQuote = await db.transaction(async tx => {
       const [uq] = await tx.update(quotesTable)
-        .set({ status: status as any })
+        .set({ status: status as any, ...(restoreCurrent ? { isCurrent: true } : {}) })
         .where(eq(quotesTable.id, quoteId))
         .returning();
 
@@ -2025,6 +2031,7 @@ router.patch("/admin/quotes/:quoteId/status", ...adminGuard, requirePermission("
       return uq;
     });
 
+    if (restoreCurrent) await logEvent("quote", quoteId, "quote_current_restored", req.log, req.user ?? undefined, JSON.stringify({ via: "sale_conversion" }));
     res.json({ quote: updatedQuote, autoCreatedProject: false });
     return;
   } catch (err) {
@@ -2081,6 +2088,8 @@ router.post("/admin/quotes/:id/reject-revision", ...adminGuard, requirePermissio
     const out = await db.transaction(async (tx) => rejectRevision(tx, quoteId));
     if (out.http === 200 && !(out.body as any).alreadyProcessed) {
       await logEvent("quote", quoteId, "quote_revision_rejected", req.log, req.user ?? undefined);
+      const rc = (out.body as any).restoredCurrentId as number | undefined;
+      if (rc) await logEvent("quote", rc, "quote_current_restored", req.log, req.user ?? undefined, JSON.stringify({ via: "revision_rejected", revisionId: quoteId }));
     }
     res.status(out.http).json(out.body);
   } catch (err) {
@@ -2166,10 +2175,13 @@ router.get("/admin/quotes/:id/family", ...adminGuard, async (req, res) => {
     }).from(quotesTable)
       .where(sql`COALESCE(${quotesTable.rootQuoteId}, ${quotesTable.id}) = ${rootId} AND ${quotesTable.deletedAt} IS NULL`)
       .orderBy(quotesTable.version, quotesTable.id);
-    const members = rows.map(r => ({ ...r, price: Number(r.price) }));
+    // 유효본 공백(변경견적 승인→판매취소→거절/삭제) 이면 복구 후보를 현재 유효본으로 표시 — 판매전환 API 와 같은 판정.
+    //  DB 는 바꾸지 않는다(실제 플래그 복구는 사용자가 판매전환할 때 트랜잭션에서). currentRestored 는 additive 필드.
+    const { current: chainCurrent, restored: currentRestored } = resolveChainCurrent(rows);
+    const members = rows.map(r => ({ ...r, price: Number(r.price), isCurrent: r.isCurrent || (currentRestored && r.id === chainCurrent?.id) }));
     // 파생 배분현황(§12/§28) — 항상 live 재계산(누적 카운터 미사용). derived 미존재 시에도 안전(0).
     const allocation = calculateAllocation(members);
-    res.json({ rootQuoteId: rootId, members, allocation });
+    res.json({ rootQuoteId: rootId, members, allocation, currentRestored });
   } catch (err) {
     req.log.error({ err }, "Admin: failed to fetch quote family");
     res.status(500).json({ error: "관련 견적 조회 실패." });

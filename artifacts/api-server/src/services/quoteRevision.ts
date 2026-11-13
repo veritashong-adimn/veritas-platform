@@ -9,7 +9,7 @@ import { and, eq, sql } from "drizzle-orm";
 import {
   quotesTable, quoteItemsTable, projectsTable, projectPaymentsTable, paymentsTable,
 } from "@workspace/db";
-import { generateRelationQuoteNumber, isRelationEngineQuoteType } from "./quoteRelation";
+import { generateRelationQuoteNumber, isRelationEngineQuoteType, restoreChainCurrentIfVacant } from "./quoteRelation";
 import { approvedDerivedSum } from "./quoteDerived";
 import { remapClonedParentLinks } from "./quoteItemGroup";
 
@@ -173,5 +173,7 @@ export async function rejectRevision(tx: Db, revisionId: number): Promise<Result
   if (rev.status === "approved" && rev.isCurrent === true) return { http: 409, body: { error: "이미 승인된 변경견적은 거절할 수 없습니다." } };
   await tx.update(quotesTable).set({ status: "rejected", isCurrent: false }).where(eq(quotesTable.id, rev.id));
   // 이전 유효본은 건드리지 않는다(그대로 유지). §15/§16
-  return { http: 200, body: { id: rev.id, alreadyProcessed: false } };
+  //  단, 이 변경견적이 유효본이었다면(승인→판매취소로 대기 복귀한 경우) 체인에 유효본이 사라지므로 이전 유효본을 되돌린다.
+  const restoredCurrentId = rev.isCurrent === true ? await restoreChainCurrentIfVacant(tx, rev.rootQuoteId ?? rev.id) : null;
+  return { http: 200, body: { id: rev.id, alreadyProcessed: false, ...(restoredCurrentId ? { restoredCurrentId } : {}) } };
 }

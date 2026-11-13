@@ -13,6 +13,7 @@
 import { db, quotesTable, projectsTable, inquiriesTable, logsTable } from "@workspace/db";
 import { and, desc, eq, isNull, ne, sql } from "drizzle-orm";
 import { evaluateQuoteDependencies } from "./saleDependency";
+import { restoreChainCurrentIfVacant } from "./quoteRelation";
 
 const PROJECT_STATUS_KR: Record<string, string> = {
   created: "접수", quoted: "견적", approved: "견적승인", paid: "입금", matched: "통번역사 배정", in_progress: "진행중", completed: "완료", cancelled: "취소",
@@ -105,6 +106,7 @@ export interface QuoteDeleteResult {
   projectStatusBefore: string | null; projectStatusAfter: string | null;
   inquiries: Array<{ id: number; relinkedQuoteId: number | null }>;
   otherActiveQuoteIds: number[];
+  restoredCurrentId: number | null;
 }
 
 export class QuoteDeleteError extends Error { constructor(public status: number, message: string, public reasons: string[] = []) { super(message); } }
@@ -117,7 +119,8 @@ export async function deleteQuoteAndRevert(quoteId: number, userId: number | nul
 
   return db.transaction(async tx => {
     // 같은 견적에 대한 동시 삭제·승인·수정 직렬화 — 행 잠금 후 상태 재확인
-    const [q] = await tx.select({ id: quotesTable.id, status: quotesTable.status, deletedAt: quotesTable.deletedAt, projectId: quotesTable.projectId, quoteNumber: quotesTable.quoteNumber })
+    const [q] = await tx.select({ id: quotesTable.id, status: quotesTable.status, deletedAt: quotesTable.deletedAt, projectId: quotesTable.projectId, quoteNumber: quotesTable.quoteNumber,
+      isCurrent: quotesTable.isCurrent, rootQuoteId: quotesTable.rootQuoteId, relationType: quotesTable.relationType })
       .from(quotesTable).where(eq(quotesTable.id, quoteId)).for("update");
     if (!q || q.deletedAt) throw new QuoteDeleteError(409, "이미 삭제된 견적입니다.");
     if (q.status !== "pending" && q.status !== "rejected") throw new QuoteDeleteError(409, "견적 상태가 변경되었습니다(발송·승인 등) — 화면을 새로고침한 뒤 다시 확인해 주세요.");
@@ -127,6 +130,14 @@ export async function deleteQuoteAndRevert(quoteId: number, userId: number | nul
       .where(and(eq(quotesTable.id, quoteId), isNull(quotesTable.deletedAt)))
       .returning({ id: quotesTable.id });
     if (!del) throw new QuoteDeleteError(409, "이미 삭제된 견적입니다.");
+
+    // 유효본이던 변경견적(승인→판매취소로 대기 복귀)을 삭제하면 체인 유효본이 비므로 이전 유효본을 되돌린다.
+    //  삭제된 견적의 유효본 플래그는 내려 둔다(휴지통 복원 시 유효본 2개가 되지 않도록). 상태·금액·번호는 그대로.
+    let restoredCurrentId: number | null = null;
+    if (q.relationType === "revision" && q.isCurrent && q.rootQuoteId != null) {
+      restoredCurrentId = await restoreChainCurrentIfVacant(tx, q.rootQuoteId);
+      if (restoredCurrentId != null) await tx.update(quotesTable).set({ isCurrent: false }).where(eq(quotesTable.id, quoteId));
+    }
 
     // 같은 프로젝트의 다른 유효 견적(현재유효 우선)
     const others = q.projectId != null
@@ -158,6 +169,7 @@ export async function deleteQuoteAndRevert(quoteId: number, userId: number | nul
       projectStatusBefore: before, projectStatusAfter: after,
       inquiries: linked.map(l => ({ id: l.id, relinkedQuoteId: relinkTo })),
       otherActiveQuoteIds: others.map(o => o.id),
+      restoredCurrentId,
     };
   });
 }
