@@ -445,8 +445,10 @@ export async function executeActivation(legacyRowId: number, planToken: string, 
       //   확인되지 않으면(세후=세전·값 없음 등) 기존대로 연결된 통번역사 정산정보에서 도출(미연결·미설정은 세무확인 필요).
       payload.withholdingTreatment = p.withholdingTreatment ?? undefined;   // 미리보기에서 결정한 값(우선순위 규칙) — 미리보기와 실행이 같은 기준
       if (!p.translatorId) { payload.status = "unassigned"; payload.performerNameSnapshot = rr.translatorName || null; }
-      const tag = p.plannedStatus === "legacy_paid" ? `과거 지급완료(지급일 ${p.payDate})` : p.plannedStatus === "payout_review" ? "과거 지급 확인 필요" : "과거 CRM";
-      payload.remark = `[과거 CRM] ${tag}${!p.translatorId && rr.translatorName ? ` · 수행자 ${rr.translatorName}(Master 미연결)` : ""}${payload.remark ? ` · ${payload.remark}` : ""}`;
+      // 비고 = [이관 태그] + (Master 미연결 수행자) + 원본 비고. 단, '과거 지급 확인 필요'는 지급 상태(payout_review)·과거 지급 확인
+      //   영역으로 이미 표시되므로 비고에 문구를 넣지 않는다(지급 확인 후에도 비고에 남아 혼동되던 문제). 나머지 비고는 그대로.
+      const tag = p.plannedStatus === "legacy_paid" ? `[과거 CRM] 과거 지급완료(지급일 ${p.payDate})` : p.plannedStatus === "payout_review" ? null : "[과거 CRM] 과거 CRM";
+      payload.remark = [tag, !p.translatorId && rr.translatorName ? `수행자 ${rr.translatorName}(Master 미연결)` : null, payload.remark || null].filter(Boolean).join(" · ") || null;
       payload.payDateChangeReason = rr.payDate ? "과거 CRM 원본 지급일 보존" : null;
       const assignmentId = await applyPerformanceRow(tx, project.id, payload, ctx);
       // 4순위(확인 필요): 저장 경로가 Master 미등록을 '세금계산서'로 기본 채우므로, 전환 행은 비워 둔다(원천세 확인 필요).
