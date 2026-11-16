@@ -41,7 +41,7 @@ import {
   type PrepaidLineInput,
 } from "../services/prepaidDeductionQuote";
 import { closeAccumulatedBatchQuote } from "../services/accumulatedBatch";
-import { deleteLedgerEntry, writeHistory, snap as ledgerSnap } from "../services/prepaidLedger";
+import { deleteLedgerEntry, writeHistory, snap as ledgerSnap, getAccountBalances, getCompanyBalances } from "../services/prepaidLedger";
 import { effectiveQuoteConditions, getQuoteFamily, resolveChainCurrent } from "../services/quoteRelation";
 import { loadSaleIdentities } from "../services/saleIdentity";
 import { loadFxSummaries, fmtForeign } from "../services/fxBilling";
@@ -315,6 +315,9 @@ export async function buildFilteredSalesProjectList(query: Record<string, string
         .orderBy(desc(quotesTable.id));
       const projMap = new Map(result.map(p => [p.id, p.companyId]));
       const compBalanceMap = new Map<number, number>();
+      // 선입금 계정이 있는 거래처는 원장 잔액(누적 입금 − 누적 차감) 우선
+      const cids = [...new Set(result.map(p => p.companyId).filter((v): v is number => v != null))];
+      for (const [cid, b] of await getCompanyBalances(db, cids)) compBalanceMap.set(cid, b.balance);
       for (const q of prepaidQ) {
         if (q.projectId == null || q.prepaidBalanceAfter == null) continue;
         const cid = projMap.get(q.projectId);
@@ -619,9 +622,10 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
           ))
           .orderBy(desc(quotesTable.id))
           .limit(1);
-        const prepaidBalance = lastPrepaidQuote?.prepaidBalanceAfter != null
-          ? Number(lastPrepaidQuote.prepaidBalanceAfter)
-          : null;
+        // 선입금 계정이 있으면 원장 잔액(누적 입금 − 누적 차감), 없으면 기존 견적 스냅샷
+        const ledgerBal = (await getCompanyBalances(db, [project.companyId])).get(project.companyId);
+        const prepaidBalance = ledgerBal ? ledgerBal.balance
+          : lastPrepaidQuote?.prepaidBalanceAfter != null ? Number(lastPrepaidQuote.prepaidBalanceAfter) : null;
 
         // 총 입금액 (b2c_prepaid 견적 price 합산)
         let prepaidTotalDeposited = 0;
@@ -659,16 +663,9 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
     //  · 차감견적이 아닌 판매건에서는 프론트가 이 값을 사용하지 않으므로 기존 로직에 영향 없음.
     let prepaidAccount: { totalDeposited: number; available: number } | null = null;
     if (project.companyId) {
-      const accs = await db
-        .select({ initial: prepaidAccountsTable.initialAmount, current: prepaidAccountsTable.currentBalance })
-        .from(prepaidAccountsTable)
-        .where(and(eq(prepaidAccountsTable.companyId, project.companyId), eq(prepaidAccountsTable.status, "active")));
-      if (accs.length > 0) {
-        prepaidAccount = {
-          totalDeposited: accs.reduce((s, a) => s + Number(a.initial), 0),
-          available: accs.reduce((s, a) => s + Number(a.current), 0),
-        };
-      }
+      // 원장 기준: 총 선입금액 = 누적 입금(원장 밖 기초 잔액 포함), 사용가능잔액 = 누적 입금 − 누적 차감
+      const b = (await getCompanyBalances(db, [project.companyId])).get(project.companyId);
+      if (b) prepaidAccount = { totalDeposited: b.deposit + Math.max(0, b.opening), available: b.balance };
     }
 
     if (project.contactId) {
@@ -2303,6 +2300,8 @@ router.get("/admin/prepaid-accounts", ...adminGuard, async (req, res) => {
     // 확정 대기(차감 견적 예약) — 확정 잔액과 분리한 '예상' 값(추가 필드, 기존 필드 불변)
     const pending = await getPendingByAccount(db, accounts.map(a => a.id));
     const linkedMap = await getLinkedAmountByAccount(db, accounts.map(a => a.id));
+    // 잔액 = 누적 입금 − 누적 차감(전 화면 공통 공식) — currentBalance 필드 의미를 화면 표시 잔액으로 통일
+    const balMap = await getAccountBalances(db, accounts.map(a => a.id));
     res.json(accounts.map(a => {
       const p = pending.get(a.id);
       const linkedAmount = linkedMap.get(a.id) ?? 0;
@@ -2310,7 +2309,9 @@ router.get("/admin/prepaid-accounts", ...adminGuard, async (req, res) => {
       return {
         ...a,
         initialAmount: Number(a.initialAmount),
-        currentBalance: Number(a.currentBalance),
+        currentBalance: balMap.get(a.id)?.balance ?? Number(a.currentBalance),
+        totalDeposit: balMap.get(a.id)?.deposit ?? 0,
+        totalDeduction: balMap.get(a.id)?.deduction ?? 0,
         companyName: companyMap.get(a.companyId) ?? `거래처 #${a.companyId}`,
         pendingInflow, pendingDeduction,
         expectedBalance: Number(a.currentBalance) + pendingInflow - pendingDeduction,
@@ -2380,9 +2381,13 @@ router.get("/admin/prepaid-accounts/:id", ...adminGuard, async (req, res) => {
     if (!account) { res.status(404).json({ error: "계정을 찾을 수 없습니다." }); return; }
 
     const ledger = await db.select().from(prepaidLedgerTable)
-      // 확정 내역만 노출 — 차감 견적 예약(reserved)/해제(released)는 계정 상세에서 제외
-      .where(and(eq(prepaidLedgerTable.accountId, accountId), eq(prepaidLedgerTable.status, "confirmed")))
-      .orderBy(prepaidLedgerTable.transactionDate, prepaidLedgerTable.createdAt);
+      // 활성 원장 전체(해제·취소 제외) — 잔액 = 누적 입금 − 누적 차감
+      .where(and(eq(prepaidLedgerTable.accountId, accountId), inArray(prepaidLedgerTable.status, ["reserved", "confirmed"])))
+      .orderBy(prepaidLedgerTable.transactionDate, prepaidLedgerTable.id);
+    const accBal = (await getAccountBalances(db, [accountId])).get(accountId);
+    let runBal = accBal?.opening ?? 0;
+    const runMap = new Map<number, number>();
+    for (const e of ledger) { runBal = Math.round((runBal + (e.type === "deduction" || e.type === "refund" ? -Number(e.amount) : Number(e.amount))) * 100) / 100; runMap.set(e.id, runBal); }
 
     const pids = ledger.filter(e => e.projectId).map(e => e.projectId as number);
     let projectMap = new Map<number, string>();
@@ -2434,7 +2439,7 @@ router.get("/admin/prepaid-accounts/:id", ...adminGuard, async (req, res) => {
     res.json({
       ...account,
       initialAmount: Number(account.initialAmount),
-      currentBalance: Number(account.currentBalance),
+      currentBalance: accBal?.balance ?? Number(account.currentBalance),
       companyName: company?.name ?? `거래처 #${account.companyId}`,
       // 확정 대기(예약) — 확정 원장(ledger)과 분리. 판매확정 견적은 confirmable=true('확정 반영' 대상)
       pendingInflow: pend?.pendingInflow ?? 0,
@@ -2449,7 +2454,7 @@ router.get("/admin/prepaid-accounts/:id", ...adminGuard, async (req, res) => {
           ...e,
           amount: Number(e.amount),
           balanceBefore: e.balanceBefore != null ? Number(e.balanceBefore) : null,
-          balanceAfter: Number(e.balanceAfter),
+          balanceAfter: runMap.get(e.id) ?? Number(e.balanceAfter),
           projectTitle: e.projectId ? (projectMap.get(e.projectId) ?? `프로젝트 #${e.projectId}`) : null,
           // 원장에 직접 저장된 값 우선, 없으면 quote_items에서 계산한 값 fallback
           supplyAmount: e.supplyAmount != null ? Number(e.supplyAmount) : (taxFallback?.supplyAmount ?? null),
@@ -2486,8 +2491,9 @@ router.post("/admin/prepaid-accounts/:id/transactions", ...adminGuard, requireSt
       res.status(400).json({ error: "유효하지 않은 계정입니다." }); return;
     }
     const currentBal = Number(account.currentBalance);
-    if (type === "deduction" && amount > currentBal) {
-      res.status(400).json({ error: `잔액 부족: 현재 잔액 ${currentBal.toLocaleString()}원, 차감 요청 ${amount.toLocaleString()}원` }); return;
+    const shownBal = (await getAccountBalances(db, [accountId])).get(accountId)?.balance ?? currentBal;   // 화면 잔액(누적 입금 − 누적 차감)
+    if (type === "deduction" && amount > shownBal) {
+      res.status(400).json({ error: `잔액 부족: 현재 잔액 ${shownBal.toLocaleString()}원, 차감 요청 ${amount.toLocaleString()}원` }); return;
     }
     const newBalance = type === "deduction"
       ? currentBal - amount

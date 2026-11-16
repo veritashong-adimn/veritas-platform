@@ -44,47 +44,16 @@ export function exportPrepaidAccounts(rows: PrepaidExportRow[]): void {
   });
 }
 
-// ─── 목록형 원장(거래처별 현황 · 거래처 상세 원장) Excel ─────────────────────────────────
-//  SSOT = GET /api/prepaid/overview · GET /api/prepaid/companies/:id/ledger (화면과 같은 값)
-export interface PrepaidOverviewExportRow {
-  companyName: string; totalDeposit: number; totalDeduction: number; confirmedBalance: number;
-  pendingInflow: number; pendingDeduction: number; expectedBalance: number; lastTxDate: string | null; statusLabel: string; openingBalance: number;
-}
+// ─── 거래처별 선입금 목록 Excel — SSOT = GET /api/prepaid/overview (화면과 같은 값, 잔액 = 누적 입금 − 누적 차감)
+export interface PrepaidOverviewExportRow { companyName: string; totalDeposit: number; totalDeduction: number; balance: number }
 export function exportPrepaidOverview(rows: PrepaidOverviewExportRow[]): void {
   exportDataset<PrepaidOverviewExportRow>({
-    filename: `선입금현황_${todayStamp()}.xlsx`, sheetName: '거래처별 선입금 현황', rows,
+    filename: `선입금관리_${todayStamp()}.xlsx`, sheetName: '선입금관리', rows,
     columns: [
       { header: '거래처', value: 'companyName' },
       { header: '총 입금액', value: 'totalDeposit', type: 'number' },
       { header: '총 차감액', value: 'totalDeduction', type: 'number' },
-      { header: '확정 잔액', value: 'confirmedBalance', type: 'number' },
-      { header: '예정 입금액', value: 'pendingInflow', type: 'number' },
-      { header: '예정 차감액', value: 'pendingDeduction', type: 'number' },
-      { header: '예상 잔액', value: 'expectedBalance', type: 'number' },
-      { header: '최근 거래일', value: 'lastTxDate', type: 'date' },
-      { header: '상태', value: 'statusLabel' },
-      { header: '기초 잔액(원장 미기록)', value: (r) => (r.openingBalance ? r.openingBalance : ''), type: 'number' },
-    ],
-  });
-}
-export interface PrepaidLedgerExportRow {
-  transactionDate: string; typeLabel: string; description: string; quoteNumber: string; saleNo: string;
-  inflow: number | null; outflow: number | null; runningBalance: number; statusLabel: string; memo: string;
-}
-export function exportPrepaidCompanyLedger(companyName: string, rows: PrepaidLedgerExportRow[]): void {
-  exportDataset<PrepaidLedgerExportRow>({
-    filename: `선입금원장_${companyName.replace(/[\\/:*?"<>|]/g, '_')}_${todayStamp()}.xlsx`, sheetName: '선입금 원장', rows,
-    columns: [
-      { header: '거래일', value: 'transactionDate', type: 'date' },
-      { header: '구분', value: 'typeLabel' },
-      { header: '거래 내용', value: 'description' },
-      { header: '연결 견적', value: 'quoteNumber' },
-      { header: '연결 판매', value: 'saleNo' },
-      { header: '입금액', value: (r) => r.inflow ?? '', type: 'number' },
-      { header: '차감액', value: (r) => r.outflow ?? '', type: 'number' },
-      { header: '거래 후 잔액', value: 'runningBalance', type: 'number' },
-      { header: '상태', value: 'statusLabel' },
-      { header: '비고', value: 'memo' },
+      { header: '현재 잔액', value: 'balance', type: 'number' },
     ],
   });
 }

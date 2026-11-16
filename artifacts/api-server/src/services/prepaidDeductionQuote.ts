@@ -105,6 +105,14 @@ export async function getCompanyPrepaidState(
     .from(prepaidLedgerTable)
     .where(and(...conds));
   const reservedDeduction = Number(total ?? 0);
+  // 다른 견적의 예약 선입/이월 — 잔액 공식(누적 입금 − 누적 차감)에 따라 가용잔액에 포함
+  const inConds = [inArray(prepaidLedgerTable.accountId, accountIds), inArray(prepaidLedgerTable.type, [...INFLOW_TYPES]), eq(prepaidLedgerTable.status, "reserved")];
+  if (excludeQuoteId != null) inConds.push(sql`${prepaidLedgerTable.quoteId} IS DISTINCT FROM ${excludeQuoteId}`);
+  const [{ total: inTotal } = { total: 0 }] = await dbh
+    .select({ total: sql<number>`COALESCE(SUM(${prepaidLedgerTable.amount}), 0)` })
+    .from(prepaidLedgerTable)
+    .where(and(...inConds));
+  const reservedInflow = Number(inTotal ?? 0);
 
   // ── 자기 자신(excludeQuoteId) 확정분 제외 ─────────────────────────────────────
   //  current_balance(confirmedBalance) 에는 이미 이 견적의 '확정 선입(+)·확정 차감(-)'이
@@ -132,7 +140,7 @@ export async function getCompanyPrepaidState(
     accountId: accounts[0]?.id ?? null,
     confirmedBalance,
     reservedDeduction,
-    available: confirmedBalance - selfConfirmedNet - reservedDeduction,
+    available: confirmedBalance - selfConfirmedNet - reservedDeduction + reservedInflow,
   };
 }
 
@@ -202,31 +210,19 @@ export async function syncQuoteReservations(
       ))
     : [];
 
-  // 재작성 전 예약 행 — 기존 입금 연결(linked_payment_id)은 같은 유형·금액의 새 행에 이어 붙이고(연결 소실 방지),
-  //  사용자가 원장에서 입력한 비고(memo)·등록자는 같은 유형·금액 → 같은 유형 순서로 이어 붙인다(견적 저장이 사용자 입력을 지우지 않도록).
-  const prevReserved = await tx.select({ id: prepaidLedgerTable.id, type: prepaidLedgerTable.type, amount: prepaidLedgerTable.amount, linkedPaymentId: prepaidLedgerTable.linkedPaymentId,
-      memo: prepaidLedgerTable.memo, createdBy: prepaidLedgerTable.createdBy })
-    .from(prepaidLedgerTable).where(and(eq(prepaidLedgerTable.quoteId, quoteId), eq(prepaidLedgerTable.status, "reserved"))).orderBy(prepaidLedgerTable.id);
-  const prevLinks = prevReserved.filter((r: any) => r.linkedPaymentId != null);
-  const prevInflowCarry = prevReserved.filter((r: any) => isInflowType(r.type) && (r.memo != null || r.createdBy != null));
-  const prevDeduction = prevReserved.find((r: any) => r.type === "deduction") ?? null;
-  const takeCarry = (type: string, amt: number): { memo: string | null; createdBy: number | null } => {
-    let i = prevInflowCarry.findIndex((p: any) => p.type === type && Math.abs(Number(p.amount) - amt) < 0.005);
-    if (i < 0) i = prevInflowCarry.findIndex((p: any) => p.type === type);
-    if (i < 0) return { memo: null, createdBy: null };
-    const p = prevInflowCarry.splice(i, 1)[0];
-    return { memo: p.memo ?? null, createdBy: p.createdBy ?? null };
-  };
-
-  // 이전 reserved 라인 정리(이 견적 한정) — confirmed/released 는 제외. (유지 모드는 차감 예약만)
-  await tx.delete(prepaidLedgerTable).where(
-    keepInflow
-      ? and(eq(prepaidLedgerTable.quoteId, quoteId), eq(prepaidLedgerTable.status, "reserved"), eq(prepaidLedgerTable.type, "deduction"))
-      : and(eq(prepaidLedgerTable.quoteId, quoteId), eq(prepaidLedgerTable.status, "reserved")),
-  );
+  // 이 견적의 기존 예약 행 — 견적을 다시 저장해도 같은 행(같은 ID)을 갱신한다(삭제 후 재생성 없음).
+  //  · 선입/이월: 입력 순서대로 기존 행을 갱신, 늘어난 줄은 추가, 줄어든 줄만 삭제
+  //  · 차감: 견적당 1행 — 금액·공급가·부가세만 견적 기준으로 갱신(사용자가 원장에서 고친 거래일·내용·비고는 유지)
+  const prevReserved = await tx.select().from(prepaidLedgerTable)
+    .where(and(eq(prepaidLedgerTable.quoteId, quoteId), eq(prepaidLedgerTable.status, "reserved"))).orderBy(prepaidLedgerTable.id);
+  const prevInflow = prevReserved.filter((r: any) => isInflowType(r.type));
+  const prevDed = prevReserved.filter((r: any) => r.type === "deduction");
 
   // 거래처 미지정 시 계정을 만들 수 없으므로 예약 생략(전환 시점에 거래처 확정되면 재저장 필요).
-  if (!companyId) return null;
+  if (!companyId) {
+    if (prevReserved.length) await tx.delete(prepaidLedgerTable).where(inArray(prepaidLedgerTable.id, prevReserved.map((r: any) => r.id)));
+    return null;
+  }
 
   const account = await getOrCreatePrimaryAccount(tx, companyId, false);
   const txDate = args.transactionDate || today();
@@ -242,58 +238,53 @@ export async function syncQuoteReservations(
     quoteTotal,
   });
 
-  // 선입/이월 라인 → reserved inflow (잔액 미반영: balance placeholder 0) — 유지 모드는 기존 라인 그대로
-  for (const line of prepaidLines ?? []) {
-    const amt = Math.max(0, Number(line.amount) || 0);
-    if (amt <= 0) continue;
-    const type: InflowType = isInflowType(line.type) ? line.type : "deposit";
-    const label = type === "carryover" ? "이월(예약)" : "선입(예약)";
-    const src =
-      type === "carryover"
-        ? `원천: ${[line.sourceRef, line.sourceProjectId ? `P#${line.sourceProjectId}` : null, line.sourceQuoteId ? `Q#${line.sourceQuoteId}` : null].filter(Boolean).join(" ") || "-"}`
-        : line.sourceRef
-          ? `원천: ${line.sourceRef}`
-          : "";
-    await tx.insert(prepaidLedgerTable).values({
-      accountId: account.id,
-      projectId: projectId ?? null,
-      quoteId,
-      type,
-      status: "reserved",
-      amount: String(amt),
-      balanceBefore: null,
-      balanceAfter: "0",
-      description: [label, src, line.note].filter(Boolean).join(" · "),
-      transactionDate: line.transactionDate || txDate,
-      linkedPaymentId: (() => {
-        const i = prevLinks.findIndex((p: any) => p.type === type && Math.abs(Number(p.amount) - amt) < 0.005);
-        return i >= 0 ? prevLinks.splice(i, 1)[0].linkedPaymentId : null;
-      })(),
-      ...takeCarry(type, amt),
-    });
+  // 선입/이월 — 유지 모드는 기존 행 그대로
+  if (!keepInflow) {
+    const lines = (prepaidLines ?? []).filter(l => Math.max(0, Number(l.amount) || 0) > 0);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const amt = Math.max(0, Number(line.amount) || 0);
+      const type: InflowType = isInflowType(line.type) ? line.type : "deposit";
+      const label = type === "carryover" ? "이월" : "선입금";
+      const src =
+        type === "carryover"
+          ? `원천: ${[line.sourceRef, line.sourceProjectId ? `P#${line.sourceProjectId}` : null, line.sourceQuoteId ? `Q#${line.sourceQuoteId}` : null].filter(Boolean).join(" ") || "-"}`
+          : line.sourceRef
+            ? `원천: ${line.sourceRef}`
+            : "";
+      const values = {
+        accountId: account.id, projectId: projectId ?? null, type, amount: String(amt),
+        description: [label, src, line.note].filter(Boolean).join(" · "), transactionDate: line.transactionDate || txDate,
+      };
+      const prev: any = prevInflow[i];
+      if (prev) {
+        // 기존 입금 연결은 같은 유형·같은 금액일 때만 유지(금액이 바뀌면 연결 해제 — 다른 돈과 자동 병합하지 않음)
+        const keepLink = prev.linkedPaymentId != null && prev.type === type && Math.abs(Number(prev.amount) - amt) < 0.005;
+        await tx.update(prepaidLedgerTable).set({ ...values, linkedPaymentId: keepLink ? prev.linkedPaymentId : null }).where(eq(prepaidLedgerTable.id, prev.id));
+      } else {
+        await tx.insert(prepaidLedgerTable).values({ ...values, quoteId, status: "reserved", balanceBefore: null, balanceAfter: "0" });
+      }
+    }
+    const extra = prevInflow.slice(lines.length).map((r: any) => r.id);
+    if (extra.length) await tx.delete(prepaidLedgerTable).where(inArray(prepaidLedgerTable.id, extra));
   }
 
-  // 차감(reserved) — 실제 차감 적용액만 예약(추가청구액은 차감 아님)
+  // 차감 — 실제 차감 적용액만(추가청구액은 차감 아님). 견적당 1행을 갱신.
+  const dedKeep: any = prevDed[0] ?? null;
+  const dedExtra = prevDed.slice(dedKeep ? 1 : 0).map((r: any) => r.id);
+  if (dedExtra.length) await tx.delete(prepaidLedgerTable).where(inArray(prepaidLedgerTable.id, dedExtra));
   if (summary.appliedDeduction > 0) {
     const ratio = quoteTotal > 0 ? summary.appliedDeduction / quoteTotal : 0;
     const supply = Math.round(quoteSupply * ratio);
     const tax = summary.appliedDeduction - supply;
-    await tx.insert(prepaidLedgerTable).values({
-      accountId: account.id,
-      projectId: projectId ?? null,
-      quoteId,
-      type: "deduction",
-      status: "reserved",
-      amount: String(summary.appliedDeduction),
-      balanceBefore: null,
-      balanceAfter: "0",
-      supplyAmount: String(supply),
-      taxAmount: String(tax),
-      description: "서비스 차감(예약)",
-      transactionDate: txDate,
-      memo: prevDeduction?.memo ?? null,
-      createdBy: prevDeduction?.createdBy ?? null,
-    });
+    const values = { accountId: account.id, projectId: projectId ?? null, amount: String(summary.appliedDeduction), supplyAmount: String(supply), taxAmount: String(tax) };
+    if (dedKeep) {
+      await tx.update(prepaidLedgerTable).set(values).where(eq(prepaidLedgerTable.id, dedKeep.id));
+    } else {
+      await tx.insert(prepaidLedgerTable).values({ ...values, quoteId, type: "deduction", status: "reserved", balanceBefore: null, balanceAfter: "0", description: "서비스 차감", transactionDate: txDate });
+    }
+  } else if (dedKeep) {
+    await tx.delete(prepaidLedgerTable).where(eq(prepaidLedgerTable.id, dedKeep.id));
   }
 
   return { previousAvailable: state.available, incomingPrepaid, summary };
@@ -442,12 +433,14 @@ export async function confirmQuoteReservations(
       .where(eq(prepaidLedgerTable.id, row.id));
   }
 
-  // 2) 차감 확정 (가용 = 확정 후 잔액 기준으로 재캡 — 동시 전환/잔액 변동 이중 방어)
+  // 2) 차감 확정 — 상한 = 잔액 공식(누적 입금 − 누적 차감) 기준 가용액(다른 견적 예약분 포함). 견적 저장 때 이미 같은 공식으로 계산됨.
   let usageAmount = 0;
   const deductionRow = reserved.find((r: any) => r.type === "deduction");
   if (deductionRow) {
     const requested = Number(deductionRow.amount);
-    const applied = Math.min(balance, requested);
+    const [{ net: otherNet } = { net: 0 }] = (await tx.execute(sql`SELECT COALESCE(SUM(CASE WHEN type IN ('deduction','refund') THEN -amount ELSE amount END), 0)::text AS net
+      FROM prepaid_ledger WHERE account_id = ${accountId} AND status = 'reserved' AND quote_id IS DISTINCT FROM ${quoteId}`)).rows as any[];
+    const applied = Math.max(0, Math.min(balance + Number(otherNet ?? 0), requested));
     const before = balance;
     balance -= applied;
     usageAmount = applied;
@@ -462,7 +455,8 @@ export async function confirmQuoteReservations(
         taxAmount: tax != null ? String(tax) : null,
         balanceBefore: String(before),
         balanceAfter: String(balance),
-        description: "서비스 차감",
+        // 사용자가 원장에서 고친 거래 내용은 유지(기본 문구일 때만 표준화)
+        description: deductionRow.description && deductionRow.description !== "서비스 차감(예약)" ? deductionRow.description : "서비스 차감",
         transactionDate: deductionRow.transactionDate || today(),
         confirmedBy: actorId, confirmedAt: new Date(),
       })

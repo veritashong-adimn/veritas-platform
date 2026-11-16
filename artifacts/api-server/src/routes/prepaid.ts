@@ -4,7 +4,7 @@ import { eq, and, desc, sql } from "drizzle-orm";
 import { requireAuth, requireRole, requireStaffPermission } from "../middlewares/auth";
 import { getCompanyPrepaidState, confirmApprovedQuoteReservations, getLinkCandidates, linkAndConfirmQuoteReservations, getLinkedAmountByAccount } from "../services/prepaidDeductionQuote";
 import { logEvent } from "../lib/logEvent";
-import { writeHistory, snap as ledgerSnap } from "../services/prepaidLedger";
+import { writeHistory, snap as ledgerSnap, getAccountBalances } from "../services/prepaidLedger";
 
 const router = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -48,11 +48,12 @@ router.get("/prepaid/balance/:companyId", ...adminGuard, async (req, res) => {
 
     const activeAccounts = accounts.filter(a => a.status === "active");
     const totalInitial = activeAccounts.reduce((s, a) => s + Number(a.initialAmount), 0);
-    const totalBalance = activeAccounts.reduce((s, a) => s + Number(a.currentBalance), 0);
-    // 기존 입금 연결(판매관리 입금완료 참조)은 신규 입금 누계에 없으므로 사용액 계산에만 더한다
+    // 잔액 = 누적 입금 − 누적 차감(선입금관리 원장과 같은 공식)
+    const balMap = await getAccountBalances(db, activeAccounts.map(a => a.id));
+    const totalBalance = activeAccounts.reduce((s, a) => s + (balMap.get(a.id)?.balance ?? Number(a.currentBalance)), 0);
     const linkedMap = await getLinkedAmountByAccount(db, activeAccounts.map(a => a.id));
     const totalLinked = activeAccounts.reduce((s, a) => s + (linkedMap.get(a.id) ?? 0), 0);
-    const totalUsed = totalInitial + totalLinked - totalBalance;
+    const totalUsed = activeAccounts.reduce((s, a) => s + (balMap.get(a.id)?.deduction ?? 0), 0);
 
     res.json({
       companyId,
@@ -64,7 +65,7 @@ router.get("/prepaid/balance/:companyId", ...adminGuard, async (req, res) => {
       accounts: activeAccounts.map(a => ({
         ...a,
         initialAmount: Number(a.initialAmount),
-        currentBalance: Number(a.currentBalance),
+        currentBalance: balMap.get(a.id)?.balance ?? Number(a.currentBalance),
       })),
     });
   } catch (err) {
@@ -241,11 +242,12 @@ router.post("/prepaid/deduct", ...adminGuard, async (req, res) => {
       res.status(400).json({ error: "유효하지 않은 선입금 계정입니다." }); return;
     }
     const prevBalance = Number(acct.currentBalance);
-    if (amount > prevBalance) {
+    const shownBal = (await getAccountBalances(db, [accountId])).get(accountId)?.balance ?? prevBalance;   // 화면 잔액(누적 입금 − 누적 차감)
+    if (amount > shownBal) {
       res.status(400).json({
-        error: `잔액 부족: 현재 잔액 ${prevBalance.toLocaleString()}원, 차감 요청 ${amount.toLocaleString()}원`,
-        currentBalance: prevBalance,
-        shortage: amount - prevBalance,
+        error: `잔액 부족: 현재 잔액 ${shownBal.toLocaleString()}원, 차감 요청 ${amount.toLocaleString()}원`,
+        currentBalance: shownBal,
+        shortage: amount - shownBal,
       });
       return;
     }

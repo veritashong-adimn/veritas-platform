@@ -8,7 +8,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { requireAuth, requireRole, requireStaffPermission } from "../middlewares/auth";
-import { getCompanyOverview, getCompanyLedger, getLedgerEntryDetail, getLedgerHistory, editLedgerEntry } from "../services/prepaidLedger";
+import { getCompanyOverview, getCompanyLedger, getLedgerEntryDetail, getLedgerHistory, editLedgerEntry, getLedgerLinkCandidates } from "../services/prepaidLedger";
 import { logEvent } from "../lib/logEvent";
 
 const router = Router();
@@ -49,6 +49,13 @@ router.get("/prepaid/ledger/:id", ...adminGuard, noStore, async (req, res) => {
     req.log.error({ err }, "Failed to load prepaid ledger entry");
     res.status(500).json({ error: "원장 상세 조회 실패" });
   }
+});
+
+router.get("/prepaid/ledger/:id/link-candidates", ...adminGuard, noStore, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "유효하지 않은 원장 ID" }); return; }
+  try { const r = await getLedgerLinkCandidates(db, id); if (!r) { res.status(404).json({ error: "원장 행을 찾을 수 없습니다." }); return; } res.json(r); }
+  catch (err) { req.log.error({ err }, "Failed to load ledger link candidates"); res.status(500).json({ error: "기존 입금 후보 조회 실패" }); }
 });
 
 router.get("/prepaid/ledger/:id/history", ...adminGuard, noStore, async (req, res) => {

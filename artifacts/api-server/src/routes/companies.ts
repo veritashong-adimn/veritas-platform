@@ -27,6 +27,7 @@ import {
 } from "../lib/documentOcr";
 import { effectiveRevenueConditions } from "../services/quoteRelation";
 import { evaluateCompanyHardDeleteDependencies } from "../services/companyDependency";
+import { getCompanyBalances } from "../services/prepaidLedger";
 import { evaluateContactHardDeleteDependencies, evaluateDivisionHardDeleteDependencies } from "../services/masterDependency";
 
 // 외주분야 허용값(§4). 향후 확장 가능하되 과도한 구조는 만들지 않는다 — 서버에서 화이트리스트만 검증.
@@ -503,6 +504,7 @@ router.get("/admin/companies/:id", ...adminGuard, async (req, res) => {
         .limit(1);
       if (lastPrepaid) prepaidBalance = Number(lastPrepaid.prepaidBalanceAfter);
 
+
       // 마지막 결제일
       const [lastPm] = await db
         .select({ paymentDate: paymentsTable.paymentDate })
@@ -574,6 +576,8 @@ router.get("/admin/companies/:id", ...adminGuard, async (req, res) => {
       .where(and(eq(companyVendorProfilesTable.companyId, companyId), isNull(companyVendorProfilesTable.deletedAt)))
       .limit(1);
 
+    // 선입금 계정이 있으면 원장 잔액(누적 입금 − 누적 차감)을 우선 표시 — 선입금관리와 같은 값
+    { const ledgerBal = (await getCompanyBalances(db, [companyId])).get(companyId); if (ledgerBal) prepaidBalance = ledgerBal.balance; }
     res.json({ ...company, contacts, divisions: divisionsWithStats, projects, totalQuote, totalPayment, totalSettlement, prepaidBalance, activeAccumulatedCount, unpaidAmount, lastProjectDate, lastPaymentDate, nameHistory, changeHistory, vendorProfile: vendorProfile ?? null });
   } catch (err) {
     req.log.error({ err }, "Companies: failed to get detail");

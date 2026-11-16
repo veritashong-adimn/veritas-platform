@@ -23,19 +23,20 @@ type Detail = {
   quote: { id: number; quoteNumber: string | null; quoteType: string; status: string; title: string | null; projectId: number | null } | null;
   linkedPayment: { paymentId: number; projectId: number; projectTitle: string; saleNo: string | null; sequence: number; amount: number; paidDate: string | null } | null;
   createdByName: string | null; confirmedByName: string | null; modifiedAt: string | null; modifiedByName: string | null;
+  label: string;
   rules: { editable: boolean; quoteManaged: boolean; notice: string | null; fields: Record<string, FieldRule> };
 };
+type Candidate = { paymentId: number; projectId: number; projectTitle: string | null; saleNo: string | null; sequence: number | null; amount: number; paidDate: string | null; linkedRow: number | null };
 type History = { id: number; ledgerId: number; related: boolean; action: string; before: any; after: any; reason: string | null; changedAt: string; changedByName: string | null };
-type Form = { transactionDate: string; type: string; amount: string; supplyAmount: string; taxAmount: string; description: string; sourceRef: string; lineNote: string; memo: string; quoteId: string; projectId: string };
+type Form = { transactionDate: string; type: string; amount: string; supplyAmount: string; taxAmount: string; description: string; sourceRef: string; lineNote: string; memo: string; quoteId: string; projectId: string; linkedPaymentId: string };
 
 const FIELD_LABEL: Record<string, string> = {
   transactionDate: "거래일", type: "구분", amount: "금액", supplyAmount: "공급가", taxAmount: "부가세", description: "거래 내용", memo: "비고",
-  quoteId: "연결 견적", projectId: "연결 판매", status: "상태", linkedPaymentId: "기존 입금 연결", accountId: "계정",
+  quoteId: "연결 견적", projectId: "연결 판매", linkedPaymentId: "기존 입금 연결",
 };
 const ACTION_LABEL: Record<string, string> = { create: "등록", update: "수정", quote_sync: "견적 연동 재계산", delete: "삭제", link: "기존 입금 연결", confirm: "확정" };
-const STATUS_TEXT: Record<string, string> = { confirmed: "확정", reserved: "예정", released: "해제" };
 const fmtVal = (k: string, v: any) => v == null || v === "" ? "(없음)" : ["amount", "supplyAmount", "taxAmount", "balanceBefore", "balanceAfter"].includes(k) ? `${won(Number(v))}원`
-  : k === "type" ? (TYPE_LABEL[v] ?? v) : k === "status" ? (STATUS_TEXT[v] ?? v) : k === "transactionDate" ? formatDisplayDate(String(v)) : String(v);
+  : k === "type" ? (TYPE_LABEL[v] ?? v) : k === "linkedPaymentId" ? `청구회차 #${v}` : k === "transactionDate" ? formatDisplayDate(String(v)) : String(v);
 const fmtTs = (s: string | null) => (s ? new Date(s).toLocaleString("ko-KR", { hour12: false }) : "-");
 const toNum = (s: string) => (s.trim() === "" ? null : Number(s.replace(/,/g, "")));
 
@@ -52,6 +53,11 @@ export function PrepaidLedgerEntryModal({ entryId, authHeaders, canManage, canDe
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [cands, setCands] = useState<Candidate[]>([]);
+  useEffect(() => {
+    if (!editing) return;
+    getJson<Candidate[]>(`/api/prepaid/ledger/${entryId}/link-candidates`, authHeaders).then(setCands).catch(() => setCands([]));
+  }, [editing, entryId, authHeaders]);
 
   const toForm = (d: Detail): Form => {
     const p = parseQuoteLineDesc(d.entry.description);
@@ -60,6 +66,7 @@ export function PrepaidLedgerEntryModal({ entryId, authHeaders, canManage, canDe
       supplyAmount: d.entry.supplyAmount != null ? String(d.entry.supplyAmount) : "", taxAmount: d.entry.taxAmount != null ? String(d.entry.taxAmount) : "",
       description: d.entry.description ?? "", sourceRef: p.sourceRef, lineNote: p.note, memo: d.entry.memo ?? "",
       quoteId: d.entry.quoteId != null ? String(d.entry.quoteId) : "", projectId: d.entry.projectId != null ? String(d.entry.projectId) : "",
+      linkedPaymentId: d.entry.linkedPaymentId != null ? String(d.entry.linkedPaymentId) : "",
     };
   };
   const load = useCallback(async () => {
@@ -98,14 +105,13 @@ export function PrepaidLedgerEntryModal({ entryId, authHeaders, canManage, canDe
     if ((form.memo.trim() || null) !== (e.memo ?? null)) out.memo = form.memo.trim() || null;
     const qid = form.quoteId.trim() ? Number(form.quoteId) : null; if (qid !== e.quoteId) out.quoteId = qid;
     const pid = form.projectId.trim() ? Number(form.projectId) : null; if (pid !== e.projectId) out.projectId = pid;
+    const lid = form.linkedPaymentId ? Number(form.linkedPaymentId) : null; if (lid !== e.linkedPaymentId) out.linkedPaymentId = lid;
     return out;
   }, [e, form, isDed, quoteInflow]);
   const dirty = Object.keys(changes).length > 0;
-  const needReason = !!e && e.status === "confirmed" && ["amount", "type", "supplyAmount", "taxAmount"].some(k => k in changes);
 
   const save = async () => {
     if (!e || !dirty || saving) return;
-    if (needReason && !reason.trim()) { setErrors(["확정 거래의 금액·유형을 정정할 때는 수정 사유를 입력하세요."]); return; }
     setSaving(true); setErrors([]); setSavedAt(null);
     try {
       const send = (confirmImpact: boolean) => fetch(api(`/api/prepaid/ledger/${entryId}`), {
@@ -117,9 +123,9 @@ export function PrepaidLedgerEntryModal({ entryId, authHeaders, canManage, canDe
         const im = d.impact;
         const lines = [
           ...im.warnings.map((w: string) => `⚠ ${w}`), "",
-          `확정 잔액 ${won(im.balance.before)}원 → ${won(im.balance.after)}원`,
+          `잔액 ${won(im.balance.before)}원 → ${won(im.balance.after)}원`,
           ...(im.quote ? [`견적 ${im.quote.quoteNumber ?? "#" + im.quote.id} 차감 적용액 ${won(im.quote.before.usageAmount)}원 → ${won(im.quote.after.usageAmount)}원 · 차감 후 잔액 ${won(im.quote.before.balanceAfter)}원 → ${won(im.quote.after.balanceAfter)}원`] : []),
-          ...im.otherFinancialChanges.filter((o: any) => !o.removed && !o.added).map((o: any) => `원장 #${o.id}(${STATUS_TEXT[o.status] ?? o.status} ${TYPE_LABEL[o.type] ?? o.type}) ${FIELD_LABEL[o.field] ?? o.field}: ${fmtVal(o.field, o.before)} → ${fmtVal(o.field, o.after)}`),
+          ...im.otherFinancialChanges.filter((o: any) => !o.removed && !o.added).map((o: any) => `원장 #${o.id}(${TYPE_LABEL[o.type] ?? o.type}) ${FIELD_LABEL[o.field] ?? o.field}: ${fmtVal(o.field, o.before)} → ${fmtVal(o.field, o.after)}`),
           ...(im.balanceOnlyRows ? [`잔액 표시만 바뀌는 확정 행 ${im.balanceOnlyRows}건`] : []),
           "", "원래 값은 수정 이력에 보존됩니다.",
         ];
@@ -181,8 +187,7 @@ export function PrepaidLedgerEntryModal({ entryId, authHeaders, canManage, canDe
               <div style={{ display: "grid", gridTemplateColumns: "110px 1fr 110px 1fr", columnGap: 12, marginBottom: 10 }}>
                 {info("거래처", detail.companyName)}
                 {info("거래일", formatDisplayDate(e.transactionDate))}
-                {info("거래 유형", detail.linkedPayment ? "기존 입금 연결" : TYPE_LABEL[e.type] ?? e.type)}
-                {info("처리 상태", <b style={{ color: e.status === "confirmed" ? "#15803d" : "#92400e" }}>{STATUS_TEXT[e.status] ?? e.status}</b>)}
+                {info("구분", detail.label)}
                 {info(isDed ? "차감액" : "입금액", <b style={{ color: isDed ? "#b91c1c" : "#15803d" }}>{won(e.amount)}원</b>)}
                 {info("공급가 / 부가세", isDed && e.supplyAmount != null ? `${won(e.supplyAmount)} / ${won(e.taxAmount)}` : "-")}
                 {info("연결 견적번호", detail.quote ? `${detail.quote.quoteNumber ?? "#" + detail.quote.id}${detail.quote.title ? ` · ${detail.quote.title}` : ""}` : "-")}
@@ -192,7 +197,6 @@ export function PrepaidLedgerEntryModal({ entryId, authHeaders, canManage, canDe
                 {info("거래 내용", e.description ?? "-")}
                 {info("비고", e.memo ?? "-")}
                 {info("등록자", `${detail.createdByName ?? "-"} · ${fmtTs(e.createdAt)}`)}
-                {info("확정", e.confirmedAt ? `${detail.confirmedByName ?? "-"} · ${fmtTs(e.confirmedAt)}` : "-")}
                 {info("최종 수정자", detail.modifiedByName ?? "-")}
                 {info("최종 수정일시", fmtTs(detail.modifiedAt))}
               </div>
@@ -236,10 +240,23 @@ export function PrepaidLedgerEntryModal({ entryId, authHeaders, canManage, canDe
                 ) : (
                   <div style={{ gridColumn: "1 / -1" }}>{lbl("거래 내용", "description")}<input value={form.description} onChange={ev => setForm({ ...form, description: ev.target.value })} disabled={!f("description")} aria-label="거래 내용" data-testid="entry-desc" style={f("description") ? inp : dis} /></div>
                 )}
+                {!isDed && (
+                  <div style={{ gridColumn: "1 / -1" }}>{lbl("기존 입금 연결(판매·수금관리에 이미 기록된 입금 — 새 입금으로 이중 계산하지 않음)", "linkedPaymentId")}
+                    <select value={form.linkedPaymentId} onChange={ev => setForm({ ...form, linkedPaymentId: ev.target.value })} disabled={!f("linkedPaymentId")}
+                      aria-label="기존 입금 연결" data-testid="entry-link" style={f("linkedPaymentId") ? inp : dis}>
+                      <option value="">연결 안 함(선입금관리에서 받은 입금)</option>
+                      {cands.map(c => (
+                        <option key={c.paymentId} value={String(c.paymentId)} disabled={c.linkedRow != null}>
+                          판매 #{c.projectId}{c.saleNo ? `(${c.saleNo})` : ""} {c.sequence ?? "-"}회차 · {won(c.amount)}원 · 입금 {c.paidDate ?? "-"}{c.linkedRow != null ? ` — 원장 #${c.linkedRow}에 연결됨` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div style={{ gridColumn: "1 / -1" }}>{lbl("비고", "memo")}<input value={form.memo} onChange={ev => setForm({ ...form, memo: ev.target.value })} disabled={!f("memo")} aria-label="비고" data-testid="entry-memo" style={f("memo") ? inp : dis} /></div>
                 <div style={{ gridColumn: "1 / -1" }}>
-                  {lbl(needReason ? "수정 사유 (확정 거래 정정 — 필수)" : "수정 사유 (선택)")}
-                  <input value={reason} onChange={ev => setReason(ev.target.value)} placeholder="예: CRM 원본 대조 결과 입금액 정정" aria-label="수정 사유" data-testid="entry-reason" style={{ ...inp, borderColor: needReason && !reason.trim() ? "#f59e0b" : "#d1d5db" }} />
+                  {lbl("수정 사유 (선택)")}
+                  <input value={reason} onChange={ev => setReason(ev.target.value)} placeholder="예: 입금액 정정" aria-label="수정 사유" data-testid="entry-reason" style={inp} />
                 </div>
               </div>
               {errors.length > 0 && <div role="alert" data-testid="entry-errors" style={{ marginTop: 10, background: "#fef2f2", border: "1px solid #fecaca", color: "#b91c1c", borderRadius: 6, padding: "7px 10px", fontSize: 12, whiteSpace: "pre-line" }}>{errors.join("\n")}</div>}

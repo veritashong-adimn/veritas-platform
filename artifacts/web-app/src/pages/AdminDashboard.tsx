@@ -30,7 +30,6 @@ import { ProjectDetailModal } from '../components/admin/ProjectDetailModal';
 import { SidebarAccountMenu } from '../components/shared/MyAccount';
 import { DateField } from '../components/admin/DatePickerShared';
 import '../components/admin/readTableView.css';
-import { PrepaidLedgerModal } from '../components/admin/PrepaidLedgerModal';
 import { PrepaidLedgerTab } from '../components/admin/PrepaidLedgerTab';
 import { ResetPasswordModal } from '../components/admin/ResetPasswordModal';
 import { BoardPostDetailModal } from '../components/admin/BoardPostDetailModal';
@@ -71,7 +70,6 @@ import { CollectionsTab } from '../components/admin/CollectionsTab';
 import { StaffManagementTab } from '../components/admin/StaffManagementTab';
 import { exportContacts } from '../lib/contactExcel';
 import { exportTranslators } from '../lib/translatorExcel';
-import { exportPrepaidAccounts } from '../lib/prepaidExcel';
 import { educationDisplay } from "../lib/educationDisplay";
 
 const inputStyle: React.CSSProperties = {
@@ -289,7 +287,6 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     /** 확정 대기(차감 견적 예약) — 확정 잔액과 분리된 예상값 */ pendingInflow?: number; pendingDeduction?: number; expectedBalance?: number; pendingQuoteCount?: number; linkedAmount?: number; usedAmount?: number };
   const [prepaidAccounts, setPrepaidAccounts] = useState<PrepaidAccount[]>([]);
   const [prepaidLoading, setPrepaidLoading] = useState(false);
-  const [selectedPrepaidAccountId, setSelectedPrepaidAccountId] = useState<number | null>(null);
   const [showCreatePrepaidForm, setShowCreatePrepaidForm] = useState(false);
   const [createPrepaidForm, setCreatePrepaidForm] = useState({ companyId: "", initialAmount: "", note: "", depositDate: new Date().toISOString().slice(0, 10) });
   const [savingPrepaid, setSavingPrepaid] = useState(false);
@@ -2972,19 +2969,6 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
         <Section title="거래처별 선입금 원장"
           action={
             <div style={{ display: "flex", gap: 8 }}>
-              <GhostBtn
-                onClick={() => {
-                  const rows = prepaidAccounts;
-                  if (rows.length === 0) { setToast("다운로드할 선입금 계정이 없습니다."); return; }
-                  exportPrepaidAccounts(rows);
-                  setToast(`${rows.length.toLocaleString()}건을 Excel로 내보냈습니다.`);
-                }}
-                style={{ fontSize: 12, padding: "6px 14px" }}
-                data-testid="prepaid-excel-export-btn"
-                aria-label="선입금 계정 요약 Excel 다운로드"
-              >
-                계정 Excel
-              </GhostBtn>
               <GhostBtn onClick={() => { fetchPrepaidAccounts(); setPrepaidReloadKey(k => k + 1); }} data-testid="prepaid-refresh-all" aria-label="선입금 전체 새로고침" style={{ fontSize: 12, padding: "6px 14px" }}>새로고침</GhostBtn>
               {(user.role === "admin" || hasPerm("prepaid.manage")) && (
                 <PrimaryBtn onClick={() => setShowCreatePrepaidForm(true)} data-testid="btn-prepaid-create" aria-label="선입금 계정 등록" style={{ fontSize: 12, padding: "6px 14px" }}>
@@ -3038,27 +3022,13 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             authHeaders={authHeaders}
             canManage={user.role === "admin" || hasPerm("prepaid.manage")}
             canDelete={user.role === "admin"}
-            isAdmin={user.role === "admin"}
             reloadKey={prepaidReloadKey}
-            onOpenAccount={id => setSelectedPrepaidAccountId(id)}
             onChanged={fetchPrepaidAccounts}
             onToast={setToast}
           />
         </Section>
       )}
 
-      {/* 선입금 원장 모달 */}
-      {selectedPrepaidAccountId !== null && (
-        <PrepaidLedgerModal
-          accountId={selectedPrepaidAccountId}
-          authHeaders={authHeaders}
-          onClose={() => setSelectedPrepaidAccountId(null)}
-          onUpdate={() => { fetchPrepaidAccounts(); setPrepaidReloadKey(k => k + 1); }}
-          canManage={user.role === "admin" || hasPerm("prepaid.manage")}
-          canDelete={user.role === "admin"}
-          isAdmin={user.role === "admin"}
-        />
-      )}
 
       {/* ── 누적 청구 탭 ── */}
       {adminTab === "billing" && (
