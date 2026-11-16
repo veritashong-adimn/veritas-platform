@@ -16,6 +16,7 @@ import { eq, and, or, ilike, gte, lte, count, desc, sql, type SQL } from "drizzl
 import { alias } from "drizzle-orm/pg-core";
 import { requireAuth, requireRole } from "../middlewares/auth";
 import { buildFilteredSalesProjectList } from "./admin";
+import { loadSaleIdentities, saleIdentityMatches, type SaleIdentity } from "../services/saleIdentity";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -62,6 +63,11 @@ export interface SalesHistoryRow {
   paymentMemo: string | null;
   // (additive) 입금상태 — current 는 청구정보 실제 입금 기준 completed/partial(입금 없음 null). legacy 는 null(원본 문자열만).
   paymentStatus?: "completed" | "partial" | null;
+  // (additive) 판매건 식별 — 판매번호(current: 견적번호 표시형 / 과거 CRM: 원본 판매번호)·원 견적번호·프로젝트명.
+  //   projectNameFallback=true 면 실제 프로젝트명이 아닌 대체 표시값(과거 CRM 전환 시 상품명으로 채워진 제목).
+  quoteNumber?: string | null;
+  projectName?: string | null;
+  projectNameFallback?: boolean;
 }
 
 function toDateStr(v: unknown): string | null {
@@ -124,21 +130,21 @@ async function fillPmNames(dbx: any, list: SalesHistoryRow[]) {
 //  · 대표 견적 = 유효본(is_current)·미삭제 중 원견적(relation_type 없음) 우선 → 가장 작은 id. 판매 1건당 1개만 사용(행 중복 없음).
 //  · issue_date 는 date 컬럼(문자열 YYYY-MM-DD) — 시간대 변환하지 않는다.
 //  · 정렬이 페이지 분할 전에 적용되도록 전체 current 행에 대해 1회 일괄 조회.
-async function fillSaleDates(dbx: any, list: SalesHistoryRow[]): Promise<Map<number, number>> {
+//  · 판매번호·원 견적번호·프로젝트명도 같은 대표 견적/판매에서 채운다(services/saleIdentity — 판매 Excel 과 공용).
+function fillSaleDates(list: SalesHistoryRow[], idMap: Map<number, SaleIdentity>): Map<number, number> {
   const quoteIdByProject = new Map<number, number>();
-  if (!list.length) return quoteIdByProject;
-  const ids = sql.join(list.map(r => sql`${Number(r.id)}`), sql`, `);
-  const qs = (await dbx.execute(sql`SELECT DISTINCT ON (project_id) project_id, id, issue_date::text AS issue_date
-    FROM quotes WHERE project_id IN (${ids}) AND is_current = true AND deleted_at IS NULL
-    ORDER BY project_id, (relation_type IS NULL) DESC, id ASC`)).rows as any[];
-  const byProject = new Map(qs.map(q => [Number(q.project_id), q]));
   for (const r of list) {
-    const q = byProject.get(Number(r.id));
-    if (!q) continue;
-    quoteIdByProject.set(Number(r.id), Number(q.id));
+    const idn = idMap.get(Number(r.id));
+    if (!idn) continue;
+    r.saleNumber = idn.saleNumber;
+    r.quoteNumber = idn.quoteNumber;
+    r.projectName = idn.projectName;
+    r.projectNameFallback = idn.projectNameFallback;
+    if (idn.quoteId == null) continue;
+    quoteIdByProject.set(Number(r.id), idn.quoteId);
     // 판매전환 전(견적 단계: created/quoted) 프로젝트의 견적일은 판매일이 아니다 → 날짜 미표시(기존과 동일하게 뒤쪽).
     if (r.workflowStatus === "created" || r.workflowStatus === "quoted") continue;
-    r.recordDate = toDateStr(q.issue_date);
+    r.recordDate = toDateStr(idn.issueDate);
   }
   return quoteIdByProject;
 }
@@ -262,6 +268,9 @@ function mapLegacyRow(r: any): SalesHistoryRow {
     salesRep: r.salesRep ?? null,               // 원본 영업담당자 값 그대로
     paymentDate: r.paymentDate ?? null,         // 원본 입금일(YYYY-MM-DD)
     paymentMemo: r.paymentMemo ?? null,         // 원본 입금내역 문자열 보존(상태 변환 없음)
+    quoteNumber: null,
+    projectName: r.opportunity ?? null,          // 원본 '영업기회명'(없으면 null → '-', 임의 생성 없음)
+    projectNameFallback: false,
   };
 }
 
@@ -275,6 +284,8 @@ function legacyWhere(q: Record<string, string | undefined>): SQL {
   if (q.search?.trim() || q.q?.trim()) {
     const term = likeTerm((q.search || q.q || "").trim());
     const orExpr = or(ilike(LA.companyName, term), ilike(LA.contactName, term), ilike(LA.productName, term),
+      // 판매번호 · 프로젝트명(원본 영업기회명)
+      sql`${LA.sourceRaw} ->> '판매번호' ILIKE ${term}`, sql`${LA.sourceRaw} ->> '영업기회명' ILIKE ${term}`,
       // 고객 담당자명 검색 — 진행관리표 복원 고객명·연결된 담당자 Master 이름
       sql`EXISTS (SELECT 1 FROM legacy_sales_progress_links sl JOIN legacy_archive_rows sp ON sp.id = sl.progress_row_id AND sp.is_effective
         WHERE sl.sale_row_id = ${LA.id} AND sl.decision = 'confirmed' AND sp.source_raw ->> '고객명' ILIKE ${term})`,
@@ -325,7 +336,17 @@ export async function getSalesHistory(dbx: any, q: Record<string, string | undef
     try {
       const list = await buildFilteredSalesProjectList(q);
       currentRows = (list as any[]).map(mapCurrentRow);
-      quoteIdByProject = await fillSaleDates(dbx, currentRows);
+      // 판매번호 검색 — 기존 검색(판매명=프로젝트명·거래처·담당자 등) 결과에 판매번호/견적번호/원본 판매번호 일치 판매를 더한다(전체 대상, 페이지 분할 전).
+      const term = (q.search || q.q || "").trim();
+      let extra: SalesHistoryRow[] = [];
+      if (term) {
+        const seen = new Set(currentRows.map(r => Number(r.id)));
+        extra = ((await buildFilteredSalesProjectList({ ...q, search: undefined, q: undefined })) as any[])
+          .filter(p => !seen.has(Number(p.id))).map(mapCurrentRow);
+      }
+      const idMap = await loadSaleIdentities(dbx, [...currentRows, ...extra].map(r => Number(r.id)));
+      if (extra.length) currentRows = [...currentRows, ...extra.filter(r => saleIdentityMatches(idMap.get(Number(r.id)), term))];
+      quoteIdByProject = fillSaleDates(currentRows, idMap);
       await markLegacyOrigin(dbx, currentRows);   // 과거 CRM 전환 판매는 원본 판매번호 날짜 유지(기존 규칙)
       await fillPmNames(dbx, currentRows);
       sources.current = { ok: true, count: currentRows.length };
@@ -364,6 +385,7 @@ export async function getSalesHistory(dbx: any, q: Record<string, string | undef
         salesRep: sql<string | null>`nullif(btrim(${LA.sourceRaw} ->> '영업담당자'), '')`,
         paymentDate: sql<string | null>`substring(${LA.sourceRaw} ->> '입금일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}')`,
         paymentMemo: sql<string | null>`nullif(btrim(${LA.sourceRaw} ->> '입금내역'), '')`,
+        opportunity: sql<string | null>`nullif(btrim(${LA.sourceRaw} ->> '영업기회명'), '')`,
         // 내부 영업담당자 이름이 고객명 칸에 들어간 경우는 고객 담당자로 쓰지 않는다
         customerContact: sql<string | null>`case when ${custSq.dn} = 1 and replace(${custSq.oneName}, ' ', '') <> replace(coalesce(${LA.sourceRaw} ->> '영업담당자', ''), ' ', '') then ${custSq.oneName} when ${custSq.dn} > 1 then '확인 필요' else null end`,
         reviewNeeded: sql<boolean>`${LA.id} IN (SELECT rr.entity_id FROM import_row_sources rr JOIN import_batches rb ON rb.id = rr.batch_id AND rb.is_current AND rb.module = ${RESTORE_MODULE}

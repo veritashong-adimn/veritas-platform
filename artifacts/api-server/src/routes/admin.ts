@@ -40,6 +40,7 @@ import {
 } from "../services/prepaidDeductionQuote";
 import { closeAccumulatedBatchQuote } from "../services/accumulatedBatch";
 import { effectiveQuoteConditions, getQuoteFamily, resolveChainCurrent } from "../services/quoteRelation";
+import { loadSaleIdentities } from "../services/saleIdentity";
 import { applyParentIndexLinks } from "../services/quoteItemGroup";
 import { createRevision, approveRevision, rejectRevision } from "../services/quoteRevision";
 import { createDerivedSplit, approveDerived, rejectDerived, calculateAllocation, generateDerivedBillingRows, type DerivedSplitInput } from "../services/quoteDerived";
@@ -417,6 +418,8 @@ router.get("/admin/projects/export", ...adminGuard, async (req, res) => {
     const adminIds = Array.from(new Set(base.map((p) => p.adminId).filter((x): x is number => x != null)));
     const pmRows = adminIds.length ? await db.select({ id: usersTable.id, name: usersTable.name }).from(usersTable).where(inArray(usersTable.id, adminIds)) : [];
     const pmById = new Map(pmRows.map((r) => [r.id, r.name]));
+    // 5) 판매번호 — 판매관리 목록과 같은 규칙(services/saleIdentity, 일괄 조회)
+    const idMap = await loadSaleIdentities(db, projectIds);
 
     const rows = base.map((p) => {
       const sale = saleByProject.get(p.id);
@@ -424,6 +427,7 @@ router.get("/admin/projects/export", ...adminGuard, async (req, res) => {
       const bill = billByProject.get(p.id);
       const saleTotal = sale && sale.total > 0 ? sale.total : (priceSumByProject.get(p.id) ?? Number(p.quotePrice ?? 0));
       return {
+        saleNumber: idMap.get(p.id)?.saleNumber ?? "",
         quoteNumber: rep?.quoteNumber ?? "",
         title: p.title ?? "",
         quoteType: p.quoteType ?? "",

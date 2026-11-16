@@ -7,6 +7,7 @@
 import { exportDataset, todayStamp, type ExcelColumn } from './excelExport';
 
 export interface SalesExportRow {
+  saleNumber?: string;   // 판매관리 목록과 같은 판매번호(서버 saleIdentity)
   quoteNumber?: string;
   title?: string;
   quoteType?: string;
@@ -50,6 +51,7 @@ const TAXDOC_LABEL: Record<string, string> = {
 const num = (v: number | null | undefined) => (typeof v === 'number' ? v : '');
 
 const SALES_LIST_COLUMNS: ExcelColumn<SalesExportRow>[] = [
+  { header: '판매번호', value: 'saleNumber' },
   { header: '견적번호', value: 'quoteNumber' },
   { header: '프로젝트명', value: 'title' },
   { header: '판매유형', value: (r) => QUOTE_TYPE_LABEL[r.quoteType ?? ''] ?? r.quoteType ?? '' },

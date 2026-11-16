@@ -17,7 +17,16 @@ type Row = {
   taxInvoiceDate: string | null; salesRep: string | null;
   paymentDate: string | null; paymentMemo: string | null;
   paymentStatus?: 'completed' | 'partial' | null;   // current: 청구정보 실제 입금 기준(입금 없음 null)
+  // 판매건 식별(서버 saleIdentity) — 판매번호 / 원 견적번호 / 프로젝트명(대체값이면 projectNameFallback)
+  saleNumber?: string | null; quoteNumber?: string | null; projectName?: string | null; projectNameFallback?: boolean;
 };
+
+// 열 구성(폭 px) — 판매번호·프로젝트명 추가로 표가 넓어지면 기존 표 가로 스크롤(overflowX)을 사용한다.
+const COLUMNS: [string, number][] = [
+  ['날짜', 130], ['판매번호', 150], ['거래처', 190], ['고객 담당자', 110], ['프로젝트명', 240], ['통역/번역', 80],
+  ['상품', 170], ['금액', 100], ['계산서발행일', 110], ['입금일', 100], ['입금내역', 120], ['담당PM', 90],
+];
+const TABLE_MIN_WIDTH = COLUMNS.reduce((s, [, w]) => s + w, 0);
 
 // (표시 전용) 통역/번역 서비스 유형 분류 — 원본 변경 없이 상품명 기준.
 //   통역→통역 / 번역→번역 / 상품명은 있으나 통역·번역 아님(장비 등)→기타 / 상품명 없음·둘 다 명시(확정 불가)→미분류.
@@ -94,7 +103,7 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
       {/* 검색 */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
         <input value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') load(1, q); }}
-               placeholder="판매명 · 거래처 · 담당자 · 상품 통합검색 (현재 + 과거 CRM)" aria-label="통합 판매이력 검색" data-testid="sales-history-search"
+               placeholder="판매번호 · 프로젝트명 · 거래처 · 담당자 · 상품 통합검색 (현재 + 과거 CRM)" aria-label="통합 판매이력 검색" data-testid="sales-history-search"
                style={{ padding: '8px 11px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13, flex: '1 1 320px', maxWidth: 420 }} />
         <button style={btn(loading, true)} disabled={loading} onClick={() => load(1, q)} data-testid="sales-history-search-btn">{loading ? '검색 중…' : '검색'}</button>
         <span style={{ fontSize: 12, color: '#6b7280' }}>총 {(p?.total ?? 0).toLocaleString()}건{range === 'all' ? ' (현재+과거)' : ' (과거 CRM)'}</span>
@@ -110,10 +119,10 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
       {/* 표 자체 스크롤 영역(세로/가로). 헤더는 이 영역 상단에 sticky — 페이지 상단 메뉴·검색영역과 겹치지 않음. */}
       <div ref={tableScrollRef} onScroll={e => { tableScrollTop.current = e.currentTarget.scrollTop; }}
            style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 300px)', border: '1px solid #e5e7eb', borderRadius: 10 }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, tableLayout: 'fixed' }}>
+        <table style={{ width: '100%', minWidth: TABLE_MIN_WIDTH, borderCollapse: 'collapse', fontSize: 13, tableLayout: 'fixed' }}>
           <thead>
             <tr style={{ textAlign: 'left' }}>
-              {([['날짜', '8%'], ['거래처', '22%'], ['고객 담당자', '9%'], ['통역/번역', '7%'], ['상품', '14%'], ['금액', '8%'], ['계산서발행일', '10%'], ['입금일', '8%'], ['입금내역', '7%'], ['담당PM', '7%']] as [string, string][]).map(([h, w]) => (
+              {COLUMNS.map(([h, w]) => (
                 <th key={h} style={{ width: w, padding: '10px 12px', borderBottom: '1px solid #e5e7eb', whiteSpace: 'nowrap', position: 'sticky', top: 0, zIndex: 2, background: '#f3f4f6' }}>{h}</th>
               ))}
             </tr>
@@ -129,11 +138,23 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
                     style={{ borderBottom: '1px solid #f3f4f6', cursor: 'pointer', background: zebra, transition: 'background-color 0.12s ease' }}
                     onMouseEnter={e => (e.currentTarget.style.background = '#f3f4f6')} onMouseLeave={e => (e.currentTarget.style.background = zebra)}>
                   {/* 구분 badge 열 제거 — 현재/과거 구분은 탭 필터·행 클릭 라우팅(isLegacy)으로 유지 */}
-                  {/* 열 순서: 날짜 | 거래처 | 고객 담당자 | 통역/번역 | 상품 | 금액 | 계산서발행일 | 입금일 | 입금내역 | 담당PM */}
+                  {/* 열 순서: 날짜 | 판매번호 | 거래처 | 고객 담당자 | 프로젝트명 | 통역/번역 | 상품 | 금액 | 계산서발행일 | 입금일 | 입금내역 | 담당PM */}
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {r.recordDate ?? '-'}
                     {/* 과거 CRM 에서 운영 전환된 판매건 — 출처 표시(목록에는 운영 판매 1건만 표시) */}
                     {r.origin === 'legacy_crm' && <span style={{ marginLeft: 6, padding: '1px 5px', borderRadius: 4, background: '#fef3c7', color: '#92400e', fontSize: 10, fontWeight: 700 }} data-testid={`sh-origin-${r.key}`}>과거 CRM</span>}
+                  </td>
+                  {/* 판매번호 — 클릭 시 해당 판매 상세(행 클릭과 같은 경로: current=판매 ID, 과거 CRM=원본 행 ID). 이름·금액으로 연결하지 않음. */}
+                  <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                      title={r.saleNumber ? `${r.saleNumber}${r.quoteNumber && r.quoteNumber !== r.saleNumber ? ` (견적번호 ${r.quoteNumber})` : ''}` : undefined}>
+                    {r.saleNumber ? (
+                      <button type="button" data-testid={`sh-saleno-${r.key}`} aria-label={`판매번호 ${r.saleNumber} 상세 보기`}
+                        onClick={e => { e.stopPropagation(); if (isLegacy) onOpenLegacyDetail(Number(r.id)); else onOpenSalesDetail(Number(r.id)); }}
+                        style={{ border: 'none', background: 'transparent', padding: '2px 4px', cursor: 'pointer', color: '#2563eb', fontWeight: 600, fontSize: 13,
+                          textDecoration: 'underline', textUnderlineOffset: 2, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', fontVariantNumeric: 'tabular-nums' }}>
+                        {r.saleNumber}
+                      </button>
+                    ) : <span style={{ padding: '0 4px', color: '#9ca3af' }}>-</span>}
                   </td>
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.companyName ?? undefined}>{r.companyName ?? '-'}</td>
                   {/* 고객 담당자 = 거래처 측 담당자(contactName). 담당PM 과 서로 대체하지 않음. */}
@@ -153,6 +174,13 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
                   ) : (
                     <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.contactName ?? undefined}>{r.contactName ?? '-'}</td>
                   )}
+                  {/* 프로젝트명 — 한 줄 + 말줄임, 마우스 오버 시 전체(title). 대체값(과거 CRM 전환 시 상품명으로 채워진 제목)은 회색 기울임으로 구분. */}
+                  <td data-testid={`sh-project-${r.key}`} data-fallback={r.projectNameFallback ? 'true' : undefined}
+                      style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                        color: r.projectNameFallback ? '#9ca3af' : undefined, fontStyle: r.projectNameFallback ? 'italic' : undefined }}
+                      title={r.projectName ? (r.projectNameFallback ? `${r.projectName} — 프로젝트명 없음(상품명 대체 표시)` : r.projectName) : undefined}>
+                    {r.projectName ?? '-'}
+                  </td>
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap' }}>{serviceTypeOf(r)}</td>
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.productName ?? undefined}>{r.productName ?? '-'}</td>
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.amount != null ? r.amount.toLocaleString() : '-'}</td>
@@ -172,7 +200,7 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
               );
             })}
             {rows.length === 0 && !loading && (
-              <tr><td colSpan={10} style={{ padding: 32, textAlign: 'center', color: '#9ca3af' }} data-testid="sales-history-empty">검색 결과가 없습니다.</td></tr>
+              <tr><td colSpan={COLUMNS.length} style={{ padding: 32, textAlign: 'center', color: '#9ca3af' }} data-testid="sales-history-empty">검색 결과가 없습니다.</td></tr>
             )}
           </tbody>
         </table>
