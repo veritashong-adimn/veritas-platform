@@ -202,6 +202,22 @@ export async function syncQuoteReservations(
       ))
     : [];
 
+  // 재작성 전 예약 행 — 기존 입금 연결(linked_payment_id)은 같은 유형·금액의 새 행에 이어 붙이고(연결 소실 방지),
+  //  사용자가 원장에서 입력한 비고(memo)·등록자는 같은 유형·금액 → 같은 유형 순서로 이어 붙인다(견적 저장이 사용자 입력을 지우지 않도록).
+  const prevReserved = await tx.select({ id: prepaidLedgerTable.id, type: prepaidLedgerTable.type, amount: prepaidLedgerTable.amount, linkedPaymentId: prepaidLedgerTable.linkedPaymentId,
+      memo: prepaidLedgerTable.memo, createdBy: prepaidLedgerTable.createdBy })
+    .from(prepaidLedgerTable).where(and(eq(prepaidLedgerTable.quoteId, quoteId), eq(prepaidLedgerTable.status, "reserved"))).orderBy(prepaidLedgerTable.id);
+  const prevLinks = prevReserved.filter((r: any) => r.linkedPaymentId != null);
+  const prevInflowCarry = prevReserved.filter((r: any) => isInflowType(r.type) && (r.memo != null || r.createdBy != null));
+  const prevDeduction = prevReserved.find((r: any) => r.type === "deduction") ?? null;
+  const takeCarry = (type: string, amt: number): { memo: string | null; createdBy: number | null } => {
+    let i = prevInflowCarry.findIndex((p: any) => p.type === type && Math.abs(Number(p.amount) - amt) < 0.005);
+    if (i < 0) i = prevInflowCarry.findIndex((p: any) => p.type === type);
+    if (i < 0) return { memo: null, createdBy: null };
+    const p = prevInflowCarry.splice(i, 1)[0];
+    return { memo: p.memo ?? null, createdBy: p.createdBy ?? null };
+  };
+
   // 이전 reserved 라인 정리(이 견적 한정) — confirmed/released 는 제외. (유지 모드는 차감 예약만)
   await tx.delete(prepaidLedgerTable).where(
     keepInflow
@@ -249,6 +265,11 @@ export async function syncQuoteReservations(
       balanceAfter: "0",
       description: [label, src, line.note].filter(Boolean).join(" · "),
       transactionDate: line.transactionDate || txDate,
+      linkedPaymentId: (() => {
+        const i = prevLinks.findIndex((p: any) => p.type === type && Math.abs(Number(p.amount) - amt) < 0.005);
+        return i >= 0 ? prevLinks.splice(i, 1)[0].linkedPaymentId : null;
+      })(),
+      ...takeCarry(type, amt),
     });
   }
 
@@ -270,6 +291,8 @@ export async function syncQuoteReservations(
       taxAmount: String(tax),
       description: "서비스 차감(예약)",
       transactionDate: txDate,
+      memo: prevDeduction?.memo ?? null,
+      createdBy: prevDeduction?.createdBy ?? null,
     });
   }
 
@@ -347,7 +370,8 @@ async function resyncConfirmedDeduction(
           taxAmount: newDeduction > 0 ? String(tax) : "0",
           balanceBefore: String(balBefore),
           balanceAfter: String(newDeduction > 0 ? balAfter : balBefore),
-          description: "서비스 차감",
+          // 사용자가 원장에서 고친 거래 내용은 유지(없을 때만 기본값)
+          description: deductionRow.description || "서비스 차감",
           transactionDate: deductionRow.transactionDate || args.transactionDate || today(),
         })
         .where(eq(prepaidLedgerTable.id, deductionRow.id));
@@ -384,6 +408,7 @@ async function resyncConfirmedDeduction(
 export async function confirmQuoteReservations(
   tx: Db,
   quoteId: number,
+  actorId: number | null = null,
 ): Promise<{ balanceBefore: number; usageAmount: number; balanceAfter: number } | null> {
   const reserved = await tx
     .select()
@@ -410,9 +435,10 @@ export async function confirmQuoteReservations(
     const amt = Number(row.amount);
     const before = balance;
     balance += amt;
-    initialTotal += amt;
+    // 기존 입금 연결(linked_payment_id) — 판매관리에 이미 입금된 돈의 사용이므로 신규 입금 누계는 늘리지 않는다(이중 집계 방지)
+    if (row.linkedPaymentId == null) initialTotal += amt;
     await tx.update(prepaidLedgerTable)
-      .set({ status: "confirmed", balanceBefore: String(before), balanceAfter: String(balance), transactionDate: row.transactionDate || today() })
+      .set({ status: "confirmed", balanceBefore: String(before), balanceAfter: String(balance), transactionDate: row.transactionDate || today(), confirmedBy: actorId, confirmedAt: new Date() })
       .where(eq(prepaidLedgerTable.id, row.id));
   }
 
@@ -438,6 +464,7 @@ export async function confirmQuoteReservations(
         balanceAfter: String(balance),
         description: "서비스 차감",
         transactionDate: deductionRow.transactionDate || today(),
+        confirmedBy: actorId, confirmedAt: new Date(),
       })
       .where(eq(prepaidLedgerTable.id, deductionRow.id));
   }
@@ -473,7 +500,7 @@ async function reverseConfirmed(tx: Db, quoteIds: number[]): Promise<void> {
         balance += Number(r.amount);                 // 차감 되돌림: 잔액 복원(입금누계 불변)
       } else {
         balance -= Number(r.amount);                 // 입금 되돌림: 잔액 감소
-        initialTotal -= Number(r.amount);            //  + 총 입금 누계도 감소
+        if (r.linkedPaymentId == null) initialTotal -= Number(r.amount);   //  + 총 입금 누계도 감소(기존 입금 연결 행은 누계에 없음)
       }
     }
     await tx.update(prepaidAccountsTable)
@@ -579,12 +606,13 @@ export async function getPendingByAccount(dbh: Db, accountIds: number[]): Promis
 //  · 계정을 먼저 잠근 뒤 예약 라인을 다시 읽는다 → 동시 실행돼도 두 번 확정되지 않는다.
 //  · 같은 계정에 금액·발생일이 같은 확정 입금이 이미 있으면(수동 입금 등) 중복 의심으로 멈춘다(allowDuplicate 로만 진행).
 export async function confirmApprovedQuoteReservations(
-  tx: Db, quoteId: number, opts: { allowDuplicate?: boolean } = {},
+  tx: Db, quoteId: number, opts: { allowDuplicate?: boolean; actorId?: number | null } = {},
 ): Promise<
   | { result: "confirmed"; accountId: number; balanceBefore: number; usageAmount: number; balanceAfter: number; inflow: number }
   | { result: "nothing" }
   | { result: "not_allowed"; reason: string }
   | { result: "duplicate"; matches: DuplicateMatch[] }
+  | { result: "link_required"; matches: DuplicateMatch[] }
 > {
   const [q] = await tx.select({ id: quotesTable.id, status: quotesTable.status, quoteType: quotesTable.quoteType, isCurrent: quotesTable.isCurrent, deletedAt: quotesTable.deletedAt })
     .from(quotesTable).where(eq(quotesTable.id, quoteId));
@@ -604,13 +632,16 @@ export async function confirmApprovedQuoteReservations(
     .where(and(eq(prepaidLedgerTable.quoteId, quoteId), eq(prepaidLedgerTable.status, "reserved")));
   if (reserved.length === 0) return { result: "nothing" };   // 다른 요청이 먼저 확정함
 
-  if (!opts.allowDuplicate) {
+  {
     const matches = await findPrepaidDuplicates(tx, quoteId, accountId, reserved);
-    if (matches.length > 0) return { result: "duplicate", matches };
+    // 판매관리에 입금완료된 같은 금액의 청구회차·입금거래가 있으면 새 입금으로 반영하지 않는다(중복 검사 우회 불가)
+    //  → '기존 입금 연결'(link-confirm) 경로로만 진행
+    if (matches.some(m => m.source === "billing" || m.source === "payment_txn")) return { result: "link_required", matches };
+    if (matches.length > 0 && !opts.allowDuplicate) return { result: "duplicate", matches };
   }
 
   const inflowSum = reserved.filter((r: any) => isInflowType(r.type)).reduce((s: number, r: any) => s + Number(r.amount), 0);
-  const snap = await confirmQuoteReservations(tx, quoteId);
+  const snap = await confirmQuoteReservations(tx, quoteId, opts.actorId ?? null);
   if (!snap) return { result: "nothing" };
   return { result: "confirmed", accountId, ...snap, inflow: inflowSum };
 }
@@ -622,7 +653,7 @@ export async function confirmApprovedQuoteReservations(
 //   ③ 이 판매의 청구회차 — 같은 금액, 입금완료/입금확인(과거 CRM 이관 입금 등)
 //   ④ 이 판매의 입금거래 — 같은 고객결제액
 //   ⑤ 이 판매의 다른 견적 확정 차감 — 같은 금액(차감 중복)
-export type DuplicateMatch = { source: "prepaid_confirmed" | "prepaid_reserved_other" | "billing" | "payment_txn" | "deduction_other"; id: number; amount: number; date: string | null; quoteId: number | null; reason: string };
+export type DuplicateMatch = { source: "prepaid_confirmed" | "prepaid_reserved_other" | "billing" | "payment_txn" | "deduction_other"; id: number; paymentId?: number | null; amount: number; date: string | null; quoteId: number | null; reason: string };
 export async function findPrepaidDuplicates(tx: Db, quoteId: number, accountId: number, reserved: any[]): Promise<DuplicateMatch[]> {
   const out: DuplicateMatch[] = [];
   const won = (n: unknown) => `${Math.round(Number(n)).toLocaleString("ko-KR")}원`;
@@ -644,9 +675,9 @@ export async function findPrepaidDuplicates(tx: Db, quoteId: number, accountId: 
         WHERE project_id = ${projectId} AND amount = ${amt}::numeric AND (deposit_confirmed = true OR deposit_status = 'completed')`)).rows as any[];
       for (const d of c3) out.push({ source: "billing", id: d.id, amount: Number(d.amount), date: d.d, quoteId: null,
         reason: `이 판매의 청구회차 ${d.sequence}회차(#${d.id})에 같은 금액 ${won(d.amount)}이 입금완료로 기록돼 있습니다(입금일 ${d.d ?? "-"}). 같은 입금을 선입금으로 다시 반영하는지 확인하세요.` });
-      const c4 = (await tx.execute(sql`SELECT id, customer_paid_amount::text AS amount, paid_date::text AS d FROM payment_transactions
+      const c4 = (await tx.execute(sql`SELECT id, project_payment_id, customer_paid_amount::text AS amount, paid_date::text AS d FROM payment_transactions
         WHERE project_id = ${projectId} AND customer_paid_amount = ${amt}::numeric`)).rows as any[];
-      for (const d of c4) out.push({ source: "payment_txn", id: d.id, amount: Number(d.amount), date: d.d, quoteId: null,
+      for (const d of c4) out.push({ source: "payment_txn", id: d.id, paymentId: d.project_payment_id ?? null, amount: Number(d.amount), date: d.d, quoteId: null,
         reason: `이 판매의 입금거래(#${d.id}, ${d.d ?? "-"})에 같은 금액 ${won(d.amount)}이 있습니다.` });
     }
   }
@@ -657,5 +688,155 @@ export async function findPrepaidDuplicates(tx: Db, quoteId: number, accountId: 
     for (const d of c5) out.push({ source: "deduction_other", id: d.id, amount: Number(d.amount), date: d.d, quoteId: d.quote_id,
       reason: `같은 판매에 같은 금액의 확정 차감이 이미 있습니다(원장 #${d.id}, ${d.d ?? "-"}, ${d.quote_id ? (d.quote_number ?? `견적 #${d.quote_id}`) : "직접 등록"}, ${won(d.amount)}).` });
   }
+  return out;
+}
+
+// ─── 기존 입금 연결 — 판매관리 입금완료 청구회차를 선입금 원장의 선입 행에 참조 연결 ─────────────────
+//  새 현금 입금을 만들지 않는다. 같은 고객(계정 거래처)의 입금완료/입금확인 원화 청구회차만 후보.
+//  후보별 판정: 이미 다른 원장 행에 연결됨(차단) · 일반 판매 매출에 배분된 입금(관리자 승인 필요)
+//              · 과거 CRM 진행 건 사용 기록(사용 이력 불명확 → 관리자 검토 필요) · 금액 일치 여부.
+export type LinkCandidate = {
+  paymentId: number; projectId: number; projectTitle: string | null; saleNo: string | null;
+  sequence: number | null; amount: number; paidDate: string | null; depositStatus: string | null; depositConfirmed: boolean | null;
+  companyId: number | null; companyName: string | null; billingCompanyName: string | null;
+  linkedTo: { ledgerId: number; accountId: number; quoteId: number | null; status: string } | null;
+  allocation: "prepaid_sale" | "regular_sale";   // prepaid_sale: 이 판매가 차감/선입 판매 → 수금 집계 제외(배분 없음)
+  crmUsage: { total: number; rows: number; note: string } | null;   // 과거 CRM 진행 건 총액(이 입금이 이미 쓰였을 수 있음)
+  usableAmount: number; sameProject: boolean;
+  blockers: string[]; needsApproval: string[];
+};
+export async function getLinkCandidates(dbh: Db, quoteId: number): Promise<{ quoteProjectId: number | null; companyId: number | null; inflow: Array<{ id: number; type: string; amount: number; transactionDate: string | null; linkedPaymentId: number | null }>; candidates: LinkCandidate[] }> {
+  const [q] = (await dbh.execute(sql`SELECT q.project_id, p.company_id FROM quotes q LEFT JOIN projects p ON p.id = q.project_id WHERE q.id = ${quoteId}`)).rows as any[];
+  const quoteProjectId: number | null = q?.project_id ?? null, companyId: number | null = q?.company_id ?? null;
+  const inflow = ((await dbh.execute(sql`SELECT id, type, amount::text AS amount, transaction_date::text AS d, linked_payment_id FROM prepaid_ledger
+     WHERE quote_id = ${quoteId} AND status = 'reserved' AND type IN ('deposit','carryover') ORDER BY id`)).rows as any[])
+    .map(r => ({ id: r.id, type: r.type, amount: Number(r.amount), transactionDate: r.d ?? null, linkedPaymentId: r.linked_payment_id ?? null }));
+  if (companyId == null) return { quoteProjectId, companyId, inflow, candidates: [] };
+  const rows = (await dbh.execute(sql`
+    SELECT pp.id, pp.project_id, pr.title AS project_title, pp.sequence, pp.amount::text AS amount, pp.paid_date::text AS paid_date,
+           pp.deposit_status, pp.deposit_confirmed, pr.company_id, c.name AS company_name, pp.billing_company_name_snapshot,
+           (SELECT m.legacy_id FROM legacy_master_mappings m WHERE m.source_system = 'old_crm' AND m.entity_type = 'sale' AND m.status = 'active' AND m.entity_id = pp.project_id LIMIT 1) AS sale_no,
+           (SELECT row_to_json(x) FROM (SELECT l.id, l.account_id, l.quote_id, l.status FROM prepaid_ledger l WHERE l.linked_payment_id = pp.id AND l.status IN ('reserved','confirmed') LIMIT 1) x) AS linked_to,
+           EXISTS (SELECT 1 FROM quotes q2 WHERE q2.project_id = pp.project_id AND q2.is_current = true AND q2.deleted_at IS NULL AND q2.quote_type IN ('b2c_prepaid','prepaid_deduction')) AS prepaid_sale,
+           (SELECT s.source_raw -> 'progressRowIds' FROM import_row_sources s WHERE s.module = 'legacy_sale_activation' AND s.entity_id = pp.project_id AND s.row_key LIKE 'sale:%' LIMIT 1) AS progress_ids
+      FROM project_payments pp
+      JOIN projects pr ON pr.id = pp.project_id
+      LEFT JOIN companies c ON c.id = pr.company_id
+     WHERE (pr.company_id = ${companyId} OR pp.billing_company_id = ${companyId})
+       AND (pp.deposit_confirmed = true OR pp.deposit_status = 'completed')
+       AND (pp.billing_currency IS NULL OR upper(pp.billing_currency) = 'KRW')
+     ORDER BY (pp.project_id = ${quoteProjectId ?? -1}) DESC, pp.paid_date DESC NULLS LAST, pp.id DESC
+     LIMIT 50`)).rows as any[];
+  const candidates: LinkCandidate[] = [];
+  for (const r of rows) {
+    let crmUsage: LinkCandidate["crmUsage"] = null;
+    const ids: number[] = Array.isArray(r.progress_ids) ? r.progress_ids.map(Number).filter(Number.isFinite) : [];
+    if (ids.length > 0) {
+      const pr = (await dbh.execute(sql`SELECT count(*)::int AS n,
+          COALESCE(SUM(NULLIF(regexp_replace(COALESCE(source_raw->>'총액', total_amount::text, ''), '[^0-9.-]', '', 'g'), '')::numeric), 0)::text AS total,
+          string_agg(DISTINCT NULLIF(source_raw->>'통번역사납품일', ''), ', ') AS delivered
+        FROM legacy_archive_rows WHERE id IN (${sql.join(ids.map(i => sql`${i}`), sql`, `)})`)).rows as any[];
+      const total = Number(pr[0]?.total ?? 0);
+      if (total > 0) crmUsage = { total, rows: pr[0].n, note: `과거 CRM 진행 기록 ${pr[0].n}건(총액 ${Math.round(total).toLocaleString("ko-KR")}원${pr[0].delivered ? `, 납품 ${pr[0].delivered}` : ""})이 이 판매에 있습니다 — 이 입금이 그 작업에 이미 사용됐을 수 있습니다.` };
+    }
+    const amount = Number(r.amount);
+    const linkedTo = r.linked_to ? { ledgerId: r.linked_to.id, accountId: r.linked_to.account_id, quoteId: r.linked_to.quote_id ?? null, status: r.linked_to.status } : null;
+    const allocation: LinkCandidate["allocation"] = r.prepaid_sale ? "prepaid_sale" : "regular_sale";
+    const blockers: string[] = [], needsApproval: string[] = [];
+    if (linkedTo) blockers.push(`이미 다른 선입금 원장 행(#${linkedTo.ledgerId}${linkedTo.quoteId ? `, 견적 #${linkedTo.quoteId}` : ""}, ${linkedTo.status === "confirmed" ? "확정" : "예정"})에 연결된 입금입니다.`);
+    if (allocation === "regular_sale") needsApproval.push("일반 판매의 수금으로 집계되는 입금입니다 — 선입금으로 연결하면 이중 배분이 될 수 있어 관리자 승인이 필요합니다.");
+    if (crmUsage) needsApproval.push(crmUsage.note);
+    candidates.push({
+      paymentId: r.id, projectId: r.project_id, projectTitle: r.project_title ?? null, saleNo: r.sale_no ?? null,
+      sequence: r.sequence ?? null, amount, paidDate: r.paid_date ?? null, depositStatus: r.deposit_status ?? null, depositConfirmed: r.deposit_confirmed ?? null,
+      companyId: r.company_id ?? null, companyName: r.company_name ?? null, billingCompanyName: r.billing_company_name_snapshot ?? null,
+      linkedTo, allocation, crmUsage, usableAmount: linkedTo ? 0 : amount, sameProject: r.project_id === quoteProjectId,
+      blockers, needsApproval,
+    });
+  }
+  return { quoteProjectId, companyId, inflow, candidates };
+}
+
+//  연결 + 확정(한 트랜잭션) — 새 입금 없이 선입 행이 기존 청구회차를 참조, 차감은 기존 규칙으로 확정.
+//   검증: 판매확정 차감 견적 · 계정 잠금 후 재조회 · 선입 행 금액 = 청구회차 입금액 · 같은 고객 · 미연결 · 입금완료
+//         · 일반 판매 배분 입금/과거 사용 이력 불명확 → 관리자(admin) 검토 사유 필수
+//         · 나머지 중복 근거(연결한 청구회차·그 입금거래 제외)는 기존 중복 검사 그대로 적용
+export async function linkAndConfirmQuoteReservations(
+  tx: Db, quoteId: number,
+  args: { links: Array<{ ledgerId: number; paymentId: number }>; actorId: number | null; isAdmin: boolean; reviewNote?: string | null; allowDuplicate?: boolean },
+): Promise<
+  | { result: "confirmed"; accountId: number; balanceBefore: number; usageAmount: number; balanceAfter: number; linked: Array<{ ledgerId: number; paymentId: number; amount: number }> }
+  | { result: "nothing" }
+  | { result: "not_allowed"; reason: string }
+  | { result: "blocked"; code: string; reasons: string[] }
+  | { result: "duplicate"; matches: DuplicateMatch[] }
+> {
+  const [q] = await tx.select({ id: quotesTable.id, status: quotesTable.status, quoteType: quotesTable.quoteType, isCurrent: quotesTable.isCurrent, deletedAt: quotesTable.deletedAt })
+    .from(quotesTable).where(eq(quotesTable.id, quoteId));
+  if (!q) return { result: "not_allowed", reason: "견적을 찾을 수 없습니다." };
+  if (!isPrepaidDeductionQuoteType(q.quoteType)) return { result: "not_allowed", reason: "차감 견적서가 아닙니다." };
+  if (q.deletedAt != null || q.isCurrent === false) return { result: "not_allowed", reason: "삭제되었거나 대체된 견적입니다." };
+  if (q.status !== "approved") return { result: "not_allowed", reason: "판매확정되지 않은 견적입니다 — 판매전환 시 자동으로 확정됩니다." };
+  if (!Array.isArray(args.links) || args.links.length === 0) return { result: "blocked", code: "NO_LINK", reasons: ["연결할 기존 입금을 선택하세요."] };
+
+  const first = await tx.select({ accountId: prepaidLedgerTable.accountId }).from(prepaidLedgerTable)
+    .where(and(eq(prepaidLedgerTable.quoteId, quoteId), eq(prepaidLedgerTable.status, "reserved"))).limit(1);
+  if (first.length === 0) return { result: "nothing" };
+  const accountId: number = first[0].accountId;
+  const [acc] = await tx.select({ id: prepaidAccountsTable.id, companyId: prepaidAccountsTable.companyId }).from(prepaidAccountsTable)
+    .where(eq(prepaidAccountsTable.id, accountId)).for("update");
+  const reserved = await tx.select().from(prepaidLedgerTable).where(and(eq(prepaidLedgerTable.quoteId, quoteId), eq(prepaidLedgerTable.status, "reserved")));
+  if (reserved.length === 0) return { result: "nothing" };
+
+  const cand = await getLinkCandidates(tx, quoteId);
+  const reasons: string[] = [], approvals: string[] = [];
+  const seenLedger = new Set<number>(), seenPay = new Set<number>();
+  const linked: Array<{ ledgerId: number; paymentId: number; amount: number }> = [];
+  for (const l of args.links) {
+    const row: any = reserved.find((r: any) => r.id === l.ledgerId);
+    if (!row || !isInflowType(row.type)) { reasons.push(`원장 행 #${l.ledgerId}는 이 견적의 예정 선입/이월이 아닙니다.`); continue; }
+    if (seenLedger.has(l.ledgerId) || seenPay.has(l.paymentId)) { reasons.push("같은 행이나 같은 입금을 두 번 선택했습니다."); continue; }
+    seenLedger.add(l.ledgerId); seenPay.add(l.paymentId);
+    const c = cand.candidates.find(x => x.paymentId === l.paymentId);
+    if (!c) { reasons.push(`청구회차 #${l.paymentId}는 이 거래처의 입금완료(원화) 기록이 아닙니다.`); continue; }
+    if (acc && c.companyId !== acc.companyId && cand.companyId !== acc.companyId) { reasons.push(`청구회차 #${l.paymentId}의 거래처가 선입금 계정과 다릅니다.`); continue; }
+    reasons.push(...c.blockers);
+    if (Math.abs(c.amount - Number(row.amount)) >= 0.005)
+      reasons.push(`금액 불일치 — 선입 행 ${Math.round(Number(row.amount)).toLocaleString("ko-KR")}원 · 청구회차 입금 ${Math.round(c.amount).toLocaleString("ko-KR")}원(사용 가능 금액만 연결할 수 있습니다).`);
+    approvals.push(...c.needsApproval);
+    linked.push({ ledgerId: l.ledgerId, paymentId: l.paymentId, amount: Number(row.amount) });
+  }
+  if (reasons.length > 0) return { result: "blocked", code: "LINK_INVALID", reasons };
+  if (approvals.length > 0) {
+    if (!args.isAdmin) return { result: "blocked", code: "REVIEW_REQUIRED", reasons: [...approvals, "관리자 검토 후 진행할 수 있습니다(관리자 권한 필요)."] };
+    if (!args.reviewNote || !args.reviewNote.trim()) return { result: "blocked", code: "REVIEW_REQUIRED", reasons: [...approvals, "관리자 검토 사유를 입력해야 진행됩니다."] };
+  }
+  // 연결 반영(부분 유니크 인덱스가 같은 청구회차의 중복 연결을 최종 차단)
+  for (const l of linked) {
+    await tx.update(prepaidLedgerTable).set({ linkedPaymentId: l.paymentId })
+      .where(and(eq(prepaidLedgerTable.id, l.ledgerId), eq(prepaidLedgerTable.status, "reserved")));
+  }
+  // 기존 중복 검사 — 연결한 청구회차와 그 입금거래만 근거에서 제외(나머지는 그대로 차단)
+  const reserved2 = await tx.select().from(prepaidLedgerTable).where(and(eq(prepaidLedgerTable.quoteId, quoteId), eq(prepaidLedgerTable.status, "reserved")));
+  const linkedPay = new Set(linked.map(l => l.paymentId));
+  const rest = (await findPrepaidDuplicates(tx, quoteId, accountId, reserved2))
+    .filter(m => !(m.source === "billing" && linkedPay.has(m.id)) && !(m.source === "payment_txn" && m.paymentId != null && linkedPay.has(m.paymentId)));
+  // 연결하지 않은 다른 입금완료 기록이 여전히 근거 → 연결 대상 재확인 필요(신규 입금 덮어 반영 불가)
+  if (rest.some(m => m.source === "billing" || m.source === "payment_txn")) return { result: "blocked", code: "LINK_REQUIRED", reasons: rest.map(m => m.reason) };
+  if (rest.length > 0 && !args.allowDuplicate) return { result: "duplicate", matches: rest };
+
+  const snap = await confirmQuoteReservations(tx, quoteId, args.actorId);
+  if (!snap) return { result: "nothing" };
+  return { result: "confirmed", accountId, ...snap, linked };
+}
+
+// 계정별 기존 입금 연결 합계(확정) — 화면 '기존 입금 연결'·사용 금액 계산용(신규 입금 누계와 분리)
+export async function getLinkedAmountByAccount(dbh: Db, accountIds: number[]): Promise<Map<number, number>> {
+  const out = new Map<number, number>();
+  if (accountIds.length === 0) return out;
+  const rows = (await dbh.execute(sql`SELECT account_id, COALESCE(SUM(amount), 0)::text AS s FROM prepaid_ledger
+    WHERE status = 'confirmed' AND linked_payment_id IS NOT NULL AND type IN ('deposit','carryover')
+      AND account_id IN (${sql.join(accountIds.map(id => sql`${id}`), sql`, `)}) GROUP BY account_id`)).rows as any[];
+  for (const r of rows) out.set(r.account_id, Number(r.s));
   return out;
 }

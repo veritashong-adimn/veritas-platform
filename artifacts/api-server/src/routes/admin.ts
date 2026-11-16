@@ -37,9 +37,11 @@ import {
   getCompanyPrepaidState,
   getQuotePrepaidLines,
   getPendingByAccount,
+  getLinkedAmountByAccount,
   type PrepaidLineInput,
 } from "../services/prepaidDeductionQuote";
 import { closeAccumulatedBatchQuote } from "../services/accumulatedBatch";
+import { deleteLedgerEntry, writeHistory, snap as ledgerSnap } from "../services/prepaidLedger";
 import { effectiveQuoteConditions, getQuoteFamily, resolveChainCurrent } from "../services/quoteRelation";
 import { loadSaleIdentities } from "../services/saleIdentity";
 import { loadFxSummaries, fmtForeign } from "../services/fxBilling";
@@ -2005,7 +2007,7 @@ router.patch("/admin/quotes/:quoteId/status", ...adminGuard, requirePermission("
           await tx.update(prepaidLedgerTable)
             .set({ projectId: project.id })
             .where(and(eq(prepaidLedgerTable.quoteId, quoteId), eq(prepaidLedgerTable.status, "reserved")));
-          const snap = await confirmQuoteReservations(tx, quoteId);
+          const snap = await confirmQuoteReservations(tx, quoteId, ((req as any).user?.id as number | undefined) ?? null);
           if (snap) {
             await tx.update(quotesTable).set({
               prepaidBalanceBefore: String(snap.balanceBefore),
@@ -2052,7 +2054,7 @@ router.patch("/admin/quotes/:quoteId/status", ...adminGuard, requirePermission("
       // 차감 견적서 잔액 파이프라인
       if (isPrepaidQ && status === "approved") {
         // 예약(reserved) → 확정(confirmed): 실제 잔액 반영
-        const snap = await confirmQuoteReservations(tx, quoteId);
+        const snap = await confirmQuoteReservations(tx, quoteId, ((req as any).user?.id as number | undefined) ?? null);
         if (snap) {
           await tx.update(quotesTable).set({
             prepaidBalanceBefore: String(snap.balanceBefore),
@@ -2300,8 +2302,10 @@ router.get("/admin/prepaid-accounts", ...adminGuard, async (req, res) => {
     }
     // 확정 대기(차감 견적 예약) — 확정 잔액과 분리한 '예상' 값(추가 필드, 기존 필드 불변)
     const pending = await getPendingByAccount(db, accounts.map(a => a.id));
+    const linkedMap = await getLinkedAmountByAccount(db, accounts.map(a => a.id));
     res.json(accounts.map(a => {
       const p = pending.get(a.id);
+      const linkedAmount = linkedMap.get(a.id) ?? 0;
       const pendingInflow = p?.pendingInflow ?? 0, pendingDeduction = p?.pendingDeduction ?? 0;
       return {
         ...a,
@@ -2312,6 +2316,9 @@ router.get("/admin/prepaid-accounts", ...adminGuard, async (req, res) => {
         expectedBalance: Number(a.currentBalance) + pendingInflow - pendingDeduction,
         pendingQuoteCount: p?.quotes.length ?? 0,
         pendingConfirmableCount: p?.quotes.filter(q => q.confirmable).length ?? 0,
+        // 기존 입금 연결(판매관리 입금완료 기록 참조) — 신규 입금 누계(initialAmount)와 분리. 사용 금액 = 신규 + 연결 − 잔액
+        linkedAmount,
+        usedAmount: Number(a.initialAmount) + linkedAmount - Number(a.currentBalance),
       };
     }));
   } catch (err) {
@@ -2338,15 +2345,19 @@ router.post("/admin/prepaid-accounts", ...adminGuard, requirePermission("prepaid
         note: note ?? null,
         depositDate: depositDate ?? new Date().toISOString().slice(0, 10),
       }).returning();
+      const actor = (req as any).user as { id?: number; email?: string } | undefined;
       const [entry] = await tx.insert(prepaidLedgerTable).values({
         accountId: account.id,
         projectId: null,
         type: "deposit",
         amount: String(initialAmount),
+        balanceBefore: "0",
         balanceAfter: String(initialAmount),
         description: note ?? "선입금 입금",
         transactionDate: depositDate ?? new Date().toISOString().slice(0, 10),
+        createdBy: actor?.id ?? null,
       }).returning();
+      await writeHistory(tx, { ledgerId: entry.id, accountId: account.id, action: "create", before: null, after: ledgerSnap(entry), actor });
       return { account, entry };
     });
     res.status(201).json({
@@ -2410,6 +2421,16 @@ router.get("/admin/prepaid-accounts/:id", ...adminGuard, async (req, res) => {
     const [company] = await db.select({ name: companiesTable.name }).from(companiesTable).where(eq(companiesTable.id, account.companyId));
 
     const pend = (await getPendingByAccount(db, [accountId])).get(accountId);
+    const linkedAmount = (await getLinkedAmountByAccount(db, [accountId])).get(accountId) ?? 0;
+    // 기존 입금 연결 행의 원본(판매·청구회차·실제 입금일) — 추적용 표시
+    const linkIds = ledger.map(e => e.linkedPaymentId).filter((v): v is number => v != null);
+    const linkInfo = new Map<number, any>();
+    if (linkIds.length > 0) {
+      const rows = (await db.execute(sql`SELECT pp.id, pp.project_id, pp.sequence, pp.amount::text AS amount, pp.paid_date::text AS paid_date, pp.deposit_status, pr.title,
+          (SELECT m.legacy_id FROM legacy_master_mappings m WHERE m.source_system='old_crm' AND m.entity_type='sale' AND m.status='active' AND m.entity_id = pp.project_id LIMIT 1) AS sale_no
+        FROM project_payments pp JOIN projects pr ON pr.id = pp.project_id WHERE pp.id IN (${sql.join(linkIds.map(i => sql`${i}`), sql`, `)})`)).rows as any[];
+      for (const r of rows) linkInfo.set(r.id, { paymentId: r.id, projectId: r.project_id, projectTitle: r.title, saleNo: r.sale_no ?? null, sequence: r.sequence, amount: Number(r.amount), paidDate: r.paid_date ?? null, depositStatus: r.deposit_status });
+    }
     res.json({
       ...account,
       initialAmount: Number(account.initialAmount),
@@ -2420,6 +2441,8 @@ router.get("/admin/prepaid-accounts/:id", ...adminGuard, async (req, res) => {
       pendingDeduction: pend?.pendingDeduction ?? 0,
       expectedBalance: Number(account.currentBalance) + (pend?.pendingInflow ?? 0) - (pend?.pendingDeduction ?? 0),
       pending: pend?.quotes ?? [],
+      linkedAmount,
+      usedAmount: Number(account.initialAmount) + linkedAmount - Number(account.currentBalance),
       ledger: ledger.map(e => {
         const taxFallback = e.type === "deduction" && e.projectId ? (taxByProjectId.get(e.projectId) ?? null) : null;
         return {
@@ -2431,6 +2454,7 @@ router.get("/admin/prepaid-accounts/:id", ...adminGuard, async (req, res) => {
           // 원장에 직접 저장된 값 우선, 없으면 quote_items에서 계산한 값 fallback
           supplyAmount: e.supplyAmount != null ? Number(e.supplyAmount) : (taxFallback?.supplyAmount ?? null),
           taxAmount: e.taxAmount != null ? Number(e.taxAmount) : (taxFallback?.taxAmount ?? null),
+          linkedPayment: e.linkedPaymentId != null ? (linkInfo.get(e.linkedPaymentId) ?? { paymentId: e.linkedPaymentId }) : null,
         };
       }),
     });
@@ -2483,7 +2507,9 @@ router.post("/admin/prepaid-accounts/:id/transactions", ...adminGuard, requireSt
         taxAmount: taxAmount != null ? String(taxAmount) : null,
         description: description ?? (type === "deduction" ? "서비스 차감" : type === "deposit" ? "추가 입금" : "잔액 조정"),
         transactionDate: transactionDate ?? new Date().toISOString().slice(0, 10),
+        createdBy: ((req as any).user?.id as number | undefined) ?? null,
       }).returning();
+      await writeHistory(tx, { ledgerId: entry.id, accountId, action: "create", before: null, after: ledgerSnap(entry), actor: (req as any).user ?? null });
       return entry;
     });
     res.status(201).json({
@@ -2505,24 +2531,10 @@ router.post("/admin/prepaid-accounts/:id/transactions", ...adminGuard, requireSt
 router.delete("/admin/prepaid-ledger/:entryId", requireAuth, requireRole("admin"), async (req, res) => {
   const entryId = Number(req.params.entryId);
   try {
-    const [entry] = await db.select().from(prepaidLedgerTable).where(eq(prepaidLedgerTable.id, entryId));
-    if (!entry) { res.status(404).json({ error: "항목을 찾을 수 없습니다." }); return; }
-    const [account] = await db.select().from(prepaidAccountsTable).where(eq(prepaidAccountsTable.id, entry.accountId));
-    if (!account) { res.status(404).json({ error: "계정을 찾을 수 없습니다." }); return; }
-
-    await db.transaction(async tx => {
-      await tx.delete(prepaidLedgerTable).where(eq(prepaidLedgerTable.id, entryId));
-      // 잔액 재계산: 확정(confirmed) 항목만 기반 (예약/해제는 잔액에 영향 없음)
-      const remaining = await tx.select().from(prepaidLedgerTable)
-        .where(and(eq(prepaidLedgerTable.accountId, entry.accountId), eq(prepaidLedgerTable.status, "confirmed")))
-        .orderBy(prepaidLedgerTable.transactionDate, prepaidLedgerTable.createdAt);
-      let bal = 0;
-      for (const e of remaining) {
-        bal = e.type === "deduction" ? bal - Number(e.amount) : bal + Number(e.amount);
-        await tx.update(prepaidLedgerTable).set({ balanceAfter: String(bal) }).where(eq(prepaidLedgerTable.id, e.id));
-      }
-      await tx.update(prepaidAccountsTable).set({ currentBalance: String(bal) }).where(eq(prepaidAccountsTable.id, entry.accountId));
-    });
+    // 삭제 전 값은 prepaid_ledger_history(action=delete)에 보존. 잔액은 원장 밖 기초 잔액을 보존한 채 재계산.
+    const reason = typeof (req.query as any).reason === "string" ? String((req.query as any).reason) : null;
+    const r = await deleteLedgerEntry(db, entryId, (req as any).user ?? null, reason);
+    if (r.result === "not_found") { res.status(404).json({ error: "항목을 찾을 수 없습니다." }); return; }
     res.json({ ok: true });
   } catch (err) {
     req.log.error({ err }, "Failed to delete prepaid ledger entry");

@@ -55,6 +55,7 @@ import publicInsightsRouter from "./public-insights";
 import invitationsRouter from "./invitations";
 import customerRouter from "./customer";
 import prepaidRouter from "./prepaid";
+import prepaidLedgerRouter from "./prepaidLedger";
 import aiQuoteDraftRouter from "./aiQuoteDraft";
 import docxDiagRouter from "./docxDiag";
 import inquiriesRouter from "./inquiries";
@@ -134,6 +135,7 @@ router.use(publicInsightsRouter);
 router.use(invitationsRouter);
 router.use(customerRouter);
 router.use(prepaidRouter);
+router.use(prepaidLedgerRouter);
 // 회사 자료보관함(데이터 자산) — 모든 경로 /archive/* , 자체 권한 검증
 router.use(archiveUploadRouter);
 router.use(archiveApprovalsRouter);
