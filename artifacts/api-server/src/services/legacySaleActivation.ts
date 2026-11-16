@@ -445,10 +445,9 @@ export async function executeActivation(legacyRowId: number, planToken: string, 
       //   확인되지 않으면(세후=세전·값 없음 등) 기존대로 연결된 통번역사 정산정보에서 도출(미연결·미설정은 세무확인 필요).
       payload.withholdingTreatment = p.withholdingTreatment ?? undefined;   // 미리보기에서 결정한 값(우선순위 규칙) — 미리보기와 실행이 같은 기준
       if (!p.translatorId) { payload.status = "unassigned"; payload.performerNameSnapshot = rr.translatorName || null; }
-      // 비고 = [이관 태그] + (Master 미연결 수행자) + 원본 비고. 단, '과거 지급 확인 필요'는 지급 상태(payout_review)·과거 지급 확인
-      //   영역으로 이미 표시되므로 비고에 문구를 넣지 않는다(지급 확인 후에도 비고에 남아 혼동되던 문제). 나머지 비고는 그대로.
-      const tag = p.plannedStatus === "legacy_paid" ? `[과거 CRM] 과거 지급완료(지급일 ${p.payDate})` : p.plannedStatus === "payout_review" ? null : "[과거 CRM] 과거 CRM";
-      payload.remark = [tag, !p.translatorId && rr.translatorName ? `수행자 ${rr.translatorName}(Master 미연결)` : null, payload.remark || null].filter(Boolean).join(" · ") || null;
+      // 비고 = CRM 원본 비고만. 관리용 안내 문구([과거 CRM] 태그·과거 지급완료(지급일)·'수행자 ○○(Master 미연결)')는 넣지 않는다 —
+      //   이관 출처는 이관 계보·과거 CRM 배지, 지급 상태·지급일은 지급 컬럼, Master 연결 여부는 통번역사 연결·수행자명 스냅샷에 이미 있다.
+      payload.remark = payload.remark || null;
       payload.payDateChangeReason = rr.payDate ? "과거 CRM 원본 지급일 보존" : null;
       const assignmentId = await applyPerformanceRow(tx, project.id, payload, ctx);
       // 4순위(확인 필요): 저장 경로가 Master 미등록을 '세금계산서'로 기본 채우므로, 전환 행은 비워 둔다(원천세 확인 필요).
@@ -594,7 +593,7 @@ export async function resolvePayoutReview(assignmentId: number, decision: "paid"
     await tx.update(performanceAssignmentsTable).set({
       paymentStatus: decision === "paid" ? "paid" : "unpaid",
       ...(decision === "paid" ? { status: "paid", actualPaymentDate: paid!.actualPaymentDate, actualPaymentAmount: String(paid!.actualPaymentAmount) } : {}),
-      remark: `${a.remark ?? ""} · 과거 지급 확인: ${decision === "paid" ? "지급완료 확인" : "미지급 확인"}(${reason})`.slice(0, 1000),
+      // 비고는 바꾸지 않는다 — 확인 결과·근거·확인자·일시는 감사로그(legacy_payout_review_resolved)에 남는다(관리용 문구 비고 자동 추가 중단).
       updatedBy: performer.id ?? null, updatedAt: new Date(),
     }).where(eq(performanceAssignmentsTable.id, assignmentId));
     await tx.update(importRowSourcesTable).set({ status: decision === "paid" ? "payout_review_paid" : "payout_review_unpaid" }).where(eq(importRowSourcesTable.id, lin.id));
