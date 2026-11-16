@@ -282,15 +282,9 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [customersLoading, setCustomersLoading] = useState(false);
 
 
-  // 선입금 계정 (원장 방식)
-  type PrepaidAccount = { id: number; companyId: number; companyName: string; initialAmount: number; currentBalance: number; status: string; note: string | null; depositDate: string | null; createdAt: string;
-    /** 확정 대기(차감 견적 예약) — 확정 잔액과 분리된 예상값 */ pendingInflow?: number; pendingDeduction?: number; expectedBalance?: number; pendingQuoteCount?: number; linkedAmount?: number; usedAmount?: number };
-  const [prepaidAccounts, setPrepaidAccounts] = useState<PrepaidAccount[]>([]);
-  const [prepaidLoading, setPrepaidLoading] = useState(false);
-  const [showCreatePrepaidForm, setShowCreatePrepaidForm] = useState(false);
-  const [createPrepaidForm, setCreatePrepaidForm] = useState({ companyId: "", initialAmount: "", note: "", depositDate: new Date().toISOString().slice(0, 10) });
-  const [savingPrepaid, setSavingPrepaid] = useState(false);
-  const [prepaidReloadKey, setPrepaidReloadKey] = useState(0);   // 목록형 원장 다시 불러오기(계정 등록·기존 계정 화면 변경 후)
+  // 선입금관리(조회 전용) — 원장 행 클릭 시 연결 견적서를 견적관리에서 연다
+  const [openQuoteFromPrepaid, setOpenQuoteFromPrepaid] = useState<number | null>(null);
+  const [prepaidReloadKey, setPrepaidReloadKey] = useState(0);   // 목록형 원장 다시 불러오기(새로고침)
 
   // other filters
   const [paymentFilter, setPaymentFilter] = useState<string>("all");
@@ -573,38 +567,12 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     finally { setLoading(false); }
   }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const fetchPrepaidAccounts = useCallback(async () => {
-    setPrepaidLoading(true);
-    try {
-      const res = await fetch(api("/api/admin/prepaid-accounts"), { headers: authHeaders });
-      const data = await res.json();
-      if (res.ok) setPrepaidAccounts(Array.isArray(data) ? data : []);
-    } catch { setToast("오류: 선입금 계정 조회 실패"); }
-    finally { setPrepaidLoading(false); }
-  }, [token]);
-
-  const handleCreatePrepaidAccount = async () => {
-    const amt = Number(createPrepaidForm.initialAmount.replace(/,/g, ""));
-    if (!createPrepaidForm.companyId || !amt || amt <= 0) { setToast("거래처와 입금액을 확인하세요."); return; }
-    setSavingPrepaid(true);
-    try {
-      const res = await fetch(api("/api/admin/prepaid-accounts"), {
-        method: "POST",
-        headers: { ...authHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ companyId: Number(createPrepaidForm.companyId), initialAmount: amt, note: createPrepaidForm.note || undefined, depositDate: createPrepaidForm.depositDate }),
-      });
-      if (res.ok) {
-        setShowCreatePrepaidForm(false);
-        setCreatePrepaidForm({ companyId: "", initialAmount: "", note: "", depositDate: new Date().toISOString().slice(0, 10) });
-        setToast("선입금 계정이 생성되었습니다.");
-        await fetchPrepaidAccounts();
-        setPrepaidReloadKey(k => k + 1);
-      } else {
-        const d = await res.json();
-        setToast(`오류: ${d.error ?? "생성 실패"}`);
-      }
-    } finally { setSavingPrepaid(false); }
-  };
+  // 선입금 원장(어느 화면이든)에서 견적서 열기 요청 → 견적관리 목록으로 이동해 해당 견적 편집 화면을 연다
+  useEffect(() => {
+    const h = (e: Event) => { const id = Number((e as CustomEvent).detail?.quoteId); if (id > 0) { setOpenQuoteFromPrepaid(id); setAdminTab("quotes"); } };
+    window.addEventListener("veritas:open-quote", h);
+    return () => window.removeEventListener("veritas:open-quote", h);
+  }, []);
 
   const fetchCustomers = useCallback(async () => {
     setCustomersLoading(true);
@@ -918,7 +886,6 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   useEffect(() => { if (adminTab === "contacts") { fetchContacts(); if (companies.length === 0) fetchCompanies(); } }, [adminTab, fetchContacts]);
   useEffect(() => { if (adminTab === "board") fetchBoard(); }, [adminTab, fetchBoard]);
   useEffect(() => { if (adminTab === "translators") fetchTranslators(); }, [adminTab, fetchTranslators]);
-  useEffect(() => { if (adminTab === "prepaid") fetchPrepaidAccounts(); }, [adminTab, fetchPrepaidAccounts]);
 
   // ── 환경설정 상태 ─────────────────────────────────────────────────────────
 
@@ -1669,6 +1636,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
         <QuoteListTab
           view="list"
           token={token}
+          openQuoteId={openQuoteFromPrepaid}
+          onOpenQuoteHandled={() => setOpenQuoteFromPrepaid(null)}
           onToast={setToast}
           adminUsers={adminUsers}
           refreshTick={quoteTick}
@@ -2966,66 +2935,15 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
       {/* ── 선입금 계정 원장 탭 ── */}
       {adminTab === "prepaid" && (
-        <Section title="거래처별 선입금 원장"
+        <Section title="선입금관리"
           action={
             <div style={{ display: "flex", gap: 8 }}>
-              <GhostBtn onClick={() => { fetchPrepaidAccounts(); setPrepaidReloadKey(k => k + 1); }} data-testid="prepaid-refresh-all" aria-label="선입금 전체 새로고침" style={{ fontSize: 12, padding: "6px 14px" }}>새로고침</GhostBtn>
-              {(user.role === "admin" || hasPerm("prepaid.manage")) && (
-                <PrimaryBtn onClick={() => setShowCreatePrepaidForm(true)} data-testid="btn-prepaid-create" aria-label="선입금 계정 등록" style={{ fontSize: 12, padding: "6px 14px" }}>
-                  + 선입금 계정 등록
-                </PrimaryBtn>
-              )}
+              <GhostBtn onClick={() => setPrepaidReloadKey(k => k + 1)} data-testid="prepaid-refresh-all" aria-label="선입금 전체 새로고침" style={{ fontSize: 12, padding: "6px 14px" }}>새로고침</GhostBtn>
             </div>
           }>
 
-          {/* 신규 선입금 계정 생성 폼 */}
-          {showCreatePrepaidForm && (
-            <Card style={{ border: "2px solid #3b82f6", marginBottom: 20, background: "#eff6ff" }}>
-              <div style={{ fontWeight: 700, fontSize: 15, color: "#1e40af", marginBottom: 16 }}>신규 선입금 계정 등록</div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
-                <div>
-                  <label style={labelStyle}>거래처 ID *</label>
-                  <input value={createPrepaidForm.companyId} onChange={e => setCreatePrepaidForm(p => ({ ...p, companyId: e.target.value }))}
-                    placeholder="거래처 ID (숫자)"
-                    style={{ ...inputStyle, background: "#fff" }} />
-                  <div style={{ fontSize: 11, color: "#6b7280", marginTop: 3 }}>거래처 탭에서 거래처 ID를 확인하세요</div>
-                </div>
-                <div>
-                  <label style={labelStyle}>최초 입금액 (원) *</label>
-                  <input value={createPrepaidForm.initialAmount} onChange={e => setCreatePrepaidForm(p => ({ ...p, initialAmount: e.target.value }))}
-                    placeholder="예: 1000000"
-                    style={{ ...inputStyle, background: "#fff" }} />
-                </div>
-                <div>
-                  <label style={labelStyle}>입금일</label>
-                  <DateField value={createPrepaidForm.depositDate} onChange={v => setCreatePrepaidForm(p => ({ ...p, depositDate: v }))}
-                    ariaLabel="입금일" testid="input-prepaid-deposit-date" style={{ ...inputStyle, background: "#fff" }} />
-                </div>
-                <div>
-                  <label style={labelStyle}>메모 (선택)</label>
-                  <input value={createPrepaidForm.note} onChange={e => setCreatePrepaidForm(p => ({ ...p, note: e.target.value }))}
-                    placeholder="예: 2026년 1분기 선입금"
-                    style={{ ...inputStyle, background: "#fff" }} />
-                </div>
-              </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <PrimaryBtn onClick={handleCreatePrepaidAccount} disabled={savingPrepaid}>
-                  {savingPrepaid ? "저장 중..." : "계정 생성"}
-                </PrimaryBtn>
-                <GhostBtn onClick={() => setShowCreatePrepaidForm(false)}>취소</GhostBtn>
-              </div>
-            </Card>
-          )}
-
           {/* 거래처별 선입금 현황(목록형) — 거래처 클릭 시 상세 원장 펼침 */}
-          <PrepaidLedgerTab
-            authHeaders={authHeaders}
-            canManage={user.role === "admin" || hasPerm("prepaid.manage")}
-            canDelete={user.role === "admin"}
-            reloadKey={prepaidReloadKey}
-            onChanged={fetchPrepaidAccounts}
-            onToast={setToast}
-          />
+          <PrepaidLedgerTab authHeaders={authHeaders} reloadKey={prepaidReloadKey} onToast={setToast} />
         </Section>
       )}
 

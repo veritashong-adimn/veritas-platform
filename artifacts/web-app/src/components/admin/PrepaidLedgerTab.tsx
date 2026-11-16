@@ -1,4 +1,4 @@
-// ─── 선입금관리 — 거래처별 목록(거래처명 · 총 입금액 · 총 차감액 · 현재 잔액) ─────────────────────
+// ─── 선입금관리(조회 전용) — 거래처별 목록(거래처명 · 총 입금액 · 총 차감액 · 현재 잔액) ─────────────
 //  거래처 행 클릭 → 그 아래에 원장 펼침, 다시 클릭하면 접힘. 잔액 = 누적 입금 − 누적 차감.
 //  값은 매번 서버에서 다시 받는다(캐시 미사용) — 수정 후 펼침/메뉴 이동/새로고침 어디서 봐도 같은 최신값.
 import React, { useCallback, useEffect, useMemo, useState } from "react";
@@ -10,11 +10,10 @@ import { getJson, won, type OverviewRow } from "./prepaidLedgerShared";
 
 type SortKey = "companyName" | "totalDeposit" | "totalDeduction" | "balance";
 
-export function PrepaidLedgerTab({ authHeaders, canManage, canDelete, reloadKey, onChanged, onToast }: {
-  authHeaders: Record<string, string>; canManage: boolean; canDelete: boolean;
-  /** 외부(계정 등록 등)에서 목록 갱신 요청 */
+export function PrepaidLedgerTab({ authHeaders, reloadKey, onToast }: {
+  authHeaders: Record<string, string>;
+  /** 새로고침 요청 */
   reloadKey: number;
-  onChanged?: () => void;
   onToast?: (msg: string) => void;
 }) {
   const [rows, setRows] = useState<OverviewRow[]>([]);
@@ -108,8 +107,7 @@ export function PrepaidLedgerTab({ authHeaders, canManage, canDelete, reloadKey,
                   {isOpen && (
                     <tr data-testid={`prepaid-ledger-${r.companyId}`}>
                       <td colSpan={5} style={{ padding: "6px 10px 12px 38px", background: "#f8fafc", borderBottom: "1px solid #e2e8f0" }}>
-                        <PrepaidCompanyLedger key={`${r.companyId}-${reloadKey}`} companyId={r.companyId} authHeaders={authHeaders}
-                          canManage={canManage} canDelete={canDelete} onChanged={async () => { await load(); onChanged?.(); }} onToast={onToast} />
+                        <PrepaidCompanyLedger key={`${r.companyId}-${reloadKey}`} companyId={r.companyId} authHeaders={authHeaders} />
                       </td>
                     </tr>
                   )}

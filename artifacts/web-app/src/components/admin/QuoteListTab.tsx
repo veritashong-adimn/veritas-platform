@@ -103,9 +103,12 @@ interface QuoteListTabProps {
   onOpenBulkImport?: () => void;
   /** 목록 상단 [과거자료 일괄등록] 클릭 — 과거 결제리스트 이관(견적→판매→수행→지급) 화면 진입 */
   onOpenPastWorkImport?: () => void;
+  /** 다른 화면(선입금관리 원장)에서 지정한 견적서를 열어 바로 편집 — 처리 후 onOpenQuoteHandled 호출 */
+  openQuoteId?: number | null;
+  onOpenQuoteHandled?: () => void;
 }
 
-export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isAdmin = false, onNavigateToSales, onOpenSalesDetail, canConvert: convertPerm = true, view = 'list', onExitToList, onOpenBulkImport, onOpenPastWorkImport, canDeleteQuote = false, onOpenInquiry }: QuoteListTabProps) {
+export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isAdmin = false, onNavigateToSales, onOpenSalesDetail, canConvert: convertPerm = true, view = 'list', onExitToList, onOpenBulkImport, onOpenPastWorkImport, canDeleteQuote = false, onOpenInquiry, openQuoteId = null, onOpenQuoteHandled }: QuoteListTabProps) {
   const authH = { Authorization: `Bearer ${token}` };
 
   const [quotes, setQuotes]             = useState<QuoteRow[]>([]);
@@ -240,6 +243,13 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
       setShowEditor(true);
     } finally { setEditLoading(null); }
   }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 선입금관리 원장 → 연결 견적서 편집 진입(1회)
+  useEffect(() => {
+    if (openQuoteId == null) return;
+    handleEditQuote(openQuoteId, '견적');
+    onOpenQuoteHandled?.();
+  }, [openQuoteId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 편집 닫기 (state 초기화)
   const handleEditorClose = useCallback(() => {
