@@ -20,6 +20,8 @@ export interface LegacyOrigin {
   /** unknown: 과거 판매목록은 총액만 있어 공급가·부가세 구분이 확인되지 않은 금액 — 임의 분리·역산 금지.
    *  split_from_progress: 전환 시 진행관리 원본 공급가액·부가세(합 = 총액)로 확인해 나눈 금액. */
   taxBreakdown: "unknown" | "split_from_progress";
+  /** 과거 CRM 원본 총액(전환 이력 source_raw.originalTotal). 기록이 없는 예전 전환 건은 null. */
+  originalTotal?: number | null;
 }
 
 type Dbx = { execute: (q: any) => Promise<{ rows: unknown[] }> };
@@ -29,14 +31,21 @@ export async function legacyOriginOfProject(dbx: Dbx, projectId: number | null |
   if (!projectId) return null;
   const r = (await dbx.execute(sql`SELECT m.legacy_id,
       (SELECT s.source_raw->>'taxBreakdown' FROM import_row_sources s WHERE s.module = ${ACTIVATION_MODULE} AND s.entity_id = ${projectId}
-        AND s.batch_id = m.import_batch_id AND s.row_key = 'sale:' || m.legacy_id LIMIT 1) AS tax_breakdown
+        AND s.batch_id = m.import_batch_id AND s.row_key = 'sale:' || m.legacy_id LIMIT 1) AS tax_breakdown,
+      (SELECT s.source_raw->>'originalTotal' FROM import_row_sources s WHERE s.module = ${ACTIVATION_MODULE} AND s.entity_id = ${projectId}
+        AND s.batch_id = m.import_batch_id AND s.row_key = 'sale:' || m.legacy_id LIMIT 1) AS original_total
     FROM legacy_master_mappings m
     WHERE m.source_system = 'old_crm' AND m.entity_type = 'sale' AND m.status = 'active' AND m.entity_id = ${projectId}
       AND EXISTS (SELECT 1 FROM import_row_sources s WHERE s.module = ${ACTIVATION_MODULE} AND s.entity_id = ${projectId} AND s.row_key = 'sale:' || m.legacy_id)
-    LIMIT 1`)).rows as Array<{ legacy_id: string; tax_breakdown: string | null }>;
+    LIMIT 1`)).rows as Array<{ legacy_id: string; tax_breakdown: string | null; original_total: string | null }>;
   if (!r.length) return null;
   // 기존 전환 건(값 없음)은 그대로 unknown — 금액 확인 요구·안내 동작 불변
-  return { source: "old_crm", saleNo: r[0].legacy_id, taxBreakdown: r[0].tax_breakdown === "split_from_progress" ? "split_from_progress" : "unknown" };
+  const ot = r[0].original_total != null && r[0].original_total !== "" ? Number(r[0].original_total) : null;
+  return {
+    source: "old_crm", saleNo: r[0].legacy_id,
+    taxBreakdown: r[0].tax_breakdown === "split_from_progress" ? "split_from_progress" : "unknown",
+    originalTotal: ot != null && Number.isFinite(ot) ? ot : null,
+  };
 }
 
 // 시스템 문구와 정확히 같은 줄 / ' / ' 구간만 제거(앞뒤 공백 무시). 나머지 문장은 순서·줄바꿈 그대로 둔다.

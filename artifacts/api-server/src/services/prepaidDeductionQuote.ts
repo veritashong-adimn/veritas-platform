@@ -163,7 +163,8 @@ export async function syncQuoteReservations(
     quoteId: number;
     companyId: number | null;
     projectId: number | null;
-    prepaidLines: PrepaidLineInput[];
+    /** null = 선입/이월 입력 미전달 → 이 견적의 기존 예약(reserved) 선입/이월 라인을 그대로 유지 */
+    prepaidLines: PrepaidLineInput[] | null;
     quoteTotal: number;       // 견적금액(항목 합)
     quoteSupply: number;      // 항목 공급가 합
     quoteTax: number;         // 항목 부가세 합
@@ -192,9 +193,20 @@ export async function syncQuoteReservations(
     });
   }
 
-  // 이전 reserved 라인 정리(이 견적 한정) — confirmed/released 는 제외.
+  // 선입/이월 미전달: 기존 reserved 선입/이월 라인은 유지하고 차감 예약만 다시 계산한다.
+  const keepInflow = prepaidLines == null;
+  const keptInflow = keepInflow
+    ? await tx.select({ amount: prepaidLedgerTable.amount }).from(prepaidLedgerTable).where(and(
+        eq(prepaidLedgerTable.quoteId, quoteId), eq(prepaidLedgerTable.status, "reserved"),
+        inArray(prepaidLedgerTable.type, [...INFLOW_TYPES]),
+      ))
+    : [];
+
+  // 이전 reserved 라인 정리(이 견적 한정) — confirmed/released 는 제외. (유지 모드는 차감 예약만)
   await tx.delete(prepaidLedgerTable).where(
-    and(eq(prepaidLedgerTable.quoteId, quoteId), eq(prepaidLedgerTable.status, "reserved")),
+    keepInflow
+      ? and(eq(prepaidLedgerTable.quoteId, quoteId), eq(prepaidLedgerTable.status, "reserved"), eq(prepaidLedgerTable.type, "deduction"))
+      : and(eq(prepaidLedgerTable.quoteId, quoteId), eq(prepaidLedgerTable.status, "reserved")),
   );
 
   // 거래처 미지정 시 계정을 만들 수 없으므로 예약 생략(전환 시점에 거래처 확정되면 재저장 필요).
@@ -205,15 +217,17 @@ export async function syncQuoteReservations(
 
   // 이전 가용잔액(이 견적 제외)
   const state = await getCompanyPrepaidState(tx, companyId, quoteId);
-  const incomingPrepaid = prepaidLines.reduce((s, l) => s + Math.max(0, Number(l.amount) || 0), 0);
+  const incomingPrepaid = keepInflow
+    ? keptInflow.reduce((s: number, l: any) => s + Math.max(0, Number(l.amount) || 0), 0)
+    : prepaidLines.reduce((s, l) => s + Math.max(0, Number(l.amount) || 0), 0);
   const summary = computeDeductionSummary({
     previousAvailable: state.available,
     incomingPrepaid,
     quoteTotal,
   });
 
-  // 선입/이월 라인 → reserved inflow (잔액 미반영: balance placeholder 0)
-  for (const line of prepaidLines) {
+  // 선입/이월 라인 → reserved inflow (잔액 미반영: balance placeholder 0) — 유지 모드는 기존 라인 그대로
+  for (const line of prepaidLines ?? []) {
     const amt = Math.max(0, Number(line.amount) || 0);
     if (amt <= 0) continue;
     const type: InflowType = isInflowType(line.type) ? line.type : "deposit";

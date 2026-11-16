@@ -3529,7 +3529,26 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
   //   편집 화면의 부가세 재계산 등으로 원본 총액과 다른 금액이 저장되지 않도록, 금액이 바뀌는 저장은 명시적 확인을 요구한다(임의 VAT 가산 방지).
   if (priceChanged && qBefore?.projectId && (req.body as any)?.confirmLegacyVat !== true) {
     const origin = await legacyOriginOfProject(db, qBefore.projectId);
-    if (origin?.taxBreakdown === "unknown") {
+    if (origin?.taxBreakdown === "unknown" && isPrepaidDeductionQuoteType(quoteType ?? "b2b_standard")) {
+      // 차감 견적서: 견적금액 = 이번 작업의 차감 대상 금액(선입금과 성격이 다름) — 선입금 총액과 비교하지 않는다.
+      //  확인할 것은 'CRM 원본 총액이 선입/이월 내역으로 보존되는가'뿐이다(원본 총액 소실 방지).
+      //  선입/이월 미전달(판매상세 품목 저장)은 기존 원장 라인을 그대로 유지하므로 원장 기준으로 본다.
+      const ot = origin.originalTotal ?? null;
+      if (ot != null && ot > 0) {
+        const inflow = Array.isArray(prepaidLines)
+          ? prepaidLines.map(l => Math.max(0, Number(l.amount) || 0))
+          : (await getQuotePrepaidLines(db, quoteId)).filter(l => l.type !== "deduction").map(l => l.amount);
+        const sum = inflow.reduce((s, a) => s + a, 0);
+        const preserved = Math.abs(sum - ot) < 0.005 || inflow.some(a => Math.abs(a - ot) < 0.005);
+        if (!preserved) {
+          res.status(409).json({
+            error: `과거 CRM 원본 총액 ${Math.round(ot).toLocaleString()}원이 선입/이월 내역에 없습니다(현재 선입/이월 합계 ${Math.round(sum).toLocaleString()}원). 차감 견적서의 견적금액(이번 작업 ${Math.round(totalPrice).toLocaleString()}원)은 선입금과 비교하지 않습니다. 원본 총액이 고객 선입금이면 선입/이월 내역에 그 금액을 입력한 뒤 저장하세요.`,
+            code: "LEGACY_VAT_UNCONFIRMED", before: ot, after: sum,
+          });
+          return;
+        }
+      }
+    } else if (origin?.taxBreakdown === "unknown") {
       res.status(409).json({
         error: `과거 CRM 원본 총액은 공급가·부가세 구분이 확인되지 않은 금액입니다. 저장하면 총액이 ${Math.round(Number(qBefore.price ?? 0)).toLocaleString()}원 → ${Math.round(totalPrice).toLocaleString()}원으로 바뀝니다(차액 ${(totalPrice - Number(qBefore.price ?? 0) >= 0 ? "+" : "")}${Math.round(totalPrice - Number(qBefore.price ?? 0)).toLocaleString()}원). 부가세 포함 여부·세금 유형(일반과세/영세율/면세)을 확인한 뒤 진행하세요.`,
         code: "LEGACY_VAT_UNCONFIRMED", before: Number(qBefore.price ?? 0), after: totalPrice,
@@ -3669,7 +3688,8 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
           quoteId,
           companyId: resolvedCompanyId,
           projectId: resolvedProjectId,
-          prepaidLines: Array.isArray(prepaidLines) ? prepaidLines : [],
+          // 미전달(판매상세 품목 저장 등) = 기존 선입/이월 예약 라인 유지(빈 배열로 보고 삭제하지 않음)
+          prepaidLines: Array.isArray(prepaidLines) ? prepaidLines : null,
           quoteTotal: totalPrice,
           quoteSupply: supplyTotal,
           quoteTax: taxTotal,

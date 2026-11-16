@@ -665,9 +665,12 @@ export function NumericInput({
     const cursor = el.selectionStart ?? 0;
     const inputVal = el.value;
 
+    // 커서 앞의 '의미 있는 문자'(숫자·소수점·부호) 수 — 콤마만 제외한다.
+    //  숫자만 세면 "36." 입력 직후 커서가 소수점 앞으로 돌아가 다음 입력이 "365." 가 되는 오류가 있었다.
+    const isSig = (ch: string) => (ch >= "0" && ch <= "9") || (allowDecimal && ch === ".") || (allowNegative && ch === "-");
     let digitsBeforeCursor = 0;
     for (let i = 0; i < cursor; i++) {
-      if (inputVal[i] >= "0" && inputVal[i] <= "9") digitsBeforeCursor++;
+      if (isSig(inputVal[i])) digitsBeforeCursor++;
     }
 
     let newRaw = inputVal.replace(/,/g, "");
@@ -689,7 +692,7 @@ export function NumericInput({
     let newCursor = newFormatted.length;
     for (let i = 0; i < newFormatted.length; i++) {
       if (dCount === digitsBeforeCursor) { newCursor = i; break; }
-      if (newFormatted[i] >= "0" && newFormatted[i] <= "9") dCount++;
+      if (isSig(newFormatted[i])) dCount++;
     }
 
     pendingCaret.current = newCursor;

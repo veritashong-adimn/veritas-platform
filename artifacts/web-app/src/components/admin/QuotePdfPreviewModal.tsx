@@ -222,7 +222,10 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
               marginBottom: 18, display: 'flex', justifyContent: 'flex-end', alignItems: 'center',
             }}>
               <div style={{ textAlign: 'right' }}>
-                <div data-testid="pdf-total-label" style={{ fontSize: 10, color: '#6b7280', fontWeight: 600 }}>{quoteTotalLabel(data.items, data.taxTotal)}</div>
+                <div data-testid="pdf-total-label" style={{ fontSize: 10, color: '#6b7280', fontWeight: 600 }}>{data.prepaid
+                  // 차감 견적서: 상단 금액은 '이번 작업금액(차감 대상)' — 선입금 총액과 혼동하지 않도록 명칭 구분
+                  ? quoteTotalLabel(data.items, data.taxTotal).replace('총 견적금액', '이번 작업금액(차감 대상)')
+                  : quoteTotalLabel(data.items, data.taxTotal)}</div>
                 <div style={{ fontSize: 20, fontWeight: 900, color: BRAND }}>
                   ₩{fmt(data.grandTotal)}
                 </div>
@@ -361,7 +364,7 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
                         <th style={th('단위', 'center', false)}>단위</th>
                         <th style={th('단가', 'right', false)}>단가</th>
                         <th style={th('공급가액', 'right', false)}>공급가액</th>
-                        <th style={th('차감액', 'right', true)}>차감액</th>
+                        <th style={th('차감액(VAT 포함)', 'right', true)}>차감액(VAT 포함)</th>
                       </tr>
                     </thead>
                     <tbody>

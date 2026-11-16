@@ -1581,7 +1581,7 @@ function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, parentOpt
         {/* ⑧ 단가 — 통역은 1인 기준 단가 */}
         <div title={it.productType === 'interpretation' ? '통역사 1인 기준 단가 (공급가액 = 투입인원 × 수량 × 단가)' : undefined}>
           <NumericInput value={it.unitPrice} onChange={v => updateItem(idx, { unitPrice: v })}
-            placeholder="단가 미입력" suffix="원"
+            placeholder="단가 미입력" suffix="원" ariaLabel={`${idx + 1}행 단가`} testId={`qe-price-${idx}`}
             style={rinp('100%', { textAlign: 'right', ...(it.productName.trim() && isPriceBlank(it.unitPrice) ? { borderColor: '#fcd34d', background: '#fffbeb' } : {}) })} />
         </div>
 
@@ -2058,6 +2058,16 @@ export function QuoteEditorWorkspace({
       })
       .catch(() => { /* 복원 실패는 무시 */ });
   }, [initialQuoteId, initialQuoteType]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 차감 견적서 + 과거 CRM 전환 판매: CRM 원본 총액(선입금 입력 안내용). 저장값을 바꾸지 않고 안내·버튼만 제공.
+  const [legacyOriginalTotal, setLegacyOriginalTotal] = useState<number | null>(null);
+  useEffect(() => {
+    if (!isPrepaidQuote || savedQuoteId == null) { setLegacyOriginalTotal(null); return; }
+    fetch(api(`/api/admin/quotes/${savedQuoteId}`), { headers: authH })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { const v = Number(d?.legacyOrigin?.originalTotal); setLegacyOriginalTotal(Number.isFinite(v) && v > 0 ? v : null); })
+      .catch(() => setLegacyOriginalTotal(null));
+  }, [isPrepaidQuote, savedQuoteId, token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 차감 견적서: 거래처의 '이전 가용잔액'(확정잔액 − 다른 차감견적 예약분) 조회
   useEffect(() => {
@@ -2826,6 +2836,8 @@ export function QuoteEditorWorkspace({
           lines={prepaidLines}
           onLinesChange={setPrepaidLines}
           hasCompany={companyId != null}
+          legacyOriginalTotal={legacyOriginalTotal}
+          defaultDate={issueDate}
         />
       )}
 
@@ -2909,7 +2921,8 @@ export function QuoteEditorWorkspace({
             </div>
           ))}
           <div style={{ textAlign: 'right', padding: `${SP[5]}px ${SP[7]}px`, borderRadius: BD.radius.xl, background: C.primaryBg, border: `1.5px solid ${C.primaryBorder}` }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.primary, marginBottom: 3 }}>총 견적금액</div>
+            {/* 차감 견적서: 이번 작업금액(차감 대상) — 선입금 총액과 혼동하지 않도록 명칭 구분 */}
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.primary, marginBottom: 3 }}>{isPrepaidQuote ? '이번 작업금액 (차감 대상)' : '총 견적금액'}</div>
             <div style={{ ...TYPO.totalAmount }}>{formatWon(totals.total)}</div>
           </div>
         </div>

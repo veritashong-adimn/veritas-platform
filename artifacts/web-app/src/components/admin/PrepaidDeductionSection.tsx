@@ -67,14 +67,34 @@ export function PrepaidLinesSection({
   lines,
   onLinesChange,
   hasCompany,
+  legacyOriginalTotal = null,
+  defaultDate,
 }: {
   lines: PrepaidLine[];
   onLinesChange: (lines: PrepaidLine[]) => void;
   hasCompany: boolean;
+  /** 과거 CRM 전환 판매의 원본 총액 — 선입/이월 내역에 없으면 안내(자동 입력하지 않음) */
+  legacyOriginalTotal?: number | null;
+  /** 안내 버튼으로 입력할 때의 기본 발생일(견적일) */
+  defaultDate?: string;
 }) {
   const update = (idx: number, p: Partial<PrepaidLine>) => onLinesChange(lines.map((l, i) => (i === idx ? { ...l, ...p } : l)));
   const remove = (idx: number) => onLinesChange(lines.filter((_, i) => i !== idx));
   const add    = () => onLinesChange([...lines, makeEmptyPrepaidLine()]);
+  // CRM 원본 총액이 선입/이월 내역(합계 또는 개별 행)에 없는지 — 서버 저장 확인과 같은 기준
+  const ot = legacyOriginalTotal != null && legacyOriginalTotal > 0 ? Math.round(legacyOriginalTotal) : null;
+  const originMissing = ot != null && sumPrepaidLines(lines) !== ot && !lines.some(l => num(l.amount) === ot);
+  // 버튼: 선입금 행이 1개 이하면 그 행 금액을 원본 총액으로, 여러 행이면 새 행으로 추가(기존 행은 그대로)
+  const applyOrigin = () => {
+    if (ot == null) return;
+    const filled = { type: 'deposit' as const, amount: String(ot) };
+    if (lines.length <= 1) {
+      const base = lines[0] ?? makeEmptyPrepaidLine();
+      onLinesChange([{ ...base, ...filled, transactionDate: base.amount ? base.transactionDate : (defaultDate || base.transactionDate) }]);
+    } else {
+      onLinesChange([...lines, { ...makeEmptyPrepaidLine(), ...filled, transactionDate: defaultDate || makeEmptyPrepaidLine().transactionDate }]);
+    }
+  };
 
   const hdrCell: React.CSSProperties = { ...TYPO.fieldLabel, color: C.textMuted, padding: '0 2px' };
 
@@ -93,6 +113,13 @@ export function PrepaidLinesSection({
         </div>
       )}
 
+      {originMissing && (
+        <div data-testid="prepaid-legacy-origin" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '9px 12px', marginBottom: 10, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontSize: 13, color: '#92400e' }}>
+          <span>과거 CRM 원본 총액 <b>{formatWon(ot!)}</b>이 선입/이월 내역에 없습니다. 고객 선입금이면 선입금으로 입력하세요(이번 작업금액과는 별개).</span>
+          <DsButton variant="secondary" size="sm" onClick={applyOrigin} data-testid="prepaid-legacy-origin-apply" aria-label="원본 총액을 선입금으로 입력">선입금으로 입력</DsButton>
+        </div>
+      )}
+
       {lines.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: GRID, gap: '6px 10px', alignItems: 'center', marginBottom: 10 }}>
           <div style={hdrCell}>유형</div>
@@ -103,7 +130,7 @@ export function PrepaidLinesSection({
           {lines.map((l, i) => (
             <React.Fragment key={i}>
               <ClickSelect value={l.type} onChange={v => update(i, { type: v as PrepaidLine['type'] })} triggerStyle={dsField()} options={LINE_TYPE_OPTS} />
-              <NumericInput value={l.amount} onChange={raw => update(i, { amount: raw })} suffix="원" style={dsField()} />
+              <NumericInput value={l.amount} onChange={raw => update(i, { amount: raw })} suffix="원" style={dsField()} ariaLabel={`선입/이월 ${i + 1}행 금액`} testId={`prepaid-line-amount-${i}`} />
               <DateField value={l.transactionDate} onChange={v => update(i, { transactionDate: v })} ariaLabel="거래 날짜" style={dsField()} />
               <input
                 value={l.note}
