@@ -2,8 +2,9 @@ import { Router } from "express";
 import { db, prepaidAccountsTable, prepaidLedgerTable, projectsTable } from "@workspace/db";
 import { eq, and, desc, sql } from "drizzle-orm";
 import { requireAuth, requireRole, requireStaffPermission } from "../middlewares/auth";
-import { getCompanyPrepaidState, confirmApprovedQuoteReservations } from "../services/prepaidDeductionQuote";
+import { getCompanyPrepaidState, confirmApprovedQuoteReservations, getLinkCandidates, linkAndConfirmQuoteReservations, getLinkedAmountByAccount } from "../services/prepaidDeductionQuote";
 import { logEvent } from "../lib/logEvent";
+import { writeHistory, snap as ledgerSnap } from "../services/prepaidLedger";
 
 const router = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -48,13 +49,17 @@ router.get("/prepaid/balance/:companyId", ...adminGuard, async (req, res) => {
     const activeAccounts = accounts.filter(a => a.status === "active");
     const totalInitial = activeAccounts.reduce((s, a) => s + Number(a.initialAmount), 0);
     const totalBalance = activeAccounts.reduce((s, a) => s + Number(a.currentBalance), 0);
-    const totalUsed = totalInitial - totalBalance;
+    // 기존 입금 연결(판매관리 입금완료 참조)은 신규 입금 누계에 없으므로 사용액 계산에만 더한다
+    const linkedMap = await getLinkedAmountByAccount(db, activeAccounts.map(a => a.id));
+    const totalLinked = activeAccounts.reduce((s, a) => s + (linkedMap.get(a.id) ?? 0), 0);
+    const totalUsed = totalInitial + totalLinked - totalBalance;
 
     res.json({
       companyId,
       totalInitialAmount: totalInitial,
       totalCurrentBalance: totalBalance,
       totalUsedAmount: totalUsed,
+      totalLinkedAmount: totalLinked,
       accountCount: activeAccounts.length,
       accounts: activeAccounts.map(a => ({
         ...a,
@@ -169,7 +174,9 @@ router.post("/prepaid/deposit", ...adminGuard, async (req, res) => {
           balanceAfter: String(newBalance),
           description: note ?? "추가 입금",
           transactionDate: depositDate ?? today,
+          createdBy: ((req as any).user?.id as number | undefined) ?? null,
         }).returning();
+        await writeHistory(tx, { ledgerId: entry.id, accountId: acctId, action: "create", before: null, after: ledgerSnap(entry), actor: (req as any).user ?? null });
         return { account: { id: acctId, currentBalance: newBalance }, entry };
       } else {
         // 새 계정 생성 + 최초 입금 원장 기록
@@ -189,7 +196,9 @@ router.post("/prepaid/deposit", ...adminGuard, async (req, res) => {
           balanceAfter: String(amount),
           description: note ?? "최초 입금",
           transactionDate: depositDate ?? today,
+          createdBy: ((req as any).user?.id as number | undefined) ?? null,
         }).returning();
+        await writeHistory(tx, { ledgerId: entry.id, accountId: acctId, action: "create", before: null, after: ledgerSnap(entry), actor: (req as any).user ?? null });
         return { account: { id: acctId, currentBalance: amount, isNew: true }, entry };
       }
     });
@@ -258,7 +267,9 @@ router.post("/prepaid/deduct", ...adminGuard, async (req, res) => {
         taxAmount: taxAmount != null ? String(taxAmount) : null,
         description: description ?? "서비스 차감",
         transactionDate: transactionDate ?? today,
+        createdBy: ((req as any).user?.id as number | undefined) ?? null,
       }).returning();
+      await writeHistory(tx, { ledgerId: entry.id, accountId, action: "create", before: null, after: ledgerSnap(entry), actor: (req as any).user ?? null });
       return entry;
     });
     res.status(201).json({
@@ -289,8 +300,13 @@ router.post("/prepaid/quotes/:quoteId/confirm", ...adminGuard, requireStaffPermi
   if (!Number.isInteger(quoteId) || quoteId <= 0) { res.status(400).json({ error: "유효하지 않은 견적 ID" }); return; }
   const allowDuplicate = (req.body as { allowDuplicate?: boolean } | undefined)?.allowDuplicate === true;
   try {
-    const r = await db.transaction(tx => confirmApprovedQuoteReservations(tx, quoteId, { allowDuplicate }));
+    const actorId = ((req as any).user?.id as number | undefined) ?? null;
+    const r = await db.transaction(tx => confirmApprovedQuoteReservations(tx, quoteId, { allowDuplicate, actorId }));
     if (r.result === "not_allowed") { res.status(409).json({ error: r.reason, code: "NOT_CONFIRMABLE" }); return; }
+    if (r.result === "link_required") {
+      res.status(409).json({ error: "판매관리에 이미 입금완료된 같은 금액의 기록이 있습니다. 새 입금으로 반영하지 않고 '기존 입금 연결'로 진행하세요.", code: "LINK_REQUIRED", matches: r.matches });
+      return;
+    }
     if (r.result === "duplicate") {
       res.status(409).json({ error: "같은 돈이 이미 다른 곳에 기록돼 있을 수 있어 확정을 멈췄습니다. 아래 사유를 확인하세요(기존 기록은 바뀌지 않았습니다).", code: "POSSIBLE_DUPLICATE", matches: r.matches });
       return;
@@ -303,6 +319,46 @@ router.post("/prepaid/quotes/:quoteId/confirm", ...adminGuard, requireStaffPermi
   } catch (err) {
     req.log.error({ err }, "Failed to confirm quote prepaid reservations");
     res.status(500).json({ error: "선입금 확정 반영 실패" });
+  }
+});
+
+// ─── 기존 입금 연결 후보 조회 ─────────────────────────────────────────────────
+// GET /api/prepaid/quotes/:quoteId/link-candidates — 견적의 예정 선입/이월 행 + 같은 거래처의 입금완료(원화) 청구회차 후보
+router.get("/prepaid/quotes/:quoteId/link-candidates", ...adminGuard, requireStaffPermission("prepaid.manage"), async (req, res) => {
+  const quoteId = Number(req.params.quoteId);
+  if (!Number.isInteger(quoteId) || quoteId <= 0) { res.status(400).json({ error: "유효하지 않은 견적 ID" }); return; }
+  try { res.json(await getLinkCandidates(db, quoteId)); }
+  catch (err) { req.log.error({ err }, "Failed to load link candidates"); res.status(500).json({ error: "기존 입금 후보 조회 실패" }); }
+});
+
+// ─── 기존 입금 연결 + 확정 ────────────────────────────────────────────────────
+// POST /api/prepaid/quotes/:quoteId/link-confirm { links: [{ ledgerId, paymentId }], reviewNote?, allowDuplicate? }
+//  새 입금 없이 예정 선입/이월 행을 판매관리 입금완료 청구회차에 참조 연결하고 차감을 확정한다(한 트랜잭션).
+//  관리자 검토가 필요한 후보(일반 판매 배분 입금 · 과거 CRM 사용 이력)는 admin + 검토 사유가 있어야 진행.
+router.post("/prepaid/quotes/:quoteId/link-confirm", ...adminGuard, requireStaffPermission("prepaid.manage"), async (req, res) => {
+  const quoteId = Number(req.params.quoteId);
+  if (!Number.isInteger(quoteId) || quoteId <= 0) { res.status(400).json({ error: "유효하지 않은 견적 ID" }); return; }
+  const body = (req.body ?? {}) as { links?: Array<{ ledgerId: number; paymentId: number }>; reviewNote?: string; allowDuplicate?: boolean };
+  const user = (req as any).user as { id: number; email: string; role: string } | undefined;
+  try {
+    const r = await db.transaction(tx => linkAndConfirmQuoteReservations(tx, quoteId, {
+      links: (body.links ?? []).map(l => ({ ledgerId: Number(l.ledgerId), paymentId: Number(l.paymentId) })),
+      actorId: user?.id ?? null, isAdmin: user?.role === "admin", reviewNote: body.reviewNote ?? null, allowDuplicate: body.allowDuplicate === true,
+    }));
+    if (r.result === "not_allowed") { res.status(409).json({ error: r.reason, code: "NOT_CONFIRMABLE" }); return; }
+    if (r.result === "blocked") { res.status(409).json({ error: r.reasons.join("\n"), code: r.code, reasons: r.reasons }); return; }
+    if (r.result === "duplicate") { res.status(409).json({ error: "같은 돈이 이미 다른 곳에 기록돼 있을 수 있어 확정을 멈췄습니다.", code: "POSSIBLE_DUPLICATE", matches: r.matches }); return; }
+    if (r.result === "nothing") { res.json({ ok: true, already: true }); return; }
+    await logEvent("quote", quoteId, "prepaid_existing_payment_linked", req.log, user ?? undefined, JSON.stringify({
+      accountId: r.accountId, linked: r.linked, usageAmount: r.usageAmount, balanceBefore: r.balanceBefore, balanceAfter: r.balanceAfter,
+      reviewNote: body.reviewNote?.trim() || null, allowDuplicate: body.allowDuplicate === true,
+    }));
+    res.json({ ok: true, already: false, ...r });
+  } catch (err: any) {
+    // 동시 요청이 같은 청구회차를 먼저 연결한 경우(부분 유니크 인덱스) — 이중 연결 차단
+    if (err?.code === "23505" || err?.cause?.code === "23505") { res.status(409).json({ error: "이 입금은 방금 다른 원장 행에 연결되었습니다. 새로고침 후 다시 확인하세요.", code: "ALREADY_LINKED" }); return; }
+    req.log.error({ err }, "Failed to link existing payment");
+    res.status(500).json({ error: "기존 입금 연결 실패" });
   }
 });
 

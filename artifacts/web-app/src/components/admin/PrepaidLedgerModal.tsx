@@ -5,6 +5,7 @@ import { api } from "../../lib/constants";
 import { PrimaryBtn, GhostBtn, NumericInput, confirmDialog, alertDialog } from "../ui";
 import { DraggableModal } from "./DraggableModal";
 import { DateField } from "./DatePickerShared";
+import { PrepaidLinkPanel } from "./PrepaidLinkPanel";
 
 interface LedgerEntry {
   id: number;
@@ -19,6 +20,8 @@ interface LedgerEntry {
   createdAt: string;
   supplyAmount: number | null;
   taxAmount: number | null;
+  /** 기존 입금 연결(판매관리 입금완료 청구회차 참조) — 새 현금 입금 아님 */
+  linkedPayment?: { paymentId: number; projectId?: number; projectTitle?: string; saleNo?: string | null; sequence?: number; amount?: number; paidDate?: string | null; depositStatus?: string } | null;
 }
 
 interface PrepaidAccount {
@@ -37,6 +40,8 @@ interface PrepaidAccount {
   pendingDeduction?: number;
   expectedBalance?: number;
   pending?: PendingQuote[];
+  linkedAmount?: number;   // 기존 입금 연결 합계(확정) — 신규 입금 누계와 분리
+  usedAmount?: number;     // 사용 금액 = 신규 입금 + 기존 입금 연결 − 잔액
 }
 
 interface PendingQuote {
@@ -56,11 +61,13 @@ interface Props {
   canManage?: boolean;
   /** 원장 항목 영구삭제(관리자 전용) — 미전달 시 기존 동작(표시). */
   canDelete?: boolean;
+  /** 관리자 — 기존 입금 연결 시 검토 사유 입력(일반 판매 배분 입금·과거 사용 이력 불명확) */
+  isAdmin?: boolean;
 }
 
 const fmt = (n: number) => n.toLocaleString("ko-KR");
 
-export function PrepaidLedgerModal({ accountId, authHeaders, onClose, onUpdate, canManage = true, canDelete = true }: Props) {
+export function PrepaidLedgerModal({ accountId, authHeaders, onClose, onUpdate, canManage = true, canDelete = true, isAdmin = false }: Props) {
   const [account, setAccount] = useState<PrepaidAccount | null>(null);
   const [loading, setLoading] = useState(true);
   const [showTxForm, setShowTxForm] = useState(false);
@@ -115,6 +122,8 @@ export function PrepaidLedgerModal({ accountId, authHeaders, onClose, onUpdate, 
 
   // 판매확정 차감 견적의 예약 → 확정 반영(직원 명시 실행). 중복 의심이면 한 번 더 확인.
   const [confirmingQuote, setConfirmingQuote] = useState<number | null>(null);
+  // 기존 입금 연결 필요(판매관리 입금완료 기록 존재) — 연결 패널 대상
+  const [linkTarget, setLinkTarget] = useState<{ pq: PendingQuote; reasons: string[] } | null>(null);
   const handleConfirmQuote = async (pq: PendingQuote) => {
     const inflow = pq.inflow.reduce((s, l) => s + l.amount, 0), ded = pq.deduction?.amount ?? 0;
     const ok = await confirmDialog({
@@ -130,6 +139,11 @@ export function PrepaidLedgerModal({ accountId, authHeaders, onClose, onUpdate, 
       });
       let res = await post(false);
       let d = await res.json().catch(() => ({}));
+      if (res.status === 409 && d?.code === "LINK_REQUIRED") {
+        // 새 입금으로 반영하지 않고 '기존 입금 연결' 경로로 안내(중복 검사 우회 없음)
+        setLinkTarget({ pq, reasons: (d.matches ?? []).map((m: any) => m.reason) });
+        return;
+      }
       if (res.status === 409 && d?.code === "POSSIBLE_DUPLICATE") {
         // 구체적인 중복 사유(선입 원장·다른 견적 예정·판매 청구회차·입금거래·차감) — 기존 기록은 바꾸지 않음
         const list = (d.matches ?? []).map((m: any) => `· ${m.reason ?? `${m.date ?? "-"} ${fmt(Number(m.amount))}원`}`).join("\n");
@@ -185,8 +199,9 @@ export function PrepaidLedgerModal({ accountId, authHeaders, onClose, onUpdate, 
           {/* 잔액 summary */}
           <div style={{ display: "flex", gap: 16, marginTop: 20, flexWrap: "wrap" }}>
             {[
-              { label: "최초 입금액", value: `${fmt(account.initialAmount)}원`, sub: account.depositDate ? `입금일: ${formatDisplayDate(account.depositDate)}` : undefined },
-              { label: "사용 금액", value: `${fmt(account.initialAmount - account.currentBalance)}원`, sub: "누적 차감" },
+              { label: "신규 입금 누계", value: `${fmt(account.initialAmount)}원`, sub: account.depositDate ? `입금일: ${formatDisplayDate(account.depositDate)}` : "선입금관리에서 받은 입금" },
+              ...((account.linkedAmount ?? 0) > 0 ? [{ label: "기존 입금 연결", value: `${fmt(account.linkedAmount ?? 0)}원`, sub: "판매관리 입금완료 기록 참조(새 입금 아님)" }] : []),
+              { label: "사용 금액", value: `${fmt(account.usedAmount ?? (account.initialAmount - account.currentBalance))}원`, sub: "누적 차감" },
               { label: "현재 잔액", value: `${fmt(account.currentBalance)}원`, highlight: true },
             ].map(s => (
               <div key={s.label} style={{ background: s.highlight ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.12)", borderRadius: 10, padding: "12px 20px", flex: "1 1 140px", backdropFilter: "blur(8px)", border: s.highlight ? "1px solid rgba(255,255,255,0.4)" : "none" }}>
@@ -277,6 +292,13 @@ export function PrepaidLedgerModal({ accountId, authHeaders, onClose, onUpdate, 
             </div>
           )}
 
+          {linkTarget && (
+            <PrepaidLinkPanel quoteId={linkTarget.pq.quoteId} quoteLabel={`견적 ${linkTarget.pq.quoteNumber ?? "#" + linkTarget.pq.quoteId} · ${linkTarget.pq.projectTitle ?? linkTarget.pq.quoteTitle ?? ""}`}
+              deduction={linkTarget.pq.deduction?.amount ?? 0} currentBalance={account.currentBalance} authHeaders={authHeaders}
+              isAdmin={isAdmin} reasons={linkTarget.reasons}
+              onDone={async () => { setLinkTarget(null); await load(); onUpdate(); }} onCancel={() => setLinkTarget(null)} />
+          )}
+
           {/* 원장 테이블 */}
           <div style={{ fontWeight: 700, fontSize: 15, color: "#111827", marginBottom: 12 }}>거래 내역 (원장)</div>
           {account.ledger.length === 0 ? (
@@ -305,16 +327,18 @@ export function PrepaidLedgerModal({ accountId, authHeaders, onClose, onUpdate, 
                     const tc = typeColor[e.type] ?? typeColor.adjustment;
                     const isDeduct = e.type === "deduction";
                     const bgRow = isDeduct ? (idx % 2 === 0 ? "#fdf4ff" : "#f5f0ff") : (idx % 2 === 0 ? "#fff" : "#f9fafb");
-                    const desc = e.projectTitle
+                    const lp = e.linkedPayment;
+                    const desc = (e.projectTitle
                       ? `${e.description ?? ""} #${e.projectId} ${e.projectTitle}`.trim()
-                      : (e.description ?? "-");
+                      : (e.description ?? "-"))
+                      + (lp ? ` · 연결: 판매 #${lp.projectId ?? "-"}${lp.saleNo ? `(${lp.saleNo})` : ""} ${lp.sequence ?? "-"}회차 · 실제 입금 ${lp.paidDate ?? "-"}` : "");
                     const tdBase: React.CSSProperties = { padding: "10px 14px", borderBottom: "1px solid #f3f4f6", whiteSpace: "nowrap" };
                     return (
                       <tr key={e.id} style={{ background: bgRow }}>
                         <td style={{ ...tdBase, fontSize: 13, color: "#374151" }}>{formatDisplayDate(e.transactionDate)}</td>
                         <td style={{ ...tdBase }}>
                           <span style={{ background: tc.bg, color: tc.color, borderRadius: 6, padding: "2px 8px", fontSize: 11, fontWeight: 700 }}>
-                            {typeLabel[e.type] ?? e.type}
+                            {e.linkedPayment ? "기존 입금 연결" : (typeLabel[e.type] ?? e.type)}
                           </span>
                         </td>
                         <td style={{ ...tdBase, fontSize: 12, color: "#374151", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{desc}</td>
