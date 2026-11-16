@@ -2273,6 +2273,8 @@ export function QuoteEditorWorkspace({
   // 변경견적 여부 최신값(family는 아래에서 파생) — persistQuote 저장 시점에 안전하게 읽기 위한 ref.
   const isRevisionRef = useRef(false);
   const isDerivedRef = useRef(false);   // 파생견적 저장 시 분리사유(versionReason) 전달 판단용
+  const convertedRef = useRef(false);   // 판매확정 견적 저장 시 변경사유(versionReason) 전달 판단용
+  const reasonInputRef = useRef<HTMLInputElement>(null);
 
   // 저장 실행부 — 편집 화면을 닫지 않고 저장만 수행하고 { quoteId, projectId }를 반환한다.
   // 신규 견적은 최초 저장 시 생성하고 savedQuoteId를 기록 → 이후(저장/견적서)엔 동일 견적을 업데이트(중복 생성 방지).
@@ -2313,7 +2315,9 @@ export function QuoteEditorWorkspace({
           //  판매관리(projectId≠null)의 버전견적 저장은 기존 POST 경로를 사용하며 PM은 프로젝트에서 관리 → 여기서 건드리지 않음.
           ...(projectId === null ? { adminId: adminId ?? null } : {}),
           // 변경사유/분리사유 — 변경견적·파생견적에서만 전달(일반/버전견적 저장 동작은 기존과 동일하게 유지)
-          ...(isRevisionRef.current || isDerivedRef.current ? { versionReason } : {}),
+          //  판매확정(approved) 견적도 전달 — 서버는 판매확정 건 금액 변경에 사유를 요구한다(REASON_REQUIRED).
+          //  (판매확정은 입력했을 때만 전달 — 빈 값으로 기존 사유를 지우지 않음)
+          ...(isRevisionRef.current || isDerivedRef.current || (convertedRef.current && versionReason.trim()) ? { versionReason } : {}),
         };
         let res  = await fetch(url, {
           method: 'PUT', headers: { ...authH, 'Content-Type': 'application/json' },
@@ -2324,6 +2328,13 @@ export function QuoteEditorWorkspace({
         if (res.status === 409 && await confirmLegacyVatChange(data, m => confirmDialog({ title: '원본 총액 변경 확인', message: m, confirmLabel: '변경 저장', cancelLabel: '취소' }))) {
           res = await fetch(url, { method: 'PUT', headers: { ...authH, 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, confirmLegacyVat: true }) });
           data = await res.json();
+        }
+        if (!res.ok && data?.code === 'REASON_REQUIRED') {
+          // 판매확정 견적의 금액 변경 — 저장되지 않았음을 분명히 알리고 변경 사유 입력칸으로 이동
+          onToast('저장되지 않았습니다: 판매확정 견적의 금액을 바꾸려면 아래 \'변경 사유\'를 입력한 뒤 다시 저장하세요.');
+          reasonInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          reasonInputRef.current?.focus();
+          return null;
         }
         if (!res.ok) {
           const msg = res.status === 404 ? '견적 수정 API를 찾을 수 없습니다. (서버 재시작 필요)'
@@ -2466,6 +2477,7 @@ export function QuoteEditorWorkspace({
   const isRevision     = meMember?.relationType === 'revision';
   // persistQuote(위에서 선언)에서 저장 시점의 최신 isRevision 을 안전하게 참조하기 위한 ref.
   isRevisionRef.current = isRevision;
+  convertedRef.current = converted;
   const rootMember     = family.find(m => m.relationType == null) ?? null;   // 원견적
   const currentMember  = family.find(m => m.isCurrent) ?? null;              // 현재 유효본
   const isPendingRevision = isRevision && meMember?.status === 'pending';
@@ -2941,17 +2953,18 @@ export function QuoteEditorWorkspace({
               ref={el => { if (el) { el.style.height = 'auto'; el.style.height = `${el.scrollHeight + 2}px`; } }}
               style={{ ...inpSt, resize: 'vertical', fontFamily: 'inherit', minHeight: '9em', overflow: 'hidden' }} />
           </div>
-          {(projectId !== null || isRevision || isDerived) && (
+          {(projectId !== null || isRevision || isDerived || converted) && (
             <div style={{ background: C.warningBg, borderRadius: BD.radius.xl, padding: `${SP[5]}px ${SP[6]}px`, border: `1px solid ${C.warningBorder}` }}>
               <label style={{ ...TYPO.fieldLabel, color: C.warningText, display: 'block', marginBottom: SP[3] }}>
-                {isDerived ? '분할 사유' : isRevision ? '변경 사유' : '버전 변경 사유'}
+                {isDerived ? '분할 사유' : isRevision ? '변경 사유' : converted && projectId === null ? '변경 사유' : '버전 변경 사유'}
                 <span style={{ marginLeft: SP[2], fontWeight: 400, color: C.warning }}>
                   {isDerived ? '— 이 분할견적의 분할사유입니다(저장 시 반영, 현재유효 견적에는 영향 없음)'
                     : isRevision ? '— 이 변경견적의 변경사유입니다(저장 시 반영, 원견적에는 영향 없음)'
+                    : converted && projectId === null ? '— 판매확정 견적의 금액을 바꿀 때 필수입니다(감사로그에 기록)'
                     : '— 저장 시 새 Version으로 기록됩니다'}
                 </span>
               </label>
-              <input value={versionReason} onChange={e => setVersionReason(e.target.value)}
+              <input ref={reasonInputRef} value={versionReason} onChange={e => setVersionReason(e.target.value)}
                 data-testid="input-version-reason" aria-label={isDerived ? '분할 사유' : isRevision ? '변경 사유' : '버전 변경 사유'}
                 placeholder="예: 고객 요청에 따른 조건 변경 / 회사별 청구 분리 / 금액 수정" style={{ ...inpSt, background: C.bgCard }} />
             </div>
@@ -3233,7 +3246,7 @@ export function QuoteEditorWorkspace({
           🗑 {deleting ? '삭제 중…' : '견적서 삭제'}
         </button>
       )}
-      <DsButton variant="primary" size="md" onClick={handleSave} disabled={saving || batchClosed}>
+      <DsButton variant="primary" size="md" onClick={handleSave} disabled={saving || batchClosed} data-testid="btn-save-quote" aria-label="견적 저장">
         {batchClosed ? '🔒 마감됨' : saving ? '저장 중…' : '💾 저장'}
       </DsButton>
     </>

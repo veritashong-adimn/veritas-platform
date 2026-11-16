@@ -733,7 +733,7 @@ export function NumericInput({
 export function DsButton({
   children, variant = 'primary', size = 'md',
   onClick, disabled = false, type = 'button', style, icon,
-  title,
+  title, 'data-testid': testId, 'aria-label': ariaLabel,
 }: {
   children?: React.ReactNode;
   variant?:  BtnVariant;
@@ -744,12 +744,16 @@ export function DsButton({
   style?:    React.CSSProperties;
   icon?:     React.ReactNode;
   title?:    string;
+  'data-testid'?: string;
+  'aria-label'?:  string;
 }) {
   const [hov, setHov] = useState(false);
   return (
     <button
       type={type}
       title={title}
+      data-testid={testId}
+      aria-label={ariaLabel}
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
       onMouseEnter={() => !disabled && setHov(true)}
