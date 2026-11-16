@@ -130,7 +130,10 @@ const INCIDENTAL_MAIN_CATEGORIES = new Set([
   "교통비", "식대", "숙박", "기타실비", "배송/퀵", // operations/expense 계열 실비
 ]);
 function isIncidentalCostItem(itemType: string | null | undefined, prod: any): boolean {
-  if ((itemType ?? "") === "expense") return true;                     // EX-*(교통/식비/숙박/배송) + operations 정규화분
+  // 판매 품목유형 'expense'만으로 제외하지 않는다 — '기타' 상품(예: 프로젝트형 '파브리 업무지원', productType=project)도
+  //   판매 저장 시 itemType='expense'로 들어오므로, 상품 카탈로그가 있으면 아래 카탈로그 기준(유형·코드·메인카테고리)으로만 판별한다.
+  //   카탈로그 상품이 없는 직접입력 'expense' 품목(교통비 등)은 기존처럼 부대비용으로 본다.
+  if ((itemType ?? "") === "expense" && !prod) return true;
   const pt = String(prod?.productType ?? "").toLowerCase();
   if (pt === "expense" || pt === "operations") return true;            // 실비/운영 상품유형
   const code = String(prod?.code ?? "").toUpperCase();
