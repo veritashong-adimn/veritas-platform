@@ -48,6 +48,9 @@ export interface SalesHistoryRow {
   contactState?: "master" | "restored" | "review" | null;
   productName: string | null;
   amount: number | null;
+  // (additive) 공급가액·부가세·합계 — 판매 상세와 같은 원천(대표 견적 품목 합계 / 과거 CRM 원본 값).
+  //   vatMode: taxable | zero_rate | exempt | unknown(부가세 유형 확인 필요 — 공급가·부가세는 표시하지 않음)
+  supplyAmount?: number | null; vatAmount?: number | null; totalAmount?: number | null; vatMode?: string | null;
   collectionDate: string | null;
   collectionStatus: string | null;
   workflowStatus: string | null;
@@ -155,14 +158,27 @@ function fillSaleDates(list: SalesHistoryRow[], idMap: Map<number, SaleIdentity>
 async function fillProductNames(dbx: any, list: SalesHistoryRow[], quoteIdByProject: Map<number, number>) {
   const qids = [...new Set(list.map(r => quoteIdByProject.get(Number(r.id))).filter((v): v is number => v != null))];
   if (!qids.length) return;
+  // 금액(공급가액·부가세·합계)과 부가세 유형도 같은 품목에서 판정 — 판매 상세(deriveVatMode)·세금유형 확인 절차와 같은 규칙:
+  //   할인 행 제외, 과세인데 공급가액이 있고 부가세 0원인 품목이 있거나 유형이 섞이면 '확인 필요'(unknown).
   const agg = (await dbx.execute(sql`SELECT quote_id, count(*)::int AS n,
-      (array_agg(product_name ORDER BY id))[1] AS first_name
+      (array_agg(product_name ORDER BY id))[1] AS first_name,
+      coalesce(sum(supply_amount), 0)::text AS supply, coalesce(sum(tax_amount), 0)::text AS tax, coalesce(sum(total_amount), 0)::text AS total,
+      bool_or(coalesce(item_type, '') <> 'discount' AND coalesce(tax_type, 'taxable') NOT IN ('zero_rate', 'exempt')
+              AND abs(supply_amount) >= 0.5 AND abs(tax_amount) < 0.5) AS unconfirmed,
+      array_agg(DISTINCT CASE WHEN tax_type IN ('zero_rate', 'exempt') THEN tax_type ELSE 'taxable' END)
+        FILTER (WHERE coalesce(item_type, '') <> 'discount') AS kinds
     FROM quote_items WHERE quote_id IN (${sql.join(qids.map(i => sql`${i}`), sql`, `)}) GROUP BY quote_id`)).rows as any[];
   const byQuote = new Map(agg.map(a => [Number(a.quote_id), a]));
   for (const r of list) {
     const a = byQuote.get(quoteIdByProject.get(Number(r.id)) ?? -1);
     if (!a || !a.n) continue;
     r.productName = `${a.first_name ?? ""}${a.n > 1 ? ` 외 ${a.n - 1}건` : ""}`;
+    const kinds: string[] = Array.isArray(a.kinds) ? a.kinds : [];
+    const mode = a.unconfirmed || kinds.length > 1 ? "unknown" : (kinds[0] ?? "taxable");
+    r.vatMode = mode;
+    r.totalAmount = Number(a.total);
+    r.supplyAmount = mode === "unknown" ? null : Number(a.supply);
+    r.vatAmount = mode === "unknown" ? null : (mode === "taxable" ? Number(a.tax) : 0);
   }
 }
 
@@ -275,6 +291,11 @@ function mapLegacyRow(r: any): SalesHistoryRow {
       : (r.customerContact === "확인 필요" || r.reviewNeeded) ? "review" : null,
     productName: r.productName ?? null,
     amount: toNum(r.totalAmount),
+    // 과거 CRM 원본 금액 — 공급가·부가세가 원본에 둘 다 있을 때만 표시(없으면 확인 필요, 임의 계산 없음)
+    totalAmount: toNum(r.totalAmount),
+    ...(toNum(r.supplyAmount) != null && toNum(r.vatAmount) != null
+      ? { supplyAmount: toNum(r.supplyAmount), vatAmount: toNum(r.vatAmount), vatMode: "original" }
+      : { supplyAmount: null, vatAmount: null, vatMode: "unknown" }),
     collectionDate: r.collectionDate ?? null,
     collectionStatus: r.collectionStatus ?? null,
     workflowStatus: null,         // Legacy 는 Current workflow 없음(가짜 생성 금지)
@@ -396,7 +417,7 @@ export async function getSalesHistory(dbx: any, q: Record<string, string | undef
       const fetched = await dbx.select({
         id: LA.id, recordDate: LA.recordDate, saleDate: LEGACY_SALE_DATE, saleNumber: sql<string | null>`${LA.sourceRaw} ->> '판매번호'`,
         companyName: LA.companyName, contactName: LA.contactName,
-        productName: LA.productName, totalAmount: LA.totalAmount, collectionDate: LA.collectionDate, collectionStatus: LA.collectionStatus,
+        productName: LA.productName, totalAmount: LA.totalAmount, supplyAmount: LA.supplyAmount, vatAmount: LA.vatAmount, collectionDate: LA.collectionDate, collectionStatus: LA.collectionStatus,
         taxInvoiceDate: sql<string | null>`nullif(btrim(${LA.sourceRaw} ->> '세금계산서발행(예정)일'), '')`,
         salesRep: sql<string | null>`nullif(btrim(${LA.sourceRaw} ->> '영업담당자'), '')`,
         paymentDate: sql<string | null>`substring(${LA.sourceRaw} ->> '입금일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}')`,

@@ -19,14 +19,22 @@ type Row = {
   paymentStatus?: 'completed' | 'partial' | null;   // current: 청구정보 실제 입금 기준(입금 없음 null)
   // 판매건 식별(서버 saleIdentity) — 판매번호 / 원 견적번호 / 프로젝트명(대체값이면 projectNameFallback)
   saleNumber?: string | null; quoteNumber?: string | null; projectName?: string | null; projectNameFallback?: boolean;
+  // 공급가액·부가세·합계(서버: 판매 상세와 같은 원천). vatMode=unknown 이면 공급가·부가세 미확인('—')
+  supplyAmount?: number | null; vatAmount?: number | null; totalAmount?: number | null; vatMode?: string | null;
 };
 
 // 열 구성(폭 px) — 판매번호·프로젝트명 추가로 표가 넓어지면 기존 표 가로 스크롤(overflowX)을 사용한다.
 const COLUMNS: [string, number][] = [
-  ['날짜', 130], ['판매번호', 150], ['거래처', 190], ['고객 담당자', 110], ['프로젝트명', 240], ['통역/번역', 80],
-  ['상품', 170], ['금액', 100], ['계산서발행일', 110], ['입금일', 100], ['입금내역', 120], ['담당PM', 90],
+  ['날짜', 120], ['판매번호', 136], ['거래처', 160], ['고객 담당자', 96], ['프로젝트명', 190], ['통역/번역', 64],
+  ['상품', 140], ['공급가액', 96], ['부가세', 80], ['합계', 104], ['계산서발행일', 100], ['입금일', 92], ['입금내역', 110], ['담당PM', 80],
 ];
 const TABLE_MIN_WIDTH = COLUMNS.reduce((s, [, w]) => s + w, 0);
+
+// 금액 칸 — 우측 정렬. 미확인(부가세 유형 확인 필요·원본 구분 없음)은 '—'(임의 계산 없음)
+const AMOUNT_COLS = new Set(['공급가액', '부가세', '합계']);
+const amt = (v: number | null | undefined) => (v == null ? '—' : Math.round(v).toLocaleString());
+const vatTitle = (r: Row) => r.vatMode === 'unknown' ? '부가세 유형 확인 필요 — 공급가액·부가세를 임의로 계산하지 않습니다'
+  : r.vatMode === 'zero_rate' ? '영세율(부가세 0원)' : r.vatMode === 'exempt' ? '면세(부가세 0원)' : undefined;
 
 // (표시 전용) 통역/번역 서비스 유형 분류 — 원본 변경 없이 상품명 기준.
 //   통역→통역 / 번역→번역 / 상품명은 있으나 통역·번역 아님(장비 등)→기타 / 상품명 없음·둘 다 명시(확정 불가)→미분류.
@@ -123,7 +131,7 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
           <thead>
             <tr style={{ textAlign: 'left' }}>
               {COLUMNS.map(([h, w]) => (
-                <th key={h} style={{ width: w, padding: '10px 12px', borderBottom: '1px solid #e5e7eb', whiteSpace: 'nowrap', position: 'sticky', top: 0, zIndex: 2, background: '#f3f4f6' }}>{h}</th>
+                <th key={h} style={{ width: w, padding: '10px 12px', textAlign: AMOUNT_COLS.has(h) ? 'right' : undefined, borderBottom: '1px solid #e5e7eb', whiteSpace: 'nowrap', position: 'sticky', top: 0, zIndex: 2, background: '#f3f4f6' }}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -138,7 +146,7 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
                     style={{ borderBottom: '1px solid #f3f4f6', cursor: 'pointer', background: zebra, transition: 'background-color 0.12s ease' }}
                     onMouseEnter={e => (e.currentTarget.style.background = '#f3f4f6')} onMouseLeave={e => (e.currentTarget.style.background = zebra)}>
                   {/* 구분 badge 열 제거 — 현재/과거 구분은 탭 필터·행 클릭 라우팅(isLegacy)으로 유지 */}
-                  {/* 열 순서: 날짜 | 판매번호 | 거래처 | 고객 담당자 | 프로젝트명 | 통역/번역 | 상품 | 금액 | 계산서발행일 | 입금일 | 입금내역 | 담당PM */}
+                  {/* 열 순서: 날짜 | 판매번호 | 거래처 | 고객 담당자 | 프로젝트명 | 통역/번역 | 상품 | 공급가액 | 부가세 | 합계 | 계산서발행일 | 입금일 | 입금내역 | 담당PM */}
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {r.recordDate ?? '-'}
                     {/* 과거 CRM 에서 운영 전환된 판매건 — 출처 표시(목록에는 운영 판매 1건만 표시) */}
@@ -150,8 +158,10 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
                     {r.saleNumber ? (
                       <button type="button" data-testid={`sh-saleno-${r.key}`} aria-label={`판매번호 ${r.saleNumber} 상세 보기`}
                         onClick={e => { e.stopPropagation(); if (isLegacy) onOpenLegacyDetail(Number(r.id)); else onOpenSalesDetail(Number(r.id)); }}
-                        style={{ border: 'none', background: 'transparent', padding: '2px 4px', cursor: 'pointer', color: '#2563eb', fontWeight: 600, fontSize: 13,
-                          textDecoration: 'underline', textUnderlineOffset: 2, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', fontVariantNumeric: 'tabular-nums' }}>
+                        onMouseEnter={e => { e.currentTarget.style.textDecoration = 'underline'; }} onMouseLeave={e => { e.currentTarget.style.textDecoration = 'none'; }}
+                        onFocus={e => { e.currentTarget.style.textDecoration = 'underline'; }} onBlur={e => { e.currentTarget.style.textDecoration = 'none'; }}
+                        style={{ border: 'none', background: 'transparent', padding: '2px 4px', cursor: 'pointer', color: '#2563eb', fontWeight: 400, fontSize: 13,
+                          textDecoration: 'none', textUnderlineOffset: 2, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', fontVariantNumeric: 'tabular-nums' }}>
                         {r.saleNumber}
                       </button>
                     ) : <span style={{ padding: '0 4px', color: '#9ca3af' }}>-</span>}
@@ -183,7 +193,10 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
                   </td>
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap' }}>{serviceTypeOf(r)}</td>
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.productName ?? undefined}>{r.productName ?? '-'}</td>
-                  <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.amount != null ? r.amount.toLocaleString() : '-'}</td>
+                  {/* 공급가액 · 부가세 · 합계 — 판매 상세 저장값 기준. 영세율·면세 부가세 0, 미확인은 '—' */}
+                  <td data-testid={`sh-supply-${r.key}`} title={vatTitle(r)} style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: r.supplyAmount == null ? '#9ca3af' : undefined }}>{amt(r.supplyAmount)}</td>
+                  <td data-testid={`sh-vat-${r.key}`} title={vatTitle(r)} style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: r.vatAmount == null ? '#9ca3af' : undefined }}>{amt(r.vatAmount)}</td>
+                  <td data-testid={`sh-total-${r.key}`} style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600, color: '#111827' }}>{amt(r.totalAmount ?? r.amount)}</td>
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.taxInvoiceDate ?? '-'}</td>
                   {/* 입금일(YYYY-MM-DD) · 입금내역(원문 보존, 상태 변환 없음) — 원본 값 없으면 '-' */}
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.paymentDate ?? '-'}</td>
