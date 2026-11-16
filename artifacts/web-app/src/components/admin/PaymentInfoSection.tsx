@@ -180,10 +180,13 @@ function PaymentMethodField({ value, onChange, triggerStyle, testid }: {
   );
 }
 
-// 청구업체 검색 — 거래처명 입력 → /admin/companies?search 결과에서 선택.
-function CompanyPicker({ token, companyName, onPick, style }: {
-  token: string; companyName?: string | null;
-  onPick: (c: { id: number; name: string }) => void; style: React.CSSProperties;
+// 청구업체 — 거래처명 입력 → /admin/companies?search 결과에서 선택(거래처 연결) 또는 업체명 직접입력(미연결, Master 생성 없음).
+//  · onType: 입력값을 그대로 청구업체명으로 반영(선택 전까지 거래처 미연결). 이전에는 선택하지 않으면 입력값이 버려졌다.
+//  · onEmpty: 칸을 비우고 나가면 판매 거래처 기본값으로 되돌린다.
+function CompanyPicker({ token, companyName, linked = true, onPick, onType, onEmpty, style, testid }: {
+  token: string; companyName?: string | null; linked?: boolean;
+  onPick: (c: { id: number; name: string }) => void; onType?: (name: string) => void; onEmpty?: () => void;
+  style: React.CSSProperties; testid?: string;
 }) {
   const [q, setQ] = useState(companyName ?? '');
   const [results, setResults] = useState<{ id: number; name: string; customerType?: string | null; phone?: string | null; mobile?: string | null; email?: string | null }[]>([]);
@@ -200,9 +203,13 @@ function CompanyPicker({ token, companyName, onPick, style }: {
     } catch { setResults([]); }
   };
   return (
-    <div style={{ position: 'relative' }} onBlur={() => setTimeout(() => setOpen(false), 150)}>
-      <input style={style} value={q} placeholder="거래처 검색" aria-label="청구업체 검색"
-        onChange={e => search(e.target.value)} onFocus={() => { if (results.length) setOpen(true); }} />
+    <div style={{ position: 'relative' }} onBlur={() => setTimeout(() => { setOpen(false); if (!q.trim()) onEmpty?.(); }, 150)}>
+      <input style={style} value={q} placeholder="거래처 검색 또는 업체명 입력" aria-label="청구업체 검색 또는 입력" data-testid={testid}
+        onChange={e => { search(e.target.value); onType?.(e.target.value); }} onFocus={() => { if (results.length) setOpen(true); }} />
+      {!linked && q.trim() && (
+        <div data-testid={testid ? `${testid}-unlinked` : undefined} title="거래처 목록에서 선택하지 않은 업체명입니다. 거래처 정보는 변경·생성되지 않습니다."
+          style={{ fontSize: 10, color: '#b45309', marginTop: 2, whiteSpace: 'nowrap' }}>직접입력 · 거래처 미연결</div>
+      )}
       {open && results.length > 0 && (
         <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 30, background: '#fff', border: `1px solid ${C.g200}`, borderRadius: 6, boxShadow: '0 4px 18px rgba(0,0,0,0.1)', maxHeight: 200, overflowY: 'auto' }}>
           {results.map(c => {
@@ -269,6 +276,11 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     const opts = await loadContacts(c.id);
     if (opts.length) patchRow(i, { billingContactId: Number(opts[0].value), billingContactName: opts[0].label });
   };
+
+  // 청구업체명 직접입력 — 이 회차만 변경. 입력한 이름을 저장값으로 쓰고 거래처 연결·담당자는 해제(다른 회차·판매 거래처 불변).
+  const typeCompany = (i: number, name: string) => patchRow(i, { billingCompanyId: null, billingCompanyName: name, billingContactId: null, billingContactName: null });
+  // 비우면 판매 거래처 기본값으로 복귀(명시적 기본값 처리)
+  const resetCompany = (i: number) => patchRow(i, { billingCompanyId: defaultCompany?.id ?? null, billingCompanyName: defaultCompany?.name ?? null, billingContactId: null, billingContactName: null });
 
   const mapRow = (r: PayRow): PayRow => {
   // §8 수정모드 복원 — 이 청구행이 '첫 입금' 거래 1건만 가진 경우, 그 거래값을 기본행 임시필드로 되살린다.
@@ -413,6 +425,9 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
             paymentCategory: category,                                     // 결제유형(섹션 단위 → 전 행 동일)
             payer: r.payer || null, depositItem: r.depositItem || null,
             billingCompanyId: r.billingCompanyId ?? null, billingContactId: r.billingContactId ?? null,
+            // 회차별 청구업체명(직접입력 포함). 비어 있으면 판매 거래처 기본값.
+            billingCompanyName: (r.billingCompanyName ?? '').trim() || (r.billingCompanyId == null ? (defaultCompany?.name ?? null) : null),
+            ...((r.billingCompanyName ?? '').trim() || r.billingCompanyId != null ? {} : { billingCompanyId: defaultCompany?.id ?? null }),
             note: r.note || null,
           };
         }),
@@ -427,6 +442,10 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
       //  · 트리거: 원화 입금액(>0) OR 외화송금 외화입금액(>0). 외화-only(원화 0/미확정)도 반드시 거래를 남긴다.
       //  · 거래 0건이면 신규 insert, 이미 1건이면(§8 복원값) 그 거래를 update(_txnId)한다. 2건 이상 행은 하위행에서 관리(대상 제외).
       const savedRows: any[] = Array.isArray(data.rows) ? data.rows : [];
+      // 저장 결과 확인 — 서버가 실제 저장한 회차별 청구업체명이 요청과 다르면 성공 처리하지 않는다.
+      const sent: any[] = payload.rows;
+      const mismatch = sent.findIndex((s, idx) => s.billingCompanyName && (savedRows[idx]?.billingCompanyName ?? null) !== s.billingCompanyName);
+      if (mismatch >= 0) { onToast(`청구업체 저장 확인 실패(${mismatch + 1}회차) — 다시 시도해 주세요.`); await onChanged(); return; }
       const firstPays = rows.map((r, idx) => ({ r, idx })).filter(({ r }) => {
         const cnt = r.transactions?.length ?? 0;
         if (cnt > 1) return false;
@@ -652,7 +671,10 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
         {/* overflow: visible — CompanyPicker의 inline absolute 검색 드롭다운이 셀에 잘리지 않도록(ClickSelect와 달리 portal 아님). 읽기 텍스트는 자체 span에서 말줄임 처리. */}
         <td style={{ ...tdBase, width: 180, overflow: 'visible' }}>
           {editable && !voucher
-            ? <CompanyPicker token={token} companyName={r.billingCompanyName} onPick={(c) => pickCompany(i, c)} style={inp} />
+            ? <CompanyPicker token={token} companyName={r.billingCompanyName} linked={r.billingCompanyId != null} style={inp} testid={`pay-company-${i}`}
+                onPick={(c) => pickCompany(i, c)}
+                onType={(name) => typeCompany(i, name)}
+                onEmpty={() => resetCompany(i)} />
             : <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis' }} title={companyLabel}>{companyLabel}</span>}
         </td>
         {/* 청구담당자 컬럼 제거(§3/§21) — billingContactId 데이터/저장은 유지, UI 열만 삭제 */}

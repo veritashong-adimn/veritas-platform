@@ -66,7 +66,8 @@ router.get("/admin/collections", ...adminGuard, requireStaffPermission(["payment
         pp.issue_date, pp.expected_date, pp.paid_date,
         pp.payment_method, pp.deposit_status, pp.deposit_confirmed,
         pp.note, pp.billing_company_id,
-        c.name AS billing_company_name,
+        -- 청구업체 = 회차에 저장된 청구업체명 우선 → 없으면 거래처 Master 이름(판매 상세 D.청구정보와 같은 기준)
+        COALESCE(pp.billing_company_name_snapshot, c.name) AS billing_company_name,
         p.title AS project_title,
         p.admin_id,
         (SELECT u.name FROM users u WHERE u.id = p.admin_id) AS pm_name,
@@ -324,7 +325,7 @@ router.get("/admin/collections/sales", ...adminGuard, requireStaffPermission(["p
     const pids = base.rows.map((r) => r.project_id);
     const pays = pids.length ? await db.execute<SalePayRow>(sql`
       SELECT pp.id, pp.project_id, pp.sequence, pp.amount, pp.payment_method, pp.issue_date, pp.expected_date, pp.paid_date,
-        pp.deposit_status, pp.deposit_confirmed, c.name AS billing_company_name,
+        pp.deposit_status, pp.deposit_confirmed, COALESCE(pp.billing_company_name_snapshot, c.name) AS billing_company_name,
         COALESCE(tx.tx_cnt, 0) AS tx_cnt, COALESCE(tx.tx_paid, 0) AS tx_paid, tx.last_paid_date
       FROM project_payments pp
       LEFT JOIN companies c ON c.id = pp.billing_company_id

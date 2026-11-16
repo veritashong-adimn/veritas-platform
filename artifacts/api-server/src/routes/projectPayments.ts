@@ -43,6 +43,22 @@ export async function loadPaymentRecords(projectId: number) {
   return records.map((r) => ({ ...r, transactions: byPayment.get(r.id) ?? [] }));
 }
 
+// 청구업체 표시명 결정(회차 1건) — 사용자가 저장한 청구업체를 판매 거래처/Master 이름으로 덮어쓰지 않는다.
+//  ① 같은 거래처 연결 + 이름 미변경(또는 이름 미전송) → 기존 Snapshot 유지(과거 CRM 원본명·당시 이름 보존)
+//  ② 거래처 Master 선택(id) → 입력 이름(없으면 Master 이름)
+//  ③ Master 미연결(id 없음) → 입력한 업체명 그대로(직접입력). 비어 있으면 null.
+type PrevPay = typeof projectPaymentsTable.$inferSelect;
+async function resolveBillingCompanyName(tx: any, r: { billingCompanyId?: number | null; billingCompanyName?: string | null }, prev?: PrevPay): Promise<string | null> {
+  const id = r.billingCompanyId ?? null;
+  const typed = r.billingCompanyName === undefined ? undefined : ((r.billingCompanyName ?? "").trim() || null);
+  if (prev && (prev.billingCompanyId ?? null) === id) {
+    const prevDisplay = prev.billingCompanyNameSnapshot ?? await fetchCompanyName(tx, prev.billingCompanyId ?? null);
+    if (typed === undefined || typed === prevDisplay) return prev.billingCompanyNameSnapshot ?? prevDisplay;
+  }
+  if (id != null) return typed ?? await fetchCompanyName(tx, id);
+  return typed ?? null;
+}
+
 const PAYMENT_TYPE = ["advance", "interim", "balance", "lump_sum", "other"] as const;
 const DEPOSIT_STATUS = ["scheduled", "partial", "completed", "unpaid"] as const;
 
@@ -61,7 +77,10 @@ const rowSchema = z.object({
   paymentCategory: z.string().max(50).nullable().optional(),   // 결제유형: 일반결제 · 수출바우처(자유 확장)
   payer: z.string().max(100).nullable().optional(),            // 입금주체: 고객사 · 수출바우처 운영기관
   depositItem: z.string().max(50).nullable().optional(),       // 입금항목: 공급가액 · 부가세 · 전체금액
-  billingCompanyId: z.number().int().nullable().optional(),    // 청구업체
+  billingCompanyId: z.number().int().nullable().optional(),    // 청구업체(거래처 Master 연결, 선택)
+  // 청구업체 표시명(회차별) — 화면에서 입력·선택한 이름. 거래처 Master 에 없는 업체는 id 없이 이름만 저장(Master 생성·수정 없음).
+  //  생략(undefined) 시 기존 동작(Master 이름) 유지 — 구버전 호출 호환.
+  billingCompanyName: z.string().max(200).nullable().optional(),
   billingContactId: z.number().int().nullable().optional(),    // 담당자
   note: z.string().nullable().optional(),
 });
@@ -82,6 +101,7 @@ router.put("/admin/projects/:id/payment-records", ...adminGuard, requireRolePerm
   // 입금확인(확정) 수금기록 보호 — 삭제·금액·입금일·확인해제는 일반 저장으로 불가(비고·청구정보 등은 수정 가능).
   const before = await db.select().from(projectPaymentsTable).where(eq(projectPaymentsTable.projectId, projectId));
   const confirmedById = new Map(before.filter(b => b.depositConfirmed).map(b => [b.id, b]));
+  const beforeById = new Map(before.map(b => [b.id, b]));
   const delLocked = deletedIds.filter(id => confirmedById.has(id));
   if (delLocked.length) { res.status(409).json({ error: `입금확인된 수금기록은 삭제할 수 없습니다 (id: ${delLocked.join(", ")}).` }); return; }
   const n2 = (v: unknown) => Number(v ?? 0).toFixed(2);
@@ -113,9 +133,13 @@ router.put("/admin/projects/:id/payment-records", ...adminGuard, requireRolePerm
         const reconciledStatus: (typeof DEPOSIT_STATUS)[number] = isPaid
           ? "completed"
           : (r.depositStatus === "completed" ? "scheduled" : (r.depositStatus ?? "scheduled"));
-        // 청구 당시 청구처/담당자 표시명 Snapshot(저장 시점 Master 이름으로 고정, §Phase2)
-        const billingCompanyNameSnapshot = await fetchCompanyName(tx, r.billingCompanyId ?? null);
-        const billingContactNameSnapshot = await fetchContactName(tx, r.billingContactId ?? null);
+        // 청구업체·담당자 표시명 Snapshot — 회차별 저장값 우선(§청구업체 독립 저장).
+        const prev = r.id ? beforeById.get(r.id) : undefined;
+        const billingCompanyNameSnapshot = await resolveBillingCompanyName(tx, r, prev);
+        //  담당자: 같은 담당자면 기존 Snapshot 유지(과거 CRM 원본명 보존), 바뀌면 Master 이름으로 고정(§Phase2).
+        const billingContactNameSnapshot = prev && (prev.billingContactId ?? null) === (r.billingContactId ?? null) && prev.billingContactNameSnapshot != null
+          ? prev.billingContactNameSnapshot
+          : await fetchContactName(tx, r.billingContactId ?? null);
         const values = {
           sequence: seq++,                         // 회차 자동번호(프로젝트별, 순서 기준)
           issueDate: r.issueDate || null,
