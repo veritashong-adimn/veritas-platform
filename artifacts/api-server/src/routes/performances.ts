@@ -842,11 +842,13 @@ export async function applyPerformanceRow(
   const computed = computeRowValues(r);
   const lockedPrior = r.id ? priorById.get(r.id) : undefined;
   if (lockedPrior?.paymentStatus === "paid") {
-    // 지급완료 수행정보는 일반 수정으로 지급대상·금액을 바꿀 수 없다(정정은 정산관리 추가지급·환수·차감 절차). 비고만 갱신.
+    // 지급완료 수행정보는 일반 수정으로 지급대상·금액을 바꿀 수 없다(정정은 정산관리 추가지급·환수·차감 절차). 비고·행 순서만 갱신.
+    //   행 순서(sequence)는 화면 표시 순번일 뿐 금액·지급과 무관 — 저장하지 않으면 다른 행을 이 행 위로 옮겼을 때
+    //   같은 순번이 2개가 되어 (sequence, id) 정렬로 원래 위치로 되돌아간다.
     if (await paidRowChanged(tx, lockedPrior, r, computed)) {
       throw new Error(`지급완료된 수행정보(id ${r.id})는 지급대상·금액을 수정할 수 없습니다. 정산관리의 추가지급·환수·차감 절차를 이용하세요.`);
     }
-    await tx.update(performanceAssignmentsTable).set({ remark: r.remark ?? lockedPrior.remark ?? null, updatedBy: userId, updatedAt: new Date() })
+    await tx.update(performanceAssignmentsTable).set({ remark: r.remark ?? lockedPrior.remark ?? null, sequence: r.sequence ?? lockedPrior.sequence, updatedBy: userId, updatedAt: new Date() })
       .where(and(eq(performanceAssignmentsTable.id, r.id!), eq(performanceAssignmentsTable.projectId, projectId)));
     return r.id!;
   }
