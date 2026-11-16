@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { formatDisplayDate } from '../../lib/dateFormat';
 import './readTableView.css';
 import { api } from "../../lib/constants";
-import { PrimaryBtn, GhostBtn, NumericInput, confirmDialog } from "../ui";
+import { PrimaryBtn, GhostBtn, NumericInput, confirmDialog, alertDialog } from "../ui";
 import { DraggableModal } from "./DraggableModal";
 import { DateField } from "./DatePickerShared";
 
@@ -11,7 +11,7 @@ interface LedgerEntry {
   accountId: number;
   projectId: number | null;
   projectTitle: string | null;
-  type: "deposit" | "deduction" | "adjustment";
+  type: "deposit" | "deduction" | "adjustment" | "carryover";
   amount: number;
   balanceAfter: number;
   description: string | null;
@@ -32,6 +32,19 @@ interface PrepaidAccount {
   depositDate: string | null;
   createdAt: string;
   ledger: LedgerEntry[];
+  // 확정 대기(차감 견적 예약) — 확정 원장·잔액과 분리된 예상값
+  pendingInflow?: number;
+  pendingDeduction?: number;
+  expectedBalance?: number;
+  pending?: PendingQuote[];
+}
+
+interface PendingQuote {
+  quoteId: number; quoteNumber: string | null; quoteStatus: string | null; quoteTitle: string | null;
+  projectId: number | null; projectTitle: string | null;
+  inflow: Array<{ id: number; type: string; amount: number; transactionDate: string | null }>;
+  deduction: { id: number; amount: number; supplyAmount: number | null; taxAmount: number | null; transactionDate: string | null } | null;
+  confirmable: boolean;
 }
 
 interface Props {
@@ -100,6 +113,35 @@ export function PrepaidLedgerModal({ accountId, authHeaders, onClose, onUpdate, 
     }
   };
 
+  // 판매확정 차감 견적의 예약 → 확정 반영(직원 명시 실행). 중복 의심이면 한 번 더 확인.
+  const [confirmingQuote, setConfirmingQuote] = useState<number | null>(null);
+  const handleConfirmQuote = async (pq: PendingQuote) => {
+    const inflow = pq.inflow.reduce((s, l) => s + l.amount, 0), ded = pq.deduction?.amount ?? 0;
+    const ok = await confirmDialog({
+      title: "선입금 확정 반영",
+      message: `견적 ${pq.quoteNumber ?? "#" + pq.quoteId}의 예정 내역을 확정 원장에 반영합니다.\n\n입금(선입/이월) +${fmt(inflow)}원 · 차감 -${fmt(ded)}원\n\n실제 입금과 차감이 확정된 경우에만 진행하세요. 반영 후 계정 잔액이 바뀝니다.`,
+      confirmLabel: "확정 반영",
+    });
+    if (!ok) return;
+    setConfirmingQuote(pq.quoteId);
+    try {
+      const post = (allowDuplicate: boolean) => fetch(api(`/api/prepaid/quotes/${pq.quoteId}/confirm`), {
+        method: "POST", headers: { ...authHeaders, "Content-Type": "application/json" }, body: JSON.stringify({ allowDuplicate }),
+      });
+      let res = await post(false);
+      let d = await res.json().catch(() => ({}));
+      if (res.status === 409 && d?.code === "POSSIBLE_DUPLICATE") {
+        const list = (d.matches ?? []).map((m: any) => `· ${m.transactionDate ?? "-"} ${fmt(Number(m.amount))}원${m.quoteId ? ` (견적 #${m.quoteId})` : " (직접 입금)"}`).join("\n");
+        const again = await confirmDialog({ title: "중복 입금 의심", message: `${d.error}\n\n${list}\n\n다른 입금이 맞으면 '그래도 반영'을 누르세요.`, confirmLabel: "그래도 반영", variant: "danger" });
+        if (!again) return;
+        res = await post(true); d = await res.json().catch(() => ({}));
+      }
+      if (!res.ok) { await alertDialog({ title: "확정 반영 실패", message: d?.error ?? `오류 (${res.status})`, variant: "warning" }); return; }
+      if (d.already) await alertDialog({ title: "이미 확정됨", message: "이 견적의 예정 내역은 이미 확정되어 있습니다(변경 없음)." });
+      await load(); onUpdate();
+    } finally { setConfirmingQuote(null); }
+  };
+
   const handleDeleteEntry = async (entryId: number) => {
     if (!(await confirmDialog({ title: "원장 항목 삭제", message: "이 항목을 삭제하면 잔액이 자동 재계산됩니다. 계속하시겠습니까?", confirmLabel: "삭제", variant: "danger" }))) return;
     setDeleteId(entryId);
@@ -120,9 +162,10 @@ export function PrepaidLedgerModal({ accountId, authHeaders, onClose, onUpdate, 
   );
   if (!account) return null;
 
-  const typeLabel = { deposit: "입금", deduction: "차감", adjustment: "조정" };
+  const typeLabel: Record<string, string> = { deposit: "입금", carryover: "이월", deduction: "차감", adjustment: "조정" };
   const typeColor = {
     deposit:    { bg: "#dcfce7", color: "#15803d", prefix: "+" },
+    carryover:  { bg: "#dcfce7", color: "#15803d", prefix: "+" },
     deduction:  { bg: "#fee2e2", color: "#dc2626", prefix: "-" },
     adjustment: { bg: "#fef3c7", color: "#92400e", prefix: "±" },
   } as const;
@@ -201,6 +244,35 @@ export function PrepaidLedgerModal({ accountId, authHeaders, onClose, onUpdate, 
                 </PrimaryBtn>
                 <GhostBtn onClick={() => setShowTxForm(false)} style={{ fontSize: 13 }}>취소</GhostBtn>
               </div>
+            </div>
+          )}
+
+          {/* 확정 대기(차감 견적 예약) — 확정 원장과 분리 표시. 판매확정 견적만 '확정 반영' 가능 */}
+          {(account.pending?.length ?? 0) > 0 && (
+            <div data-testid="prepaid-pending" style={{ border: "1px solid #fde68a", background: "#fffbeb", borderRadius: 12, padding: "14px 16px", marginBottom: 20 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+                <div style={{ fontWeight: 700, fontSize: 14, color: "#92400e" }}>확정 대기 (예상) — 아직 잔액에 반영되지 않음</div>
+                <div data-testid="prepaid-expected" style={{ fontSize: 13, color: "#92400e" }}>
+                  예정 입금 +{fmt(account.pendingInflow ?? 0)}원 · 예정 차감 -{fmt(account.pendingDeduction ?? 0)}원 · <b>예상 잔액 {fmt(account.expectedBalance ?? account.currentBalance)}원</b>
+                </div>
+              </div>
+              {account.pending!.map(pq => (
+                <div key={pq.quoteId} data-testid={`prepaid-pending-${pq.quoteId}`} style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "8px 0", borderTop: "1px dashed #fcd34d", fontSize: 13 }}>
+                  <div style={{ flex: "1 1 260px", minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, color: "#111827" }}>{pq.quoteNumber ?? `견적 #${pq.quoteId}`} · {pq.projectTitle ?? pq.quoteTitle ?? "-"}</div>
+                    <div style={{ color: "#6b7280", fontSize: 12 }}>
+                      {pq.inflow.map(l => `${l.transactionDate ?? "-"} ${typeLabel[l.type] ?? l.type} +${fmt(l.amount)}원`).join(" · ") || "선입/이월 없음"}
+                      {pq.deduction ? ` · 차감 -${fmt(pq.deduction.amount)}원(VAT 포함)` : ""}
+                    </div>
+                  </div>
+                  {pq.confirmable
+                    ? (canManage && <PrimaryBtn onClick={() => handleConfirmQuote(pq)} disabled={confirmingQuote === pq.quoteId}
+                        data-testid={`btn-prepaid-confirm-${pq.quoteId}`} aria-label="선입금 확정 반영" style={{ fontSize: 12, padding: "6px 12px" }}>
+                        {confirmingQuote === pq.quoteId ? "반영 중…" : "확정 반영"}
+                      </PrimaryBtn>)
+                    : <span style={{ fontSize: 12, color: "#92400e" }}>판매전환 시 자동 확정</span>}
+                </div>
+              ))}
             </div>
           )}
 

@@ -284,7 +284,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
 
   // 선입금 계정 (원장 방식)
-  type PrepaidAccount = { id: number; companyId: number; companyName: string; initialAmount: number; currentBalance: number; status: string; note: string | null; depositDate: string | null; createdAt: string };
+  type PrepaidAccount = { id: number; companyId: number; companyName: string; initialAmount: number; currentBalance: number; status: string; note: string | null; depositDate: string | null; createdAt: string;
+    /** 확정 대기(차감 견적 예약) — 확정 잔액과 분리된 예상값 */ pendingInflow?: number; pendingDeduction?: number; expectedBalance?: number; pendingQuoteCount?: number };
   const [prepaidAccounts, setPrepaidAccounts] = useState<PrepaidAccount[]>([]);
   const [prepaidLoading, setPrepaidLoading] = useState(false);
   const [selectedPrepaidAccountId, setSelectedPrepaidAccountId] = useState<number | null>(null);
@@ -3068,6 +3069,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                 const usedAmount = account.initialAmount - account.currentBalance;
                 const usagePercent = account.initialAmount > 0 ? Math.min(100, (usedAmount / account.initialAmount) * 100) : 0;
                 const hasBalance = account.currentBalance > 0;
+                const hasPending = (account.pendingQuoteCount ?? 0) > 0;
                 return (
                   <div key={account.id} onClick={() => setSelectedPrepaidAccountId(account.id)}
                     style={{ background: "#fff", border: hasBalance ? "1px solid #bfdbfe" : "1px solid #e5e7eb", borderRadius: 12, padding: "18px 20px", cursor: "pointer", transition: "box-shadow 0.15s", boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }}
@@ -3079,8 +3081,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                         {account.depositDate && <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>입금일: {formatDisplayDate(account.depositDate)}</div>}
                         {account.note && <div style={{ fontSize: 11, color: "#6b7280", marginTop: 1 }}>{account.note}</div>}
                       </div>
-                      <span style={{ background: hasBalance ? "#dcfce7" : "#f3f4f6", color: hasBalance ? "#15803d" : "#6b7280", borderRadius: 6, padding: "2px 8px", fontSize: 11, fontWeight: 700 }}>
-                        {hasBalance ? "잔액 있음" : "소진"}
+                      <span style={{ background: hasBalance ? "#dcfce7" : hasPending ? "#fef3c7" : "#f3f4f6", color: hasBalance ? "#15803d" : hasPending ? "#92400e" : "#6b7280", borderRadius: 6, padding: "2px 8px", fontSize: 11, fontWeight: 700 }}>
+                        {hasBalance ? "잔액 있음" : hasPending ? "확정 대기" : "소진"}
                       </span>
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
@@ -3093,6 +3095,12 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                         <div style={{ fontSize: 17, fontWeight: 800, color: "#dc2626" }}>{formatWon(usedAmount)}</div>
                       </div>
                     </div>
+                    {/* 확정 대기(예상) — 확정 잔액에는 미반영. 원장 보기에서 판매확정 견적을 '확정 반영' */}
+                    {hasPending && (
+                      <div data-testid={`prepaid-card-pending-${account.id}`} style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "6px 10px", marginBottom: 10, fontSize: 11, color: "#92400e" }}>
+                        확정 대기 · 입금 +{formatWon(account.pendingInflow ?? 0)} · 차감 -{formatWon(account.pendingDeduction ?? 0)} → 예상 잔액 <b>{formatWon(account.expectedBalance ?? account.currentBalance)}</b>
+                      </div>
+                    )}
                     {/* 사용률 바 */}
                     <div style={{ height: 6, background: "#e5e7eb", borderRadius: 4, overflow: "hidden", marginBottom: 8 }}>
                       <div style={{ height: "100%", width: `${usagePercent}%`, background: usagePercent > 90 ? "#dc2626" : usagePercent > 60 ? "#f59e0b" : "#22c55e", borderRadius: 4, transition: "width 0.3s" }} />

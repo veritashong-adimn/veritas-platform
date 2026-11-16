@@ -36,6 +36,7 @@ import {
   releaseQuoteReservations,
   getCompanyPrepaidState,
   getQuotePrepaidLines,
+  getPendingByAccount,
   type PrepaidLineInput,
 } from "../services/prepaidDeductionQuote";
 import { closeAccumulatedBatchQuote } from "../services/accumulatedBatch";
@@ -2297,12 +2298,22 @@ router.get("/admin/prepaid-accounts", ...adminGuard, async (req, res) => {
       const cs = await db.select({ id: companiesTable.id, name: companiesTable.name }).from(companiesTable).where(inArray(companiesTable.id, cids));
       companyMap = new Map(cs.map(c => [c.id, c.name]));
     }
-    res.json(accounts.map(a => ({
-      ...a,
-      initialAmount: Number(a.initialAmount),
-      currentBalance: Number(a.currentBalance),
-      companyName: companyMap.get(a.companyId) ?? `거래처 #${a.companyId}`,
-    })));
+    // 확정 대기(차감 견적 예약) — 확정 잔액과 분리한 '예상' 값(추가 필드, 기존 필드 불변)
+    const pending = await getPendingByAccount(db, accounts.map(a => a.id));
+    res.json(accounts.map(a => {
+      const p = pending.get(a.id);
+      const pendingInflow = p?.pendingInflow ?? 0, pendingDeduction = p?.pendingDeduction ?? 0;
+      return {
+        ...a,
+        initialAmount: Number(a.initialAmount),
+        currentBalance: Number(a.currentBalance),
+        companyName: companyMap.get(a.companyId) ?? `거래처 #${a.companyId}`,
+        pendingInflow, pendingDeduction,
+        expectedBalance: Number(a.currentBalance) + pendingInflow - pendingDeduction,
+        pendingQuoteCount: p?.quotes.length ?? 0,
+        pendingConfirmableCount: p?.quotes.filter(q => q.confirmable).length ?? 0,
+      };
+    }));
   } catch (err) {
     req.log.error({ err }, "Failed to fetch prepaid accounts");
     res.status(500).json({ error: "선입금 계정 조회 실패" });
@@ -2398,11 +2409,17 @@ router.get("/admin/prepaid-accounts/:id", ...adminGuard, async (req, res) => {
 
     const [company] = await db.select({ name: companiesTable.name }).from(companiesTable).where(eq(companiesTable.id, account.companyId));
 
+    const pend = (await getPendingByAccount(db, [accountId])).get(accountId);
     res.json({
       ...account,
       initialAmount: Number(account.initialAmount),
       currentBalance: Number(account.currentBalance),
       companyName: company?.name ?? `거래처 #${account.companyId}`,
+      // 확정 대기(예약) — 확정 원장(ledger)과 분리. 판매확정 견적은 confirmable=true('확정 반영' 대상)
+      pendingInflow: pend?.pendingInflow ?? 0,
+      pendingDeduction: pend?.pendingDeduction ?? 0,
+      expectedBalance: Number(account.currentBalance) + (pend?.pendingInflow ?? 0) - (pend?.pendingDeduction ?? 0),
+      pending: pend?.quotes ?? [],
       ledger: ledger.map(e => {
         const taxFallback = e.type === "deduction" && e.projectId ? (taxByProjectId.get(e.projectId) ?? null) : null;
         return {

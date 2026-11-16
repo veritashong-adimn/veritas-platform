@@ -5,7 +5,7 @@
  * - 인쇄 버튼 클릭 시 브라우저 프린트 대화상자를 열어 PDF 저장이 가능하다.
  * - @media print CSS로 모달 UI를 숨기고 견적서만 출력한다.
  */
-import React, { useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { QuotePdfData } from '../../lib/quotePdf';
 import { QUOTE_NOTES_BY_SERVICE, vatSummaryLabel, quoteTotalLabel, pdfVatMode } from '../../lib/quotePdf';
 import { renderQuoteTitle, buildDocFileName, formatDocNumber } from '../../lib/quoteTitle';
@@ -36,6 +36,32 @@ const PAGE_STYLE: React.CSSProperties = {
   lineHeight: 1.6,
 };
 
+// ─── 화면 미리보기 폭 맞춤 ───────────────────────────────────────────────────
+// A4(794px) 문서를 미리보기 창 폭에 맞춰 확대·축소(CSS zoom — 레이아웃 크기도 함께 바뀌어 불필요한 여백·가로 스크롤 없음).
+//  · 화면 전용: 인쇄/PDF 는 문서 요소의 innerHTML 만 별도 인쇄 창(A4 @page)에 쓰므로 이 배율의 영향을 받지 않는다.
+//  · 독립 창(portal)에서도 동작하도록 요소가 속한 창의 ResizeObserver·resize 이벤트를 사용한다.
+const A4_PX = 794;
+const FIT_PAD = 12;        // 창 가장자리와 문서 사이 최소 여백(좌우)
+const FIT_MAX = 1.35;      // 넓은 창에서 과도한 확대 방지
+function useFitToWidth(wrap: HTMLDivElement | null): number {
+  const [scale, setScale] = useState(1);
+  useEffect(() => {
+    if (!wrap) return;
+    const win = (wrap.ownerDocument.defaultView ?? window) as Window & typeof globalThis;
+    const calc = () => {
+      const w = wrap.clientWidth;
+      if (w > 0) setScale(Math.max(0.3, Math.min(FIT_MAX, (w - FIT_PAD * 2) / A4_PX)));
+    };
+    calc();
+    const RO = win.ResizeObserver ?? ResizeObserver;
+    const ro = RO ? new RO(calc) : null;
+    ro?.observe(wrap);
+    win.addEventListener('resize', calc);
+    return () => { ro?.disconnect(); win.removeEventListener('resize', calc); };
+  }, [wrap]);
+  return scale;
+}
+
 // ─── 컴포넌트 ─────────────────────────────────────────────────────────────────
 
 interface QuotePdfPreviewModalProps {
@@ -46,6 +72,9 @@ interface QuotePdfPreviewModalProps {
 
 export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: QuotePdfPreviewModalProps) {
   const contentRef = useRef<HTMLDivElement>(null);
+  // 화면 미리보기 폭 맞춤(인쇄 무관) — 포털이 늦게 붙어도 동작하도록 콜백 ref 로 감싼 요소를 받는다
+  const [fitWrap, setFitWrap] = useState<HTMLDivElement | null>(null);
+  const fitScale = useFitToWidth(fitWrap);
   // 회사 직인 — 서버가 권한 확인 후 data URI 로 내려준다(R2 원본 URL 미노출). 미등록·표시 안 함·오류면 직인 없이 출력.
   //   undefined = 불러오는 중(인쇄 버튼 잠시 대기 — 직인 없이 인쇄되는 것 방지)
   const { url: sealUrl, error: sealError } = useCompanySeal();
@@ -128,12 +157,13 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
           </button>
         </>}
       >
-        {/* A4 용지 영역 */}
-        <div style={{ padding: '32px 24px', display: 'flex', justifyContent: 'safe center', minWidth: 'fit-content' }}>
+        {/* A4 용지 영역 — 창 폭에 맞춰 배율 조정(화면 전용). 바깥 여백 최소화 */}
+        <div ref={setFitWrap} data-testid="quote-preview-fit" data-scale={fitScale.toFixed(3)}
+          style={{ padding: `${FIT_PAD}px ${FIT_PAD}px`, display: 'flex', justifyContent: 'center', overflowX: 'auto', boxSizing: 'border-box' }}>
           <div
             ref={contentRef}
             id="quote-pdf-content"
-            style={{ ...PAGE_STYLE, boxShadow: '0 4px 24px rgba(0,0,0,0.25)' }}
+            style={{ ...PAGE_STYLE, boxShadow: '0 4px 24px rgba(0,0,0,0.25)', zoom: fitScale, flexShrink: 0 } as React.CSSProperties}
           >
             {/* ── 문서 헤더 ──────────────────────────────────────────────── */}
             <div className="qp-keep qp-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>

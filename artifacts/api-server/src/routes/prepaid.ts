@@ -2,7 +2,8 @@ import { Router } from "express";
 import { db, prepaidAccountsTable, prepaidLedgerTable, projectsTable } from "@workspace/db";
 import { eq, and, desc, sql } from "drizzle-orm";
 import { requireAuth, requireRole, requireStaffPermission } from "../middlewares/auth";
-import { getCompanyPrepaidState } from "../services/prepaidDeductionQuote";
+import { getCompanyPrepaidState, confirmApprovedQuoteReservations } from "../services/prepaidDeductionQuote";
+import { logEvent } from "../lib/logEvent";
 
 const router = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -277,6 +278,34 @@ router.post("/prepaid/deduct", ...adminGuard, async (req, res) => {
 
 // ─── 선입금 계정 상태 변경 (활성/비활성) ────────────────────────────────────
 // PATCH /api/prepaid/accounts/:id/status
+// ─── 판매확정 차감 견적의 예약 → 확정 반영 (직원 명시 실행) ─────────────────────────────
+// POST /api/prepaid/quotes/:quoteId/confirm  { allowDuplicate?: boolean }
+//  판매확정 이후 차감 견적으로 바뀐 판매건(과거 CRM 이관 등)은 판매전환 시점의 자동 확정이 다시 일어나지 않는다.
+//  같은 규칙(confirmQuoteReservations)으로 확정하되, 자동으로 하지 않고 선입금관리에서 직원이 실행한다.
+//  · 멱등: 예약 라인이 없으면 아무것도 바꾸지 않음(already) · 동시 실행: 계정 잠금 후 재조회
+//  · 중복 의심(같은 계정·금액·발생일의 확정 입금 존재) → 409 POSSIBLE_DUPLICATE (allowDuplicate=true 로만 진행)
+router.post("/prepaid/quotes/:quoteId/confirm", ...adminGuard, requireStaffPermission("prepaid.manage"), async (req, res) => {
+  const quoteId = Number(req.params.quoteId);
+  if (!Number.isInteger(quoteId) || quoteId <= 0) { res.status(400).json({ error: "유효하지 않은 견적 ID" }); return; }
+  const allowDuplicate = (req.body as { allowDuplicate?: boolean } | undefined)?.allowDuplicate === true;
+  try {
+    const r = await db.transaction(tx => confirmApprovedQuoteReservations(tx, quoteId, { allowDuplicate }));
+    if (r.result === "not_allowed") { res.status(409).json({ error: r.reason, code: "NOT_CONFIRMABLE" }); return; }
+    if (r.result === "duplicate") {
+      res.status(409).json({ error: "같은 금액·발생일의 확정 입금이 이미 있습니다. 같은 입금을 두 번 반영하는지 확인하세요.", code: "POSSIBLE_DUPLICATE", matches: r.matches });
+      return;
+    }
+    if (r.result === "nothing") { res.json({ ok: true, already: true }); return; }
+    await logEvent("quote", quoteId, "prepaid_reservations_confirmed", req.log, (req as any).user ?? undefined, JSON.stringify({
+      accountId: r.accountId, inflow: r.inflow, usageAmount: r.usageAmount, balanceBefore: r.balanceBefore, balanceAfter: r.balanceAfter, allowDuplicate,
+    }));
+    res.json({ ok: true, already: false, ...r });
+  } catch (err) {
+    req.log.error({ err }, "Failed to confirm quote prepaid reservations");
+    res.status(500).json({ error: "선입금 확정 반영 실패" });
+  }
+});
+
 router.patch("/prepaid/accounts/:id/status", ...adminGuard, requireStaffPermission("prepaid.manage"), async (req, res) => {
   const id = Number(req.params.id);
   const { status } = req.body as { status: "active" | "closed" };

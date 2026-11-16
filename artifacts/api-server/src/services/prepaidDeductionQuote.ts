@@ -527,3 +527,102 @@ export async function getQuotePrepaidLines(dbh: Db, quoteId: number): Promise<Ar
     taxAmount: r.taxAmount != null ? Number(r.taxAmount) : null,
   }));
 }
+
+// ─── 확정 대기(reserved) 요약 — 선입금관리 '예상' 표시용(확정 원장·잔액에는 반영하지 않음) ─────────
+//  계정별: 예정 입금(선입/이월) 합 · 예정 차감 합 · 견적별 내역(견적 상태 포함 → 판매확정 견적은 '확정 반영' 대상).
+export type PendingQuote = {
+  quoteId: number; quoteNumber: string | null; quoteStatus: string | null; quoteTitle: string | null;
+  projectId: number | null; projectTitle: string | null;
+  inflow: Array<{ id: number; type: string; amount: number; transactionDate: string | null; description: string | null }>;
+  deduction: { id: number; amount: number; supplyAmount: number | null; taxAmount: number | null; transactionDate: string | null } | null;
+  /** 판매확정(approved) 견적 — 판매전환 시점의 자동 확정이 다시 일어나지 않으므로 직원 '확정 반영'으로만 확정 */
+  confirmable: boolean;
+};
+export async function getPendingByAccount(dbh: Db, accountIds: number[]): Promise<Map<number, { pendingInflow: number; pendingDeduction: number; quotes: PendingQuote[] }>> {
+  const out = new Map<number, { pendingInflow: number; pendingDeduction: number; quotes: PendingQuote[] }>();
+  if (accountIds.length === 0) return out;
+  const rows = (await dbh.execute(sql`
+    SELECT l.id, l.account_id, l.quote_id, l.project_id, l.type, l.amount::text AS amount, l.supply_amount::text AS supply_amount,
+           l.tax_amount::text AS tax_amount, l.transaction_date::text AS transaction_date, l.description,
+           q.quote_number, q.status::text AS quote_status, q.title AS quote_title, q.is_current, q.deleted_at, q.quote_type, p.title AS project_title
+      FROM prepaid_ledger l
+      LEFT JOIN quotes q ON q.id = l.quote_id
+      LEFT JOIN projects p ON p.id = l.project_id
+     WHERE l.status = 'reserved' AND l.account_id IN (${sql.join(accountIds.map(id => sql`${id}`), sql`, `)})
+     ORDER BY l.account_id, l.quote_id, l.id`)).rows as any[];
+  for (const r of rows) {
+    const acc = out.get(r.account_id) ?? { pendingInflow: 0, pendingDeduction: 0, quotes: [] };
+    out.set(r.account_id, acc);
+    let pq = acc.quotes.find(q => q.quoteId === r.quote_id);
+    if (!pq) {
+      pq = {
+        quoteId: r.quote_id, quoteNumber: r.quote_number ?? null, quoteStatus: r.quote_status ?? null, quoteTitle: r.quote_title ?? null,
+        projectId: r.project_id ?? null, projectTitle: r.project_title ?? null, inflow: [], deduction: null,
+        confirmable: r.quote_status === "approved" && r.is_current !== false && r.deleted_at == null && isPrepaidDeductionQuoteType(r.quote_type),
+      };
+      acc.quotes.push(pq);
+    }
+    const amount = Number(r.amount);
+    if (isInflowType(r.type)) {
+      pq.inflow.push({ id: r.id, type: r.type, amount, transactionDate: r.transaction_date ?? null, description: r.description ?? null });
+      acc.pendingInflow += amount;
+    } else if (r.type === "deduction") {
+      pq.deduction = { id: r.id, amount, supplyAmount: r.supply_amount != null ? Number(r.supply_amount) : null, taxAmount: r.tax_amount != null ? Number(r.tax_amount) : null, transactionDate: r.transaction_date ?? null };
+      acc.pendingDeduction += amount;
+    }
+  }
+  return out;
+}
+
+// ─── 판매확정 차감 견적의 예약 → 확정 반영(직원 명시 실행) ─────────────────────────────
+//  · 판매확정(approved)·현재유효·미삭제 차감 견적만. 예약 라인이 없으면 이미 확정된 것으로 보고 아무것도 하지 않는다(멱등).
+//  · 계정을 먼저 잠근 뒤 예약 라인을 다시 읽는다 → 동시 실행돼도 두 번 확정되지 않는다.
+//  · 같은 계정에 금액·발생일이 같은 확정 입금이 이미 있으면(수동 입금 등) 중복 의심으로 멈춘다(allowDuplicate 로만 진행).
+export async function confirmApprovedQuoteReservations(
+  tx: Db, quoteId: number, opts: { allowDuplicate?: boolean } = {},
+): Promise<
+  | { result: "confirmed"; accountId: number; balanceBefore: number; usageAmount: number; balanceAfter: number; inflow: number }
+  | { result: "nothing" }
+  | { result: "not_allowed"; reason: string }
+  | { result: "duplicate"; matches: Array<{ id: number; type: string; amount: number; transactionDate: string | null; quoteId: number | null }> }
+> {
+  const [q] = await tx.select({ id: quotesTable.id, status: quotesTable.status, quoteType: quotesTable.quoteType, isCurrent: quotesTable.isCurrent, deletedAt: quotesTable.deletedAt })
+    .from(quotesTable).where(eq(quotesTable.id, quoteId));
+  if (!q) return { result: "not_allowed", reason: "견적을 찾을 수 없습니다." };
+  if (!isPrepaidDeductionQuoteType(q.quoteType)) return { result: "not_allowed", reason: "차감 견적서가 아닙니다." };
+  if (q.deletedAt != null || q.isCurrent === false) return { result: "not_allowed", reason: "삭제되었거나 대체된 견적입니다." };
+  if (q.status !== "approved") return { result: "not_allowed", reason: "판매확정되지 않은 견적입니다 — 판매전환 시 자동으로 확정됩니다." };
+
+  const first = await tx.select({ accountId: prepaidLedgerTable.accountId }).from(prepaidLedgerTable)
+    .where(and(eq(prepaidLedgerTable.quoteId, quoteId), eq(prepaidLedgerTable.status, "reserved"))).limit(1);
+  if (first.length === 0) return { result: "nothing" };
+  const accountId: number = first[0].accountId;
+  // 계정 잠금 먼저(동시 확정 직렬화) — 이후 예약 라인 재조회는 confirmQuoteReservations 가 잠금 이후에 수행
+  await tx.select({ id: prepaidAccountsTable.id }).from(prepaidAccountsTable).where(eq(prepaidAccountsTable.id, accountId)).for("update");
+
+  const reserved = await tx.select().from(prepaidLedgerTable)
+    .where(and(eq(prepaidLedgerTable.quoteId, quoteId), eq(prepaidLedgerTable.status, "reserved")));
+  if (reserved.length === 0) return { result: "nothing" };   // 다른 요청이 먼저 확정함
+
+  if (!opts.allowDuplicate) {
+    const inflow = reserved.filter((r: any) => isInflowType(r.type));
+    const matches: Array<{ id: number; type: string; amount: number; transactionDate: string | null; quoteId: number | null }> = [];
+    for (const r of inflow) {
+      const dup = await tx.select({ id: prepaidLedgerTable.id, type: prepaidLedgerTable.type, amount: prepaidLedgerTable.amount, transactionDate: prepaidLedgerTable.transactionDate, quoteId: prepaidLedgerTable.quoteId })
+        .from(prepaidLedgerTable)
+        .where(and(
+          eq(prepaidLedgerTable.accountId, accountId), eq(prepaidLedgerTable.status, "confirmed"),
+          inArray(prepaidLedgerTable.type, ["deposit", "carryover"]),
+          eq(prepaidLedgerTable.amount, r.amount),
+          r.transactionDate ? eq(prepaidLedgerTable.transactionDate, r.transactionDate) : sql`true`,
+        ));
+      for (const d of dup) matches.push({ id: d.id, type: d.type, amount: Number(d.amount), transactionDate: d.transactionDate ?? null, quoteId: d.quoteId ?? null });
+    }
+    if (matches.length > 0) return { result: "duplicate", matches };
+  }
+
+  const inflowSum = reserved.filter((r: any) => isInflowType(r.type)).reduce((s: number, r: any) => s + Number(r.amount), 0);
+  const snap = await confirmQuoteReservations(tx, quoteId);
+  if (!snap) return { result: "nothing" };
+  return { result: "confirmed", accountId, ...snap, inflow: inflowSum };
+}
