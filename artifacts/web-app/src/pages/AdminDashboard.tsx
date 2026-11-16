@@ -46,6 +46,7 @@ import { InquiryDetailTab } from '../components/admin/InquiryDetailTab';
 import { ProjectManagementTab } from '../components/admin/ProjectManagementTab';
 import { SalesDetailPage } from './SalesDetailPage';
 import { LegacyArchiveDetailPage } from '../components/admin/LegacyArchiveDetailPage';
+import { BackToListButton } from '../components/admin/BackToListButton';
 import { QuoteListTab } from '../components/admin/QuoteListTab';
 import { CompanyManagementTab } from '../components/admin/CompanyManagementTab';
 import { CustomerManagementTab } from "../components/admin/CustomerManagementTab";
@@ -512,6 +513,19 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     else if (isCompanyPath(window.location.pathname)) navPath("/");
     setAdminTab(tabId);
   };
+
+  // ── 판매관리 목록 '뒤로가기' — 진입 직전 메뉴(adminTab)로 복귀 ──
+  //  · 브라우저 history 를 쓰지 않고 메뉴 상태만으로 판단 → 목록↔상세 왕복(ping-pong) 없음.
+  //  · 판매 상세 열고 닫기는 adminTab 을 바꾸지 않으므로 복귀 대상이 유지된다.
+  //  · 새로고침·직접 접속 등으로 처음부터 판매관리였다면(이전 화면 정보 없음) 대시보드로 이동.
+  const prevAdminTabRef = useRef(adminTab);
+  const salesReturnTabRef = useRef<typeof adminTab | null>(null);
+  useEffect(() => {
+    const prev = prevAdminTabRef.current;
+    prevAdminTabRef.current = adminTab;
+    if (adminTab === "projects" && prev !== "projects") salesReturnTabRef.current = prev;
+  }, [adminTab]);
+  const backFromSalesList = () => navigateToAdminTab(salesReturnTabRef.current ?? "dashboard");
 
   // 로고 클릭 → 현재 페이지 새로고침(대시보드 이동 아님). URL/메뉴 위치는 그대로 유지.
   //  · 등록·수정 중 저장하지 않은 변경사항이 있으면(전역 unsavedGuard) 확인창을 먼저 표시, 그 외에는 즉시 새로고침.
@@ -1338,6 +1352,11 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             >
               ☰
             </button>
+            {/* 판매관리 목록: 제목 왼쪽 '〈 뒤로가기' — 견적 상세 PageHeader 와 같은 BackToListButton(subtle). 상세 화면은 자체 뒤로가기 사용. */}
+            {adminTab === "projects" && !detailOpen && (
+              <BackToListButton onClick={backFromSalesList} variant="subtle" label="뒤로가기"
+                testId="btn-sales-list-back" ariaLabel="이전 화면으로 돌아가기" style={{ marginRight: 16 }} />
+            )}
             <span style={{ fontSize: 15, fontWeight: 700, color: "#111827", flex: 1 }}>
               {PAGE_TITLE[adminTab] ?? "관리자"}
             </span>
