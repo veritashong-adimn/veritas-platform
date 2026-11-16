@@ -87,7 +87,9 @@ function hasCurrentOnlyFilter(q: Record<string, string | undefined>): boolean {
 function mapCurrentRow(p: any): SalesHistoryRow {
   return {
     source: "current", key: `current:${p.id}`, id: p.id,
-    recordDate: toDateStr(p.createdAt),
+    // 판매일은 fillSaleDates 가 판매 상세와 같은 기준(대표 유효 견적의 견적일 = 판매일)으로 채운다.
+    //  생성일(createdAt)은 판매일이 아니므로 대체값으로 쓰지 않는다(없으면 null → 정렬 뒤쪽).
+    recordDate: null,
     saleNumber: null,
     saleName: p.title ?? null,
     companyName: p.companyName ?? null,
@@ -115,6 +117,46 @@ async function fillPmNames(dbx: any, list: SalesHistoryRow[]) {
   const us = (await dbx.execute(sql`SELECT id, coalesce(name, email) nm FROM users WHERE id IN (${sql.join(ids.map(i => sql`${i}`), sql`, `)})`)).rows as any[];
   const byId = new Map(us.map(u => [Number(u.id), String(u.nm)]));
   for (const r of list) if (r.adminId != null) r.pmName = byId.get(Number(r.adminId)) ?? null;
+}
+
+// ── current 판매의 판매일·대표 견적 — 판매 상세(SalesDetailPage '판매일' = 유효 견적 issueDate)와 같은 원본.
+//  · 운영 판매는 별도 판매일 칸 없이 견적일을 판매일로 사용(SaleBasicInfoEditor '견적일 (= 판매일)').
+//  · 대표 견적 = 유효본(is_current)·미삭제 중 원견적(relation_type 없음) 우선 → 가장 작은 id. 판매 1건당 1개만 사용(행 중복 없음).
+//  · issue_date 는 date 컬럼(문자열 YYYY-MM-DD) — 시간대 변환하지 않는다.
+//  · 정렬이 페이지 분할 전에 적용되도록 전체 current 행에 대해 1회 일괄 조회.
+async function fillSaleDates(dbx: any, list: SalesHistoryRow[]): Promise<Map<number, number>> {
+  const quoteIdByProject = new Map<number, number>();
+  if (!list.length) return quoteIdByProject;
+  const ids = sql.join(list.map(r => sql`${Number(r.id)}`), sql`, `);
+  const qs = (await dbx.execute(sql`SELECT DISTINCT ON (project_id) project_id, id, issue_date::text AS issue_date
+    FROM quotes WHERE project_id IN (${ids}) AND is_current = true AND deleted_at IS NULL
+    ORDER BY project_id, (relation_type IS NULL) DESC, id ASC`)).rows as any[];
+  const byProject = new Map(qs.map(q => [Number(q.project_id), q]));
+  for (const r of list) {
+    const q = byProject.get(Number(r.id));
+    if (!q) continue;
+    quoteIdByProject.set(Number(r.id), Number(q.id));
+    // 판매전환 전(견적 단계: created/quoted) 프로젝트의 견적일은 판매일이 아니다 → 날짜 미표시(기존과 동일하게 뒤쪽).
+    if (r.workflowStatus === "created" || r.workflowStatus === "quoted") continue;
+    r.recordDate = toDateStr(q.issue_date);
+  }
+  return quoteIdByProject;
+}
+
+// current 판매의 상품 요약 — 판매 상세 '상품명'과 같은 규칙(대표 견적 품목 id 순 첫 품목명 + ' 외 N건').
+//  표시 전용 집계(판매당 1행 유지·금액 합산 없음). 현재 페이지 행만 조회.
+async function fillProductNames(dbx: any, list: SalesHistoryRow[], quoteIdByProject: Map<number, number>) {
+  const qids = [...new Set(list.map(r => quoteIdByProject.get(Number(r.id))).filter((v): v is number => v != null))];
+  if (!qids.length) return;
+  const agg = (await dbx.execute(sql`SELECT quote_id, count(*)::int AS n,
+      (array_agg(product_name ORDER BY id))[1] AS first_name
+    FROM quote_items WHERE quote_id IN (${sql.join(qids.map(i => sql`${i}`), sql`, `)}) GROUP BY quote_id`)).rows as any[];
+  const byQuote = new Map(agg.map(a => [Number(a.quote_id), a]));
+  for (const r of list) {
+    const a = byQuote.get(quoteIdByProject.get(Number(r.id)) ?? -1);
+    if (!a || !a.n) continue;
+    r.productName = `${a.first_name ?? ""}${a.n > 1 ? ` 외 ${a.n - 1}건` : ""}`;
+  }
 }
 
 // 과거 CRM 전환 판매건 — 판매일은 전환일(createdAt)이 아니라 원본 판매번호의 판매일로 표시·정렬(원본 불변).
@@ -276,13 +318,15 @@ export async function getSalesHistory(dbx: any, q: Record<string, string | undef
   const sources: SalesHistoryResult["sources"] = { current: { ok: true }, legacy: { ok: true } };
   let currentRows: SalesHistoryRow[] = [];
   let legacyRows: SalesHistoryRow[] = [];
+  let quoteIdByProject = new Map<number, number>();
 
   // Current (기존 로직 재사용 — 전체 matching 반환)
   if (effRange === "all" || effRange === "current") {
     try {
       const list = await buildFilteredSalesProjectList(q);
       currentRows = (list as any[]).map(mapCurrentRow);
-      await markLegacyOrigin(dbx, currentRows);
+      quoteIdByProject = await fillSaleDates(dbx, currentRows);
+      await markLegacyOrigin(dbx, currentRows);   // 과거 CRM 전환 판매는 원본 판매번호 날짜 유지(기존 규칙)
       await fillPmNames(dbx, currentRows);
       sources.current = { ok: true, count: currentRows.length };
     } catch (e: any) {
@@ -343,6 +387,7 @@ export async function getSalesHistory(dbx: any, q: Record<string, string | undef
   const pageRows = merged.slice((page - 1) * pageSize, page * pageSize);
   // 현재 페이지의 current 판매만 청구정보(발행일·입금) 조회 — 실패해도 목록은 표시(해당 칸 '-')
   try { await fillBillingInfo(dbx, pageRows.filter(r => r.source === "current")); } catch (e) { console.error("sales-history 청구정보 조회 실패", e); }
+  try { await fillProductNames(dbx, pageRows.filter(r => r.source === "current"), quoteIdByProject); } catch (e) { console.error("sales-history 상품 요약 조회 실패", e); }
 
   return {
     rows: pageRows,
