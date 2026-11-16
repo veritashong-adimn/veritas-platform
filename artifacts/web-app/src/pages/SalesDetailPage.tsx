@@ -17,7 +17,7 @@ import { C, TYPO, SP, BD, dsInputStd } from '../lib/ds';
 import { buildQuotePdfData, formatPhoneDisplay, type QuoteDetail } from '../lib/quotePdf';
 import { QuoteRecipientRefreshBar } from '../components/admin/QuoteRecipientRefreshBar';
 import { LegacyVatNotice, confirmLegacyVatChange } from '../components/admin/LegacyVatNotice';
-import { QuoteTaxConfirmPanel, QuoteTaxConfirmationInfo } from '../components/admin/QuoteTaxConfirm';
+import { QuoteTaxConfirmationInfo } from '../components/admin/QuoteTaxConfirm';
 import { formatDocNumber } from '../lib/quoteTitle';
 import QuotePdfPreviewModal from '../components/admin/QuotePdfPreviewModal';
 import { BackToListButton } from '../components/admin/BackToListButton';
@@ -457,20 +457,11 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
               ) : undefined}
             />
             {basicEdit && basicView ? (
-              <SaleBasicInfoEditor saleId={saleId} token={token} view={basicView}
+              <SaleBasicInfoEditor saleId={saleId} token={token} view={basicView} vatMode={vatType} vatQuoteId={quote?.id ?? null}
                 onCancel={() => setBasicEdit(false)}
                 onReload={async () => { await loadBasic(); await fetchDetail({ silent: true }); }}
-                onSaved={(msg, next) => { setBasicView(next); setBasicEdit(false); setToast(msg); fetchDetail({ silent: true }); }} />
+                onSaved={(msg, next) => { setBasicView(next); setBasicEdit(false); setToast(msg); setTaxConfirmKey(k => k + 1); fetchDetail({ silent: true }); }} />
             ) : null}
-            {/* 부가세 '확인 필요'(과거 CRM 총액 이관 등) — 기본정보 수정에서 일반과세(10%)·영세율·면세로 확정.
-                견적관리와 같은 확인 절차(총액 유지 · 공급가/부가세 분리 · 근거·담당자·확인일 감사로그). 확정 즉시 판매정보·견적서·PDF 에 같은 금액. */}
-            {basicEdit && basicView && vatType === 'unknown' && (
-              <div data-testid="sales-vat-confirm" style={{ marginTop: 12, paddingTop: 10, borderTop: '1px dashed #e5e7eb' }}>
-                <div style={{ fontSize: 12.5, color: '#92400e' }}>부가세: <b>확인 필요</b> — 저장된 금액은 공급가·부가세 구분이 확인되지 않았습니다.</div>
-                <QuoteTaxConfirmPanel quoteId={quote.id} token={token} onToast={setToast} canStart={() => !editMode}
-                  onConfirmed={async () => { setTaxConfirmKey(k => k + 1); await fetchDetail({ silent: true }); }} />
-              </div>
-            )}
             {basicEdit && basicView ? null : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px 20px' }}>
               <ReadField label="견적서 유형" value={QUOTE_TYPE_LABEL[quote.quoteType] ?? quote.quoteType} />

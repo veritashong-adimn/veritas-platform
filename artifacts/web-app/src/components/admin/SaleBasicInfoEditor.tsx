@@ -9,6 +9,7 @@ import { api } from '../../lib/constants';
 import { GhostBtn, PrimaryBtn } from '../ui';
 import { fmtPhone } from './SaleContactInfoPanel';
 import { SaleContactPicker } from './SaleContactPicker';
+import { VAT_MODE_LABEL, type TaxKind, type VatMode } from '../../lib/quoteTaxType';
 
 type Contact = { id: number; name: string; position: string | null; department: string | null; phone: string | null; mobile: string | null; officePhone: string | null; email: string | null };
 type HistoryEntry = { id: number; by: string | null; at: string; reason?: string; contactScope?: string; masterUpdated?: boolean;
@@ -71,9 +72,13 @@ export function SaleBasicInfoNotes({ view }: { view: BasicInfoView | null }) {
   );
 }
 
-export function SaleBasicInfoEditor({ saleId, token, view, onCancel, onSaved, onReload }: {
+export function SaleBasicInfoEditor({ saleId, token, view, onCancel, onSaved, onReload, vatMode = 'taxable', vatQuoteId = null }: {
   saleId: number; token: string; view: BasicInfoView;
   onCancel: () => void; onSaved: (msg: string, next: BasicInfoView) => void; onReload: () => Promise<void> | void;
+  /** 현재 판매 견적의 부가세 유형(품목 저장값 기준). 'unknown'(확인 필요)이면 이 화면에서 유형을 선택해 확정한다. */
+  vatMode?: VatMode;
+  /** 부가세 유형 확정 대상 견적(현재 판매 견적) */
+  vatQuoteId?: number | null;
 }) {
   const cur = view.current;
   const [contactId, setContactId] = useState<number | null>(cur.contactId);
@@ -89,6 +94,22 @@ export function SaleBasicInfoEditor({ saleId, token, view, onCancel, onSaved, on
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [pickerOpen, setPickerOpen] = useState(false);
+  // ── 부가세 유형('확인 필요' 견적만) — 견적 세금 유형 확인 절차(POST /admin/quotes/:id/confirm-tax-type)를 그대로 사용
+  //   일반과세: 총액 유지·공급가/부가세 분리 · 영세율·면세: 금액 그대로. 수정 사유가 확인 근거로 감사로그에 남는다.
+  const vatEditable = vatMode === 'unknown' && vatQuoteId != null;
+  const [vatChoice, setVatChoice] = useState<TaxKind | ''>('');
+  const [vatPreview, setVatPreview] = useState<{ before: { supply: number; tax: number; total: number }; after: { supply: number; tax: number; total: number } } | null>(null);
+  const [vatPreviewErr, setVatPreviewErr] = useState('');
+  useEffect(() => {
+    setVatPreview(null); setVatPreviewErr('');
+    if (!vatEditable || !vatChoice) return;
+    let alive = true;
+    fetch(api(`/api/admin/quotes/${vatQuoteId}/confirm-tax-type`), { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ taxType: vatChoice, dryRun: true }) })
+      .then(async r => ({ ok: r.ok, d: await r.json().catch(() => ({})) }))
+      .then(({ ok, d }) => { if (!alive) return; ok ? setVatPreview(d.summary) : setVatPreviewErr(d.error ?? '이 유형으로 확정할 수 없습니다.'); })
+      .catch(() => { if (alive) setVatPreviewErr('금액 미리보기 실패'); });
+    return () => { alive = false; };
+  }, [vatChoice, vatEditable, vatQuoteId, token]);
 
   // 서버 값이 바뀌면(신규 담당자 등록 후 등) 폼 기준값을 다시 맞춘다
   useEffect(() => {
@@ -121,7 +142,9 @@ export function SaleBasicInfoEditor({ saleId, token, view, onCancel, onSaved, on
   if (t(title) !== (cur.title ?? '')) body.title = t(title);
   if (issueDate !== (cur.issueDate ?? '')) body.issueDate = issueDate;
   const contactFieldsTouched = 'contactMobile' in body || 'contactPhone' in body || 'contactEmail' in body;
-  const dirty = Object.keys(body).length > 0;
+  const basicDirty = Object.keys(body).length > 0;
+  const vatDirty = vatEditable && vatChoice !== '';
+  const dirty = basicDirty || vatDirty;
 
   const save = async () => {
     setError('');
@@ -129,16 +152,34 @@ export function SaleBasicInfoEditor({ saleId, token, view, onCancel, onSaved, on
     if (!reason.trim()) { setError('수정 사유를 입력하세요.'); return; }
     if (t(email) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t(email))) { setError('이메일 형식이 올바르지 않습니다.'); return; }
     if (applyToMaster && !(contactId)) { setError('담당자 Master 를 함께 수정하려면 담당자를 선택하세요.'); return; }
+    if (vatDirty && !vatPreview) { setError(vatPreviewErr || '부가세 금액 미리보기를 확인한 뒤 저장하세요.'); return; }
     if (applyToMaster && !window.confirm(`담당자 Master(${selected?.name ?? ''})의 연락처·이메일도 함께 바꿉니다.\n다른 판매건의 견적서 출력값은 바뀌지 않도록 먼저 고정됩니다. 계속할까요?`)) return;
     setBusy(true);
     try {
-      const r = await fetch(api(`/api/admin/sales/${saleId}/basic-info`), {
-        method: 'PATCH', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...body, applyToMaster: applyToMaster && contactFieldsTouched, reason: reason.trim(), expectedQuoteId: view.quote?.id ?? null }),
-      });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) { setError(d?.error ?? `저장 실패 (${r.status})`); return; }
-      onSaved(d.masterUpdated ? '기본정보와 담당자 Master 가 수정되었습니다.' : '기본정보가 수정되었습니다(이 판매건만).', d.view);
+      const msgs: string[] = [];
+      // 1) 부가세 유형 확정(선택한 경우) — 실패하면 아무것도 저장하지 않고 멈춘다
+      if (vatDirty) {
+        const vr = await fetch(api(`/api/admin/quotes/${vatQuoteId}/confirm-tax-type`), {
+          method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ taxType: vatChoice, basis: reason.trim() }),
+        });
+        const vd = await vr.json().catch(() => ({}));
+        if (!vr.ok) { setError(vd?.error ?? `부가세 유형 저장 실패 (${vr.status})`); return; }
+        msgs.push(`부가세 ${VAT_MODE_LABEL[vatChoice as TaxKind]} 저장(총액 ${Math.round(vd.summary?.after?.total ?? 0).toLocaleString()}원 유지)`);
+      }
+      // 2) 기본정보(변경이 있을 때만)
+      let next = view, masterUpdated = false;
+      if (basicDirty) {
+        const r = await fetch(api(`/api/admin/sales/${saleId}/basic-info`), {
+          method: 'PATCH', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...body, applyToMaster: applyToMaster && contactFieldsTouched, reason: reason.trim(), expectedQuoteId: view.quote?.id ?? null }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { setError(`${vatDirty ? '부가세 유형은 저장되었지만 ' : ''}기본정보 저장 실패: ${d?.error ?? r.status}`); if (vatDirty) void onReload(); return; }
+        next = d.view; masterUpdated = !!d.masterUpdated;
+        msgs.unshift(masterUpdated ? '기본정보와 담당자 Master 가 수정되었습니다' : '기본정보가 수정되었습니다(이 판매건만)');
+      }
+      onSaved(msgs.join(' · '), next);
     } catch { setError('저장 중 오류가 발생했습니다.'); }
     finally { setBusy(false); }
   };
@@ -214,6 +255,30 @@ export function SaleBasicInfoEditor({ saleId, token, view, onCancel, onSaved, on
           <label style={lbl} htmlFor="sale-basic-issue">견적일 (= 판매일)</label>
           <input id="sale-basic-issue" type="date" value={issueDate} onChange={e => setIssueDate(e.target.value)} style={inp} data-testid="input-sale-basic-issue-date" aria-label="견적일" />
           <div style={hint}>운영 판매의 판매일은 별도 저장 칸 없이 견적일을 사용합니다. 견적번호 표시(Q날짜-번호)도 견적일을 따릅니다.</div>
+        </div>
+        <div>
+          <label style={lbl} htmlFor="sale-basic-vat">부가세 유형{vatEditable && <span style={{ color: '#b45309', fontWeight: 600 }}> · 확인 필요</span>}</label>
+          {vatEditable ? (
+            <>
+              <select id="sale-basic-vat" value={vatChoice} onChange={e => setVatChoice(e.target.value as TaxKind | '')} style={inp} data-testid="select-sale-basic-vat" aria-label="부가세 유형 선택">
+                <option value="">— 선택(확인 필요 유지) —</option>
+                <option value="taxable">일반과세 (10%) — 총액에 부가세 포함</option>
+                <option value="zero_rate">영세율 (0%)</option>
+                <option value="exempt">면세</option>
+              </select>
+              {vatPreviewErr && <div style={{ ...hint, color: '#b91c1c' }} data-testid="sale-basic-vat-error">{vatPreviewErr}</div>}
+              {vatPreview && (
+                <div style={hint} data-testid="sale-basic-vat-preview">
+                  공급가액 {Math.round(vatPreview.before.supply).toLocaleString()} → <b>{Math.round(vatPreview.after.supply).toLocaleString()}</b>원 ·
+                  부가세 {Math.round(vatPreview.before.tax).toLocaleString()} → <b>{Math.round(vatPreview.after.tax).toLocaleString()}</b>원 ·
+                  총액 <b>{Math.round(vatPreview.after.total).toLocaleString()}</b>원 유지
+                </div>
+              )}
+              {!vatChoice && <div style={hint}>과거 CRM 원본에 공급가·부가세 구분이 없는 금액입니다. 유형을 선택하면 저장 시 견적서·PDF 에 반영됩니다(총액 유지).</div>}
+            </>
+          ) : (
+            <div style={{ ...inp, background: '#f9fafb' }} data-testid="sale-basic-vat-readonly">{VAT_MODE_LABEL[vatMode]}</div>
+          )}
         </div>
         <div style={{ gridColumn: '1 / -1' }}>
           <label style={lbl} htmlFor="sale-basic-title">견적서명 / 판매명</label>
