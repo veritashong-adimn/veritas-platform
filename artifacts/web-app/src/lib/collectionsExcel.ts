@@ -1,3 +1,4 @@
+import { FX_STATUS_LABEL, fmtForeign, addScaled, type FxSummary } from './fxMoney';
 // ─── 수금현황 Excel Export (공통 excelExport 엔진 재사용) ──────────────────────
 // VERITAS 9차: 수금관리 > 수금 현황 전용. SSOT = GET /api/admin/collections (project_payments + payment_transactions).
 //  · Excel 은 신규 금액 계산을 하지 않는다 — collections API 가 계산한 값을 그대로 내보낸다(§3·§18).
@@ -29,6 +30,7 @@ export interface CollectionExportRow {
   foreign: { currency: string; foreignAmount: number }[];
   pmName: string | null;
   note: string | null;
+  fx?: FxSummary | null;             // 외화 청구회차 요약(원화 청구회차는 null)
 }
 
 // 입금상태 라벨 — 수금현황 화면(STATUS_META)과 동일. 미지 값은 원본 그대로.
@@ -68,6 +70,15 @@ const COLLECTION_COLUMNS: ExcelColumn<CollectionExportRow>[] = [
   { header: '입금은행', value: (r) => r.bankAccount ?? '' },
   { header: '외화통화', value: fxCurrency },
   { header: '외화입금액', value: fxAmount, type: 'number' },
+  // 외화 청구회차(청구통화 기준 판정) — 원화 열과 합산하지 않는다. 원화 환산 입금은 환율 확정분만.
+  { header: '청구통화', value: (r) => r.fx?.currency ?? '' },
+  { header: '외화 청구금액', value: (r) => (r.fx?.billedForeign != null ? Number(r.fx.billedForeign) : ''), type: 'number' },
+  { header: '외화 수금액(입금+상계)', value: (r) => (r.fx ? Number(r.fx.paidForeign) : ''), type: 'number' },
+  { header: '외화 상계액', value: (r) => (r.fx ? Number(r.fx.offsetForeign) : ''), type: 'number' },
+  { header: '외화 미수금', value: (r) => (r.fx?.receivableForeign != null ? Number(r.fx.receivableForeign) : ''), type: 'number' },
+  { header: '원화 환산 입금(확정)', value: (r) => (r.fx ? r.fx.depositKrwConfirmed : ''), type: 'number' },
+  { header: '원화 환산 미확정 건수', value: (r) => (r.fx ? r.fx.unconfirmedCount : ''), type: 'number' },
+  { header: '외화 입금상태', value: (r) => (r.fx ? FX_STATUS_LABEL[r.fx.status] + (r.fx.reviewReasons.length ? ` (${r.fx.reviewReasons.join(', ')})` : '') : '') },
   { header: '담당PM', value: (r) => r.pmName ?? '' },
   { header: '비고', value: (r) => r.note ?? '' },
   // 과거 CRM 통합 — 기존 열 뒤에 추가
@@ -100,7 +111,7 @@ export interface SaleCollectionExportRow {
   status: 'unpaid' | 'partial' | 'completed' | 'review';
   overpaid: boolean;
   overpaidAmount: number;
-  installments: { sequence: number; amount: number; status: 'scheduled' | 'partial' | 'completed' }[];
+  installments: { sequence: number; amount: number; status: 'scheduled' | 'partial' | 'completed' | 'review'; fx?: FxSummary | null }[];
   unbilledAmount: number | null;
   unissuedAmount: number | null;
   issuedAwaitingAmount: number | null;
@@ -113,7 +124,17 @@ export interface SaleCollectionExportRow {
 export const SALE_STATUS_LABEL: Record<SaleCollectionExportRow['status'], string> = {
   unpaid: '미입금', partial: '부분입금', completed: '입금완료', review: '확인 필요',
 };
-export const INSTALLMENT_STATUS_LABEL: Record<string, string> = { scheduled: '대기', partial: '부분', completed: '완료' };
+export const INSTALLMENT_STATUS_LABEL: Record<string, string> = { scheduled: '대기', partial: '부분', completed: '완료', review: '확인 필요' };
+/** 판매건의 외화 청구회차 통화별 요약 — "EUR 청구 5,161.34 · 수금 3,000.00 · 미수 2,161.34 · 원화 환산 입금 4,500,000원"(통화 간 합산 없음) */
+export const saleFxText = (r: Pick<SaleCollectionExportRow, 'installments'>) => {
+  const by = new Map<string, FxSummary[]>();
+  for (const i of r.installments) if (i.fx) by.set(i.fx.currency, [...(by.get(i.fx.currency) ?? []), i.fx]);
+  return [...by.entries()].map(([cur, fs]) => {
+    const krw = fs.reduce((a, f) => a + f.depositKrwConfirmed, 0), unconf = fs.reduce((a, f) => a + f.unconfirmedCount, 0);
+    return `${cur} 청구 ${fmtForeign(cur, addScaled(fs.map(f => f.billedForeign))).slice(cur.length + 1)} · 수금 ${fmtForeign(cur, addScaled(fs.map(f => f.paidForeign))).slice(cur.length + 1)}`
+      + ` · 미수 ${fmtForeign(cur, addScaled(fs.map(f => f.receivableForeign))).slice(cur.length + 1)} · 원화 환산 입금 ${krw.toLocaleString('ko-KR')}원${unconf ? `(환율 미확정 ${unconf}건 제외)` : ''}`;
+  }).join(' / ');
+};
 /** 청구회차 요약 — "1차 완료 / 2차 대기" */
 export const installmentSummary = (r: Pick<SaleCollectionExportRow, 'installments'>) =>
   r.installments.map((i) => `${i.sequence}차 ${INSTALLMENT_STATUS_LABEL[i.status] ?? i.status}`).join(' / ');
@@ -130,6 +151,7 @@ const SALE_COLUMNS: ExcelColumn<SaleCollectionExportRow>[] = [
   { header: '수금상태', value: (r) => SALE_STATUS_LABEL[r.status] + (r.overpaid ? ' (초과입금)' : '') + (r.overdue ? ' (기한경과)' : '') },
   { header: '초과입금액', value: (r) => (r.overpaid ? r.overpaidAmount : ''), type: 'number' },
   { header: '청구회차', value: (r) => installmentSummary(r) },
+  { header: '외화 청구·수금(통화별)', value: (r) => saleFxText(r) },
   { header: '청구 전 금액', value: (r) => num(r.unbilledAmount), type: 'number' },
   { header: '미발행금액', value: (r) => num(r.unissuedAmount), type: 'number' },
   { header: '발행 후 입금대기', value: (r) => num(r.issuedAwaitingAmount), type: 'number' },

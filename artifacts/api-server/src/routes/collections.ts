@@ -21,6 +21,14 @@ import { db, paymentTransactionsTable } from "@workspace/db";
 import { inArray, asc, sql } from "drizzle-orm";
 import { requireAuth, requireRole, requireStaffPermission } from "../middlewares/auth";
 import { parseDepositAmounts } from "../services/legacySaleActivation";
+import { loadFxSummaries, sumFxByCurrency, type FxSummary, type FxStatus } from "../services/fxBilling";
+
+// 외화 청구회차(fx) → 수금관리 원화 열·상태. 외화 기준 판정(환율 차이로 미수 생성 없음). 확인 필요는 review(집계 제외).
+const FX_TO_ROW_STATUS: Record<FxStatus, "scheduled" | "partial" | "completed" | "review"> = { unpaid: "scheduled", partial: "partial", completed: "completed", overpaid: "completed", review: "review" };
+function fxKrw(amount: number, fx: FxSummary) {
+  const receivable = fx.receivableKrwRef ?? amount;   // 환산 근거 없으면 원화 청구액 그대로(0원 간주 금지)
+  return { paid: fx.paidKrwForSale, receivable, status: FX_TO_ROW_STATUS[fx.status] };
+}
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -131,11 +139,13 @@ router.get("/admin/collections", ...adminGuard, requireStaffPermission(["payment
     }
 
     const today = todayKst();
+    const fxMap = await loadFxSummaries(db, ids);
 
     const out = rows.map((r) => {
       const amount = Number(r.amount ?? 0);
       const txCnt = Number(r.tx_cnt ?? 0);
       const isLegacyFallback = txCnt === 0;
+      const fxs = fxMap.get(r.id) ?? null;
 
       // 실입금액: 거래 존재 시 SUM(customer_paid_amount), 없으면 legacy fallback(completed → 전액, 그 외 0).
       let paidAmount: number;
@@ -144,13 +154,14 @@ router.get("/admin/collections", ...adminGuard, requireStaffPermission(["payment
       } else {
         paidAmount = r.deposit_status === "completed" ? amount : 0;
       }
-      const receivable = Math.max(amount - paidAmount, 0);
+      let receivable = Math.max(amount - paidAmount, 0);
 
       // 입금상태(신규 거래 기준 재계산) — legacy completed 라도 거래가 있으면 거래 기준을 우선(§13).
-      let status: "scheduled" | "partial" | "completed";
+      let status: "scheduled" | "partial" | "completed" | "review";
       if (paidAmount <= 0) status = "scheduled";
       else if (paidAmount < amount) status = "partial";
       else status = "completed";
+      if (fxs) { const k = fxKrw(amount, fxs); paidAmount = k.paid; receivable = k.receivable; status = k.status; }
 
       const lastPaidDate = r.last_paid_date ?? (isLegacyFallback ? r.paid_date : null);
       const overdue = receivable > 0 && !!r.expected_date && r.expected_date < today;
@@ -179,6 +190,7 @@ router.get("/admin/collections", ...adminGuard, requireStaffPermission(["payment
         isLegacyFallback,                  // 거래 0건 → legacy 청구행 기준으로 계산됨
         bankAccount: bankByPay.get(r.id) ?? null,
         foreign,         // 외화입금 [{ currency, foreignAmount }] (KRW 제외)
+        fx: fxs,         // 외화 청구회차 요약(청구통화·외화 청구/입금/미수·원화 환산) — 원화 청구회차는 null
         pmName: r.pm_name,
         note: r.note,
       };
@@ -204,6 +216,13 @@ router.get("/admin/collections", ...adminGuard, requireStaffPermission(["payment
       receivableCount: counted.filter((r) => r.receivable > 0).length,
       overdueCount: counted.filter((r) => r.overdue).length,
     };
+    // 외화: 통화별 합계(통화 간 합산 없음) · 원화 환산은 확정분만 · 확인 필요 건수와 사유
+    const fxRows = out.filter((r) => r.fx).map((r) => r.fx as FxSummary);
+    if (fxRows.length) {
+      summary.fx = sumFxByCurrency(fxRows);
+      const rv = out.filter((r) => r.status === "review");
+      summary.fxReview = { count: rv.length, reasons: [...new Set(rv.flatMap((r) => r.fx?.reviewReasons ?? []))] };
+    }
     if (legacy) {
       const review = all.filter((r) => r.status === "review");
       summary.review = { count: review.length, totalAmount: review.reduce((s, r) => s + r.amount, 0) };
@@ -244,6 +263,7 @@ export type SalePayRow = {
   issue_date: string | null; expected_date: string | null; paid_date: string | null;
   deposit_status: string | null; deposit_confirmed: boolean | null; billing_company_name: string | null;
   tx_cnt: string | null; tx_paid: string | null; last_paid_date: string | null;
+  fx?: FxSummary | null;   // 외화 청구회차 요약(라우트에서 loadFxSummaries 로 채움)
 };
 // 발행 대상 — 세금계산서 · 영세율 계산서 · 면세 계산서(청구정보 결제방법, web-app lib/paymentSplit 과 동일 규칙)
 const isTaxInvoiceMethod = (m: string | null) => ["세금계산서", "영세율계산서", "면세계산서"].includes((m ?? "").replace(/\s/g, ""));
@@ -256,10 +276,11 @@ export function summarizeSaleCollection(b: SaleBaseRow, rows: SalePayRow[], toda
   const installments = rows.map((r) => {
     const amount = Number(r.amount ?? 0);
     const txCnt = Number(r.tx_cnt ?? 0);
-    const paid = txCnt > 0 ? Number(r.tx_paid ?? 0)
+    let paid = txCnt > 0 ? Number(r.tx_paid ?? 0)
       : (r.deposit_status === "completed" && r.deposit_confirmed === true && !!r.paid_date ? amount : 0);
-    const rowRecv = Math.max(amount - paid, 0);
-    const status: "scheduled" | "partial" | "completed" = paid <= 0 ? "scheduled" : paid < amount ? "partial" : "completed";
+    let rowRecv = Math.max(amount - paid, 0);
+    let status: "scheduled" | "partial" | "completed" | "review" = paid <= 0 ? "scheduled" : paid < amount ? "partial" : "completed";
+    if (r.fx) { const k = fxKrw(amount, r.fx); paid = k.paid; rowRecv = k.receivable; status = k.status; }
     const paidDate = r.last_paid_date ?? (txCnt === 0 && paid > 0 ? r.paid_date : null);
     billed += amount; paidTotal += paid;
     if (paidDate && (!lastPaidDate || paidDate > lastPaidDate)) lastPaidDate = paidDate;
@@ -275,9 +296,10 @@ export function summarizeSaleCollection(b: SaleBaseRow, rows: SalePayRow[], toda
     return {
       id: r.id, sequence: r.sequence, amount, paidAmount: paid, receivable: rowRecv, status,
       paymentMethod: r.payment_method, issueDate: r.issue_date, expectedDate: r.expected_date, lastPaidDate: paidDate,
-      invoiceTarget: invoice, billingCompanyName: r.billing_company_name,
+      invoiceTarget: invoice, billingCompanyName: r.billing_company_name, fx: r.fx ?? null,
     };
   });
+  const fxReview = installments.filter((i) => i.fx?.status === "review");
   const receivable = Math.max(saleTotal - paidTotal, 0);
   const status: "unpaid" | "partial" | "completed" = paidTotal <= 0 && saleTotal > 0 ? "unpaid" : paidTotal < saleTotal ? "partial" : "completed";
   return {
@@ -290,7 +312,8 @@ export function summarizeSaleCollection(b: SaleBaseRow, rows: SalePayRow[], toda
     billedAmount: billed, unbilledAmount: Math.max(saleTotal - billed, 0),
     invoiceTargetAmount: invoiceTarget, unissuedAmount: unissued, issuedAwaitingAmount: issuedAwaiting,
     installments, lastPaidDate, nextExpectedDate, overdue: overdue && receivable > 0,
-    pmName: b.pm_name, reviewReason: null as string | null,
+    pmName: b.pm_name,
+    reviewReason: (fxReview.length ? `외화 입금 확인 필요: ${[...new Set(fxReview.flatMap((i) => i.fx!.reviewReasons))].join(", ")}` : null) as string | null,
     saleTaxType: b.sale_tax_type ?? null,
   };
 }
@@ -335,8 +358,9 @@ router.get("/admin/collections/sales", ...adminGuard, requireStaffPermission(["p
       ) tx ON tx.project_payment_id = pp.id
       WHERE pp.project_id IN (${sql.join(pids.map((i) => sql`${i}`), sql`, `)})
       ORDER BY pp.project_id, pp.sequence, pp.id`) : { rows: [] as SalePayRow[] };
+    const fxMap = await loadFxSummaries(db, pays.rows.map((r) => r.id));
     const payByProject = new Map<number, SalePayRow[]>();
-    for (const r of pays.rows) { const a = payByProject.get(r.project_id) ?? []; a.push(r); payByProject.set(r.project_id, a); }
+    for (const r of pays.rows) { const a = payByProject.get(r.project_id) ?? []; a.push({ ...r, fx: fxMap.get(r.id) ?? null }); payByProject.set(r.project_id, a); }
 
     const today = todayKst();
     const sales = base.rows.map((b) => summarizeSaleCollection(b, payByProject.get(b.project_id) ?? [], today));

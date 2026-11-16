@@ -16,6 +16,8 @@ import { formatDisplayDate } from '../../lib/dateFormat';
 import { exportCollections } from '../../lib/collectionsExcel';
 import { displayPaymentMethod } from '../../lib/paymentMethodDisplay';
 import { CollectionsSaleView } from './CollectionsSaleView';
+import { fmtForeign, fmtWon, type FxSummary } from '../../lib/fxMoney';
+const fxSub: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: "#4338ca", whiteSpace: "nowrap" };
 
 type CollectionRow = {
   id: number;
@@ -46,6 +48,7 @@ type CollectionRow = {
   foreign: { currency: string; foreignAmount: number }[];
   pmName: string | null;
   note: string | null;
+  fx?: FxSummary | null;           // 외화 청구회차 요약(청구통화 기준) — 원화 청구회차 null
 };
 type Summary = {
   count: number;
@@ -59,6 +62,8 @@ type Summary = {
   overdueCount: number;
   review?: { count: number; totalAmount: number };
   sources?: { current: number; legacy: number; legacyLinkedExcluded: number };
+  fx?: { currency: string; count: number; billed: string; paid: string; receivable: string; krwConfirmed: number; unconfirmedCount: number; reviewCount: number }[];
+  fxReview?: { count: number; reasons: string[] };
 };
 
 // 파생 필터(값을 DB에 저장하지 않고 조회 시 계산). 'receivable'/'overdue'는 status 와 별개 축.
@@ -229,6 +234,17 @@ function BillingCollections({ token, onToast, onOpenSalesDetail, onOpenLegacyDet
           <SummaryCard label="입금완료율" value={`${rate}%`} color="#15803d" sub={`완료 ${summary.completedCount} · 부분 ${summary.partialCount} · 예정 ${summary.scheduledCount}`} />
         </div>
       )}
+      {/* 외화 청구회차 — 통화별 합계(통화 간·원화와 합산하지 않음). 원화 환산은 환율 확정분만, 미확정·확인 필요는 건수와 사유 표시 */}
+      {summary?.fx && summary.fx.length > 0 && (
+        <div data-testid="collections-fx-summary" style={{ margin: "-4px 0 12px", padding: "7px 12px", background: "#eef2ff", border: "1px solid #c7d2fe", borderRadius: 8, fontSize: 12, color: "#3730a3", display: "flex", flexDirection: "column", gap: 3 }}>
+          {summary.fx.map(f => (
+            <span key={f.currency}><b>{f.currency}</b> {f.count}건 · 외화 청구 <b>{fmtForeign(f.currency, f.billed)}</b> · 외화 수금 <b>{fmtForeign(f.currency, f.paid)}</b> · 외화 미수 <b>{fmtForeign(f.currency, f.receivable)}</b>
+              {" "}· 원화 환산 입금(확정) <b>{fmtWon(f.krwConfirmed)}</b>{f.unconfirmedCount ? ` · 환율 미확정 ${f.unconfirmedCount}건 원화 집계 제외` : ""}</span>
+          ))}
+          {summary.fxReview && summary.fxReview.count > 0 && <span style={{ color: "#c2410c" }}>외화 확인 필요 {summary.fxReview.count}건 상단 집계 제외 — {summary.fxReview.reasons.join(", ")}</span>}
+          <span style={{ color: "#6b7280" }}>위 원화 금액(총 청구·입금·미수)의 외화 회차분은 외화 기준 수금 판정 결과입니다(환율 차이로 미수금이 생기지 않음).</span>
+        </div>
+      )}
       {summary?.review && summary.review.count > 0 && (
         <div data-testid="collections-review-notice" style={{ margin: "-4px 0 12px", padding: "7px 12px", background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 8, fontSize: 12, color: "#5b21b6" }}>
           확인 필요(과거 CRM) <b>{summary.review.count.toLocaleString()}건</b> · 판매총액 <b>{formatWon(summary.review.totalAmount)}</b> — 입금내역 금액이 판매금액과 일치하지 않거나 확인할 수 없어 상단 집계에서 제외(입금완료·미수금으로 확정하지 않음).
@@ -321,11 +337,13 @@ function BillingCollections({ token, onToast, onOpenSalesDetail, onOpenLegacyDet
                         {fmtDate(r.expectedDate)}{r.overdue ? " ⚠" : ""}
                       </td>
                       <td style={{ ...td, whiteSpace: "nowrap", color: "#6b7280" }}>{fmtDate(r.lastPaidDate)}</td>
-                      <td style={{ ...tdNum, fontWeight: 700, color: "#0891b2" }}>{formatWon(r.amount)}</td>
-                      <td style={tdNum} title={r.status === "review" && r.parsedDepositAmount != null ? `입금내역에서 읽힌 금액 ${formatWon(r.parsedDepositAmount)} (미확정 — 집계 제외)` : undefined}>{wonOrDash(r.paidAmount)}</td>
-                      <td style={{ ...tdNum, fontWeight: (r.receivable ?? 0) > 0 ? 700 : 400, color: (r.receivable ?? 0) > 0 ? "#dc2626" : "#9ca3af" }}>{wonOrDash(r.receivable)}</td>
+                      <td style={{ ...tdNum, fontWeight: 700, color: "#0891b2" }}>{formatWon(r.amount)}{r.fx?.billedForeign && <div style={fxSub}>{fmtForeign(r.fx.currency, r.fx.billedForeign)}</div>}</td>
+                      <td style={tdNum} title={r.status === "review" && r.parsedDepositAmount != null ? `입금내역에서 읽힌 금액 ${formatWon(r.parsedDepositAmount)} (미확정 — 집계 제외)` : undefined}>{wonOrDash(r.paidAmount)}{r.fx && <div style={fxSub} data-testid={`col-fx-paid-${r.id}`}>{fmtForeign(r.fx.currency, r.fx.paidForeign)}{(Number(r.fx.offsetForeign) > 0) ? ` (상계 ${fmtForeign(r.fx.currency, r.fx.offsetForeign)})` : ""}<br />{r.fx.unconfirmedCount ? "원화 환산 확인 필요" : `원화 환산 ${fmtWon(r.fx.depositKrwConfirmed)}`}</div>}</td>
+                      <td style={{ ...tdNum, fontWeight: (r.receivable ?? 0) > 0 ? 700 : 400, color: (r.receivable ?? 0) > 0 ? "#dc2626" : "#9ca3af" }}>{wonOrDash(r.receivable)}{r.fx?.receivableForeign != null && <div style={fxSub}>{fmtForeign(r.fx.currency, r.fx.receivableForeign)}</div>}</td>
                       <td style={td}>
                         <span title={r.reviewReason ?? undefined} style={{ display: "inline-block", padding: "2px 10px", borderRadius: 12, fontSize: 12, fontWeight: 600, background: sm.bg, color: sm.color, whiteSpace: "nowrap", cursor: r.reviewReason ? "help" : undefined }}>{sm.label}</span>
+                        {r.fx?.status === "overpaid" ? <span style={{ marginLeft: 4, display: "inline-block", padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#e0e7ff", color: "#3730a3" }} title={`초과입금 ${fmtForeign(r.fx.currency, r.fx.overpaidForeign)}`}>초과입금</span> : null}
+                        {r.fx?.status === "review" && r.fx.reviewReasons.length ? <div style={{ ...fxSub, color: "#c2410c" }}>{r.fx.reviewReasons.join(", ")}</div> : null}
                         {r.overdue ? <span style={{ marginLeft: 4, display: "inline-block", padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#fee2e2", color: "#dc2626" }}>기한경과</span> : null}
                       </td>
                       <td style={{ ...td, whiteSpace: "nowrap", color: "#6b7280" }}>{r.bankAccount ?? "-"}</td>

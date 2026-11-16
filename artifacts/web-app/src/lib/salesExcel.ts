@@ -26,6 +26,7 @@ export interface SalesExportRow {
   receivable?: number | null;
   depositStatus?: string;
   createdAt?: string;
+  foreignSummary?: string;   // 외화 청구·수금 요약(통화별)
   note?: string;
 }
 
@@ -69,6 +70,7 @@ const SALES_LIST_COLUMNS: ExcelColumn<SalesExportRow>[] = [
   { header: '누적입금액', value: (r) => num(r.paidAmount), type: 'number' },
   { header: '미수금', value: (r) => num(r.receivable), type: 'number' },
   { header: '입금상태', value: (r) => (r.depositStatus ? (DEPOSIT_LABEL[r.depositStatus] ?? r.depositStatus) : '') },
+  { header: '외화 청구·수금', value: 'foreignSummary' },
   { header: '등록일', value: 'createdAt', type: 'date' },
   { header: '비고', value: 'note' },
 ];

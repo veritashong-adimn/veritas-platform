@@ -13,6 +13,8 @@ import { DateField } from './DatePickerShared';
 import { saleSplitOf, amountsFromSupply, amountsFromTotal, splitMatched, isInvoiceMethod, isZeroVatMethod, methodVatWarning, METHOD_ZERO_RATED, METHOD_EXEMPT } from '../../lib/paymentSplit';
 import { BILLING_METHOD_BY_KIND, type VatMode } from '../../lib/quoteTaxType';
 import './readTableView.css';
+import { FxEditPanel, FxBilledCell, FxPaidCell, FxReceivableCell, FxStatusBadge, FxTxnAddForm, FxSummaryLine, fxTxnText } from './FxPaymentParts';
+import { isForeignCur, rateInputFromPer1, ratePer1FromInput, krwOf, fmtForeign, type FxSummary } from '../../lib/fxMoney';
 
 export interface PayTxn {
   id?: number;
@@ -30,6 +32,8 @@ export interface PayTxn {
   approvalNo?: string | null;
   cardPgType?: string | null;
   note?: string | null;
+  txnType?: string | null;            // 'deposit' 실제 입금 · 'offset' 선입금 상계(외화 회차)
+  offsetSourcePaymentId?: number | null;
 }
 interface PayRow {
   id?: number;
@@ -58,6 +62,10 @@ interface PayRow {
   billingContactId?: number | null;  // 담당자
   billingContactName?: string | null;
   note?: string | null;
+  // 외화 청구(결제방법 외화입금) — billingCurrency NULL/KRW = 원화 청구(기존). 환율은 화면 입력 단위(JPY 100엔당)로 편집.
+  billingCurrency?: string | null; foreignAmount?: string | null; invoiceFxRate?: string | null; invoiceFxRateInput?: string; invoiceFxDate?: string | null;
+  fx?: FxSummary | null;             // 서버 외화 수금 요약(조회)
+  _rateInput?: string; _krw?: string; _fee?: string; _paidDate?: string | null;   // 첫 외화 입금: 적용환율(입력 단위)·은행확인 원화액·수수료·실제 입금일
 }
 
 interface Props {
@@ -302,8 +310,17 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     billingCompanyId: r.billingCompanyId ?? null, billingCompanyName: r.billingCompanyName ?? null,
     billingContactId: r.billingContactId ?? null, billingContactName: r.billingContactName ?? null,
     note: r.note ?? '',
+    billingCurrency: r.billingCurrency ?? null, foreignAmount: r.foreignAmount != null ? String(r.foreignAmount) : null,
+    invoiceFxRateInput: rateInputFromPer1(r.invoiceFxRate, r.billingCurrency), invoiceFxDate: r.invoiceFxDate ?? null, fx: r.fx ?? null,
+    _rateInput: only ? rateInputFromPer1(only.fxRate, only.currency) : '',
+    // 은행 확인 원화액: 저장된 환산액이 외화×환율 계산값과 다를 때만(직접 입력했던 값) 복원
+    _krw: only && only.krwAmount != null && only.fxRate != null && krwOf(only.foreignAmount, only.fxRate) !== Math.round(num(only.krwAmount)) ? String(Math.round(num(only.krwAmount))) : '',
+    _fee: only && num(only.feeAmount) > 0 ? String(only.feeAmount) : '',
+    _paidDate: only?.paidDate ?? null,
   };
   };
+  // 외화 청구회차 = 결제방법 외화입금 + 청구통화 외화(원화 청구 외화입금은 기존 원화 방식)
+  const isFxRow = (r: PayRow) => isOverseas(r.paymentMethod) && isForeignCur(r.billingCurrency);
   const enterEdit = () => {
     const mapped = list.map(mapRow);
     // #5 일반청구 기본값 — 청구가 없으면 판매 거래처 기준 1건 자동 시드(공급가/부가세/합계 = 판매 총액).
@@ -365,7 +382,8 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   const patchMethod = (i: number, v: string) => setRows(prev => prev.map((r, idx) => {
     if (idx !== i) return r;
     const next: PayRow = { ...r, paymentMethod: v, ...(!isInvoiceMethod(v) ? { issueDate: null } : {}) };
-    if (isOverseas(v)) { if (!next._bank) next._bank = '기업은행외화'; if (!next._curr) next._curr = 'USD'; }
+    if (isOverseas(v)) { if (!next._bank) next._bank = '기업은행외화'; if (!next._curr) next._curr = 'USD'; if (!next.billingCurrency) next.billingCurrency = next._curr; }
+    else next.billingCurrency = null;
     return next;
   }));
   // 입금일 변경 — 입력 시 입금완료(3필드 세트), 삭제 시 미입금(3필드 세트)으로 정합. 모순 상태를 만들지 않는다.
@@ -427,6 +445,11 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
             billingCompanyId: r.billingCompanyId ?? null, billingContactId: r.billingContactId ?? null,
             // 회차별 청구업체명(직접입력 포함). 비어 있으면 판매 거래처 기본값.
             billingCompanyName: (r.billingCompanyName ?? '').trim() || (r.billingCompanyId == null ? (defaultCompany?.name ?? null) : null),
+            // 외화 청구(외화입금 + 외화 통화만). 그 외는 원화 청구(NULL)
+            ...(isFxRow(r)
+              ? { billingCurrency: String(r.billingCurrency).toUpperCase(), foreignAmount: r.foreignAmount || null,
+                  invoiceFxRate: ratePer1FromInput(r.invoiceFxRateInput, r.billingCurrency), invoiceFxDate: r.invoiceFxDate || null }
+              : { billingCurrency: null }),
             ...((r.billingCompanyName ?? '').trim() || r.billingCompanyId != null ? {} : { billingCompanyId: defaultCompany?.id ?? null }),
             note: r.note || null,
           };
@@ -456,12 +479,19 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
         const saved = savedRows[idx];
         if (!saved?.id) continue;
         const m = normMethod(r.paymentMethod) || '기타';
-        const txn: PayTxn = {
+        const cur = String(r.billingCurrency ?? '').toUpperCase();
+        // 외화 청구회차: 외화 입금액(통화 단위 그대로)·입금 적용환율·은행확인 원화액·수수료. 원화 환산·원화 결제액은 서버가 decimal 로 확정.
+        const txn: PayTxn & Record<string, unknown> = isFxRow(r) ? {
+          ...(r._txnId ? { id: r._txnId } : {}), txnType: 'deposit', method: '외화송금',
+          paidDate: r._paidDate || r.paidDate || null, bankAccount: r._bank || null, currency: cur, foreignAmount: r._foreign || null,
+          fxRate: ratePer1FromInput(r._rateInput, cur), krwAmount: r._krw ? Number(r._krw) : null, feeAmount: r._fee || null,
+        } : {
           ...(r._txnId ? { id: r._txnId } : {}),
           paidDate: r.paidDate || null, method: m, customerPaidAmount: num(r._paidAmt), bankAccount: r._bank || null,
           ...(isOverseas(m) ? { currency: r._curr || null, foreignAmount: num(r._foreign) || null } : {}),
         };
-        await fetch(api(`/api/admin/project-payments/${saved.id}/transactions`), { method: 'PUT', headers: authH, body: JSON.stringify({ rows: [txn], deletedIds: [] }) });
+        const tr = await fetch(api(`/api/admin/project-payments/${saved.id}/transactions`), { method: 'PUT', headers: authH, body: JSON.stringify({ rows: [txn], deletedIds: [] }) });
+        if (!tr.ok) { const d = await tr.json().catch(() => ({})); onToast(`${idx + 1}회차 입금 저장 실패: ${d.error ?? tr.status}`); setEditMode(false); setRows([]); await onChanged(); return; }
       }
 
       onToast('청구정보가 저장되었습니다.');
@@ -486,12 +516,12 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   //  거래가 없으면 기존 depositConfirmed/depositStatus/paidDate 로직을 fallback 으로 유지.
   const hasTxn = (r: PayRow) => (r.transactions?.length ?? 0) > 0;
   const txnPaid = (r: PayRow) => (r.transactions ?? []).reduce((s, t) => s + num(t.customerPaidAmount), 0);
-  const paidOf = (r: PayRow) => (hasTxn(r) ? txnPaid(r) : (isRowPaid(r) ? haap(r) : 0));
+  const paidOf = (r: PayRow) => (isFxRow(r) ? (r.fx?.paidKrwForSale ?? 0) : hasTxn(r) ? txnPaid(r) : (isRowPaid(r) ? haap(r) : 0));
   const lastTxn = (r: PayRow): PayTxn | null => { const ts = r.transactions ?? []; return ts.length ? ts[ts.length - 1] : null; };  // 최근(마지막) 입금거래
   const dispPaidDate = (r: PayRow): string => { const t = lastTxn(r); return (t?.paidDate ? formatDisplayDate(t.paidDate) : (formatDisplayDate(r.paidDate) || '—')); };  // §11 입금일: 최종 입금일
   const dispBank = (r: PayRow): string => { const t = lastTxn(r); return t?.bankAccount || '—'; };  // §3 입금은행: 최근 거래 은행
   // §7/§12 조회 compact 외화 표시 — 최근 거래가 외화송금이면 "USD 4,000" 처럼 결제방법 셀 아래 한 줄로. 없으면 빈 문자열.
-  const dispForeign = (r: PayRow): string => { const t = lastTxn(r); return (t && isOverseas(t.method) && num(t.foreignAmount) > 0) ? `${t.currency || 'FX'} ${won(num(t.foreignAmount))}` : ''; };
+  const dispForeign = (r: PayRow): string => { const t = lastTxn(r); return (t && isOverseas(t.method) && num(t.foreignAmount) > 0) ? fmtForeign(t.currency || 'FX', t.foreignAmount) : ''; };   // 통화 소수 자릿수 유지(반올림 금지)
   // 입금상태(§F) — 거래 존재 시 결제액 vs 청구액으로 파생. 없으면 기존 depositStatus.
   const effStatus = (r: PayRow): string => {
     if (!hasTxn(r)) return r.depositStatus ?? 'scheduled';
@@ -684,7 +714,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               <PaymentMethodField value={r.paymentMethod ?? ''} onChange={(v) => patchMethod(i, v)} triggerStyle={inp} testid={`pay-method-${i}`} />
               {vatWarn && <span data-testid={`pay-method-warn-${i}`} title={vatWarn} style={{ fontSize: 11, color: C.danger, whiteSpace: 'normal' }}>⚠ 부가세 확인</span>}
-              {firstPayMode && overseasRow && (
+              {firstPayMode && overseasRow && !isFxRow(r) && (
                 <div style={{ display: 'flex', gap: 4 }}>
                   <ClickSelect value={r._curr ?? ''} onChange={(v: string) => patchRow(i, { _curr: v })} triggerStyle={{ ...inp, width: 78 }} options={CURRENCY_OPTS} />
                   <input style={{ ...inp, width: 82, textAlign: 'right' }} inputMode="decimal" placeholder="외화액" value={r._foreign ?? ''} onChange={e => patchRow(i, { _foreign: e.target.value })} data-testid={`pay-foreign-${i}`} />
@@ -741,7 +771,8 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
         </td>
         {/* 청구금액(§1/§14) = project_payments.amount. 공급가/부가세는 내부 자동산출(컬럼 미표시). 일반결제: 입력 / 수출바우처: 자동 */}
         <td style={{ ...tdR, width: 132, fontWeight: 700 }}>
-          {editable && !voucher ? priceCell(r.amount, v => patchHaap(i, v), `pay-haap-${i}`, '청구금액') : `${won(a.amount)}원`}
+          {editable && !voucher ? priceCell(r.amount, v => patchHaap(i, v), `pay-haap-${i}`, '청구금액')
+            : isFxRow(r) ? <FxBilledCell krw={a.amount} cur={String(r.billingCurrency).toUpperCase()} foreign={r.foreignAmount} /> : `${won(a.amount)}원`}
         </td>
         {/* 입금은행(§3/§4) — 첫 입금이면 기본행에서 직접 선택(4개 고정). 그 외엔 최근 거래 은행 표시 */}
         <td style={{ ...tdBase, width: 130 }} data-testid={`pay-bank-${i}`}>
@@ -751,9 +782,17 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
         </td>
         {/* 입금액(§5/§6/§14) — 첫 입금이면 기본행에서 직접 입력(저장 시 payment_transaction 생성). 그 외엔 Σ거래. 2차+는 '+ 입금' */}
         <td style={{ ...tdR, width: 128 }} data-testid={`pay-paid-amt-${i}`}>
-          {firstPayMode
+          {firstPayMode && isFxRow(r)
+            ? <span style={{ fontSize: 11, color: C.textSecondary }}>아래 외화 입력</span>
+            : firstPayMode
             ? priceCell(r._paidAmt, v => patchRow(i, { _paidAmt: v }), `pay-paidamt-${i}`, '입금액')
-            : (
+            : !editable && isFxRow(r) && r.fx ? (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
+                <FxPaidCell fx={r.fx} />
+                {pid != null && addingFor !== pid && <button type="button" onClick={() => startAdd(r)} data-testid={`txn-add-open-${i}`}
+                  style={{ border: `1px solid ${C.primary}`, borderRadius: 5, background: '#eff6ff', color: C.primaryText, cursor: 'pointer', fontSize: 11, fontWeight: 700, padding: '2px 8px' }}>+ 입금·상계</button>}
+              </div>
+            ) : (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
                 <span style={{ fontWeight: 700, color: paidOf(r) > 0 ? C.primaryText : C.textSecondary }}>{`${won(paidOf(r))}원`}</span>
                 {!editable && pid != null && hasTxn(r) && addingFor !== pid && (
@@ -764,10 +803,14 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
             )}
         </td>
         {/* 미수금 — 첫 입금 입력 중이면 미리보기 반영 */}
-        <td style={{ ...tdR, width: 128, color: rowReceivable > 0 ? C.danger : C.textSecondary }}>{`${won(rowReceivable)}원`}</td>
+        <td style={{ ...tdR, width: 128, color: rowReceivable > 0 ? C.danger : C.textSecondary }}>
+          {isFxRow(r) ? (r.fx && !editable ? <FxReceivableCell fx={r.fx} /> : <span style={{ fontSize: 11, color: C.textSecondary }}>외화 기준</span>) : `${won(rowReceivable)}원`}
+        </td>
         {/* 입금상태 — 거래 있으면 파생 / 첫 입금 입력 중이면 미리보기 / 그 외 기존 */}
         <td style={{ ...tdBase, width: 110 }}>
-          {hasTxn(r)
+          {isFxRow(r) && r.fx && !editable
+            ? <FxStatusBadge status={r.fx.status} title={r.fx.reviewReasons.join(', ') || undefined} />
+            : hasTxn(r)
             ? <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 5, fontWeight: 700, background: effStatus(r) === 'completed' ? '#dcfce7' : effStatus(r) === 'partial' ? '#fef9c3' : '#f3f4f6', color: effStatus(r) === 'completed' ? '#15803d' : effStatus(r) === 'partial' ? '#854d0e' : '#6b7280' }}>{labelOf(DEPOSIT_OPTS, effStatus(r))}</span>
             : firstPayMode && num(r._paidAmt) > 0
               ? <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 5, fontWeight: 700, background: firstStatus === 'completed' ? '#dcfce7' : '#fef9c3', color: firstStatus === 'completed' ? '#15803d' : '#854d0e' }}>{labelOf(DEPOSIT_OPTS, firstStatus)}</span>
@@ -783,6 +826,12 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
             : (r.note || '—')}
         </td>
       </tr>
+      {/* 외화입금 회차(편집) — A.외화 청구 / B.실제 외화 입금(외화 금액 옆 원화 환산 자동 표시) */}
+      {editable && !voucher && overseasRow && (
+        <tr data-testid={`fx-panel-row-${i}`}><td colSpan={cols} style={{ ...tdBase, whiteSpace: 'normal', overflow: 'visible', background: '#f8fafc' }}>
+          <FxEditPanel row={r} idx={i} inp={inp} firstPayMode={firstPayMode} onPatch={(p) => patchRow(i, p as Partial<PayRow>)} />
+        </td></tr>
+      )}
       {/* 하위 입금행(§7/§8) — 읽기모드 펼침 시 각 payment_transaction 표시(회차/날짜/은행/금액/상세) */}
       {!editable && isOpen && txns.map((t, ti) => (
         <tr key={`t-${t.id ?? ti}`} data-testid={`txn-subrow-${i}-${ti}`}>
@@ -792,8 +841,10 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
               <span>{t.paidDate || '—'}</span>
               <span style={{ padding: '1px 7px', borderRadius: 4, background: '#eef2ff', color: '#4338ca', fontWeight: 600 }}>{displayMethod(t.method) || '—'}</span>
               <span style={{ color: '#374151' }}>{t.bankAccount || '—'}</span>
-              <span style={{ fontWeight: 700 }}>{won(num(t.customerPaidAmount))}원</span>
-              {txnDetail(t) && <span style={{ color: '#6b7280' }}>{txnDetail(t)}</span>}
+              {isFxRow(r) && isForeignCur(t.currency)
+                ? <span style={{ fontWeight: 700, color: t.txnType === 'offset' ? '#7c3aed' : undefined }} data-testid={`txn-fx-${i}-${ti}`}>{fxTxnText(t)}</span>
+                : <><span style={{ fontWeight: 700 }}>{won(num(t.customerPaidAmount))}원</span>
+                  {txnDetail(t) && <span style={{ color: '#6b7280' }}>{txnDetail(t)}</span>}</>}
               {t.note ? <span style={{ color: '#9ca3af' }}>· {t.note}</span> : null}
               <button type="button" onClick={() => deleteTxn(pid!, t.id)} disabled={txnBusy} data-testid={`txn-sub-del-${i}-${ti}`}
                 style={{ marginLeft: 'auto', border: `1px solid ${C.g300}`, borderRadius: 5, background: '#fff', color: C.danger, cursor: 'pointer', padding: '2px 8px', fontSize: 11 }}>삭제</button>
@@ -802,10 +853,13 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
         </tr>
       ))}
       {/* 2차+ 입금 추가(§6/§8) — 거래가 1건 이상인 행에서만. 첫 입금은 기본행(수정모드)에서 직접 입력. */}
-      {!editable && isOpen && pid != null && hasTxn(r) && (
+      {!editable && isOpen && pid != null && (hasTxn(r) || isFxRow(r)) && (
         <tr data-testid={`txn-addrow-${i}`}>
           <td colSpan={cols} style={{ ...tdBase, background: '#f8fbff', whiteSpace: 'normal' }}>
-            {addingFor === pid
+            {addingFor === pid && isFxRow(r)
+              ? <FxTxnAddForm paymentId={pid} cur={String(r.billingCurrency).toUpperCase()} token={token} busy={txnBusy}
+                  onSave={async (t) => { if (await putTxn(pid, { rows: [t as PayTxn] })) cancelAdd(); }} onCancel={cancelAdd} />
+              : addingFor === pid
               ? renderTxnAddForm(pid)
               : <button type="button" onClick={() => startAdd(r)} data-testid={`txn-add-open-${i}`}
                   style={{ marginLeft: 28, border: `1px dashed ${C.primary}`, borderRadius: 6, background: '#fff', color: C.primaryText, cursor: 'pointer', fontSize: 12, fontWeight: 700, padding: '5px 12px' }}>└ + 입금 추가</button>}
@@ -870,7 +924,10 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
         <span>총 입금액 <b style={{ color: C.primaryText }}>{won(summary.totalPaid)}원</b></span>
         <span>미수금 <b style={{ color: summary.receivable > 0 ? C.danger : C.textSecondary }}>{won(summary.receivable)}원</b></span>
         <span>입금완료율 <b>{summary.rate.toFixed(1)}%</b></span>
+        {list.some(isFxRow) && <span style={{ ...TYPO.helper }} data-testid="fx-krw-basis-note">※ 외화 회차의 원화 입금·미수금은 외화 기준 수금 처리액(판매 원화금액 기준) — 실제 원화 환산 입금액은 아래 통화별 요약</span>}
       </div>
+      {/* 외화 청구회차 — 통화별 외화 청구·수금·미수(원화와 합산하지 않음). 위 원화 금액은 외화 기준 판정 결과(환율 차이로 미수 생성 없음) */}
+      {!editMode && <FxSummaryLine list={list.filter(isFxRow).map(r => r.fx).filter((x): x is FxSummary => !!x)} />}
     </>
   );
 

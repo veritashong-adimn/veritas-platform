@@ -41,6 +41,7 @@ import {
 import { closeAccumulatedBatchQuote } from "../services/accumulatedBatch";
 import { effectiveQuoteConditions, getQuoteFamily, resolveChainCurrent } from "../services/quoteRelation";
 import { loadSaleIdentities } from "../services/saleIdentity";
+import { loadFxSummaries, fmtForeign } from "../services/fxBilling";
 import { applyParentIndexLinks } from "../services/quoteItemGroup";
 import { createRevision, approveRevision, rejectRevision } from "../services/quoteRevision";
 import { createDerivedSplit, approveDerived, rejectDerived, calculateAllocation, generateDerivedBillingRows, type DerivedSplitInput } from "../services/quoteDerived";
@@ -400,6 +401,7 @@ router.get("/admin/projects/export", ...adminGuard, async (req, res) => {
           FROM payment_transactions GROUP BY project_payment_id
         ) tx ON tx.project_payment_id = pp.id
         WHERE pp.project_id IN (${sql.join(projectIds.map((id) => sql`${id}`), sql`, `)})
+          AND (pp.billing_currency IS NULL OR upper(pp.billing_currency) = 'KRW')   -- 외화 청구회차는 아래 외화 기준으로 합산
           AND NOT EXISTS (
             SELECT 1 FROM quotes q2 WHERE q2.project_id = pp.project_id
               AND q2.is_current = true AND q2.deleted_at IS NULL
@@ -410,6 +412,24 @@ router.get("/admin/projects/export", ...adminGuard, async (req, res) => {
     `);
     const billByProject = new Map<number, { billed: number; paid: number; receivable: number }>();
     for (const r of payAgg.rows) billByProject.set(Number(r.project_id), { billed: Number(r.billed), paid: Number(r.paid), receivable: Number(r.receivable) });
+    // 3-1) 외화 청구회차 — 외화 기준 판정(환율 차이로 미수 생성 없음). 원화 열은 판매 원화 기준값, 외화 요약은 별도 열.
+    const fxPays = (await db.execute<{ id: number; project_id: number; amount: string }>(sql`SELECT pp.id, pp.project_id, pp.amount FROM project_payments pp
+      WHERE pp.project_id IN (${sql.join(projectIds.map((id) => sql`${id}`), sql`, `)}) AND pp.billing_currency IS NOT NULL AND upper(pp.billing_currency) <> 'KRW'
+        AND NOT EXISTS (SELECT 1 FROM quotes q2 WHERE q2.project_id = pp.project_id AND q2.is_current = true AND q2.deleted_at IS NULL
+          AND q2.quote_type IN ('b2c_prepaid', 'prepaid_deduction'))`)).rows;
+    const fxMap = await loadFxSummaries(db, fxPays.map((r) => Number(r.id)));
+    const fxTextByProject = new Map<number, string[]>();
+    for (const r of fxPays) {
+      const fx = fxMap.get(Number(r.id)); if (!fx) continue;
+      const pid = Number(r.project_id), amt = Number(r.amount ?? 0);
+      const a = billByProject.get(pid) ?? { billed: 0, paid: 0, receivable: 0 };
+      a.billed += amt; a.paid += fx.paidKrwForSale; a.receivable += fx.receivableKrwRef ?? amt;
+      billByProject.set(pid, a);
+      const t = `${fmtForeign(fx.currency, fx.billedForeign ?? "0")} 청구 / ${fmtForeign(fx.currency, fx.paidForeign)} 수금 / 미수 ${fmtForeign(fx.currency, fx.receivableForeign ?? "0")}`
+        + (fx.depositKrwConfirmed ? ` / 원화 환산 입금 ${fx.depositKrwConfirmed.toLocaleString("ko-KR")}원` : "") + (fx.unconfirmedCount ? ` / 원화 환산 확인 필요 ${fx.unconfirmedCount}건` : "")
+        + (fx.status === "review" ? ` / 확인 필요(${fx.reviewReasons.join(", ")})` : "");
+      fxTextByProject.set(pid, [...(fxTextByProject.get(pid) ?? []), t]);
+    }
 
     // 4) 사업자등록번호 + 담당PM명 — batch(N+1 회피)
     const companyIds = Array.from(new Set(base.map((p) => p.companyId).filter((x): x is number => x != null)));
@@ -446,6 +466,7 @@ router.get("/admin/projects/export", ...adminGuard, async (req, res) => {
         receivable: bill ? bill.receivable : null,
         depositStatus: bill ? (bill.billed <= 0 ? "" : bill.paid <= 0 ? "scheduled" : bill.paid < bill.billed ? "partial" : "completed") : "",
         createdAt: p.createdAt,
+        foreignSummary: (fxTextByProject.get(p.id) ?? []).join(" · "),   // 외화 청구·수금 요약(통화별, 원화와 합산하지 않음)
         note: "",
       };
     });

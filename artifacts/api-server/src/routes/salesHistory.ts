@@ -17,6 +17,7 @@ import { alias } from "drizzle-orm/pg-core";
 import { requireAuth, requireRole } from "../middlewares/auth";
 import { buildFilteredSalesProjectList } from "./admin";
 import { loadSaleIdentities, saleIdentityMatches, type SaleIdentity } from "../services/saleIdentity";
+import { loadFxSummaries, fmtForeign, fmtForeignWithKrw, type FxSummary } from "../services/fxBilling";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -195,24 +196,38 @@ async function markLegacyOrigin(dbx: any, list: SalesHistoryRow[]) {
 //  · 과거 CRM 전환 판매에 플랫폼 청구정보(발행일 / 입금기록)가 없으면 원본(sales_list) 값을 그대로 표시(항목군별 — 발행일, 입금일·입금내역).
 const won = (n: number) => Math.round(n).toLocaleString("ko-KR");
 const md = (d: string) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`;
-export function summarizeBillingForList(saleTotal: number | null, pays: any[], txns: any[]) {
+export function summarizeBillingForList(saleTotal: number | null, pays: any[], txns: any[], fxMap: Map<number, FxSummary> = new Map()) {
   const txByPay = new Map<number, any[]>();
   for (const t of txns) { const k = Number(t.project_payment_id); txByPay.set(k, [...(txByPay.get(k) ?? []), t]); }
   const issues = [...new Set(pays.map(p => toDateStr(p.issue_date)).filter((d): d is string => !!d))].sort();
-  const deposits: { date: string | null; bank: string | null; amount: number }[] = [];
+  const deposits: { date: string | null; bank: string | null; amount: number; label?: string }[] = [];
+  let fxPaidKrw = 0, fxAny = false;
   for (const p of pays) {
     const ts = txByPay.get(Number(p.id)) ?? [];
+    const fx = fxMap.get(Number(p.id));
+    if (fx) {
+      // 외화 청구회차: 외화 금액 + 원화 환산(확정분만) 표시. 상계는 실제 은행 입금과 구분. 상태는 외화 기준(fx).
+      fxAny = true; fxPaidKrw += fx.paidKrwForSale;
+      for (const t of ts) {
+        const f = t.foreign_amount;
+        if (f == null || Number(f) <= 0) continue;
+        const krw = t.krw_amount != null && t.fx_rate != null ? Math.round(Number(t.krw_amount)) : null;
+        deposits.push({ date: t.txn_type === "offset" ? null : toDateStr(t.paid_date), bank: (t.bank_account ?? "").trim() || null, amount: 0,
+          label: t.txn_type === "offset" ? `상계 ${fmtForeign(fx.currency, f)}` : fmtForeignWithKrw(fx.currency, f, krw) });
+      }
+      continue;
+    }
     if (ts.length) for (const t of ts) deposits.push({ date: toDateStr(t.paid_date), bank: (t.bank_account ?? "").trim() || null, amount: Number(t.customer_paid_amount ?? 0) });
     else if (p.deposit_status === "completed" && p.deposit_confirmed === true && p.paid_date) deposits.push({ date: toDateStr(p.paid_date), bank: null, amount: Number(p.amount ?? 0) });
   }
-  const paid = deposits.filter(d => d.amount > 0).sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
-  const paidTotal = paid.reduce((s, d) => s + d.amount, 0);
-  const one = (d: typeof paid[number]) => [d.bank, won(d.amount)].filter(Boolean).join(" ");
+  const paid = deposits.filter(d => d.amount > 0 || d.label).sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
+  const paidTotal = paid.reduce((s, d) => s + d.amount, 0) + fxPaidKrw;
+  const one = (d: typeof paid[number]) => [d.bank, d.label ?? won(d.amount)].filter(Boolean).join(" ");
   return {
     taxInvoiceDate: issues.length ? issues.join(", ") : null,
     paymentDate: paid.length ? (paid.map(d => d.date).filter(Boolean).sort().pop() ?? null) : null,   // 마지막 실제 입금일
     paymentMemo: !paid.length ? null : paid.length === 1 ? one(paid[0]) : paid.map(d => `${d.date ? md(d.date) + " " : ""}${one(d)}`).join(", "),
-    paymentStatus: paidTotal <= 0 ? null : (saleTotal != null && paidTotal < saleTotal ? "partial" : "completed") as "partial" | "completed",
+    paymentStatus: (paidTotal <= 0 && !(fxAny && paid.length) ? null : (saleTotal != null && paidTotal < saleTotal ? "partial" : "completed")) as "partial" | "completed" | null,
   };
 }
 async function fillBillingInfo(dbx: any, list: SalesHistoryRow[]) {
@@ -220,7 +235,8 @@ async function fillBillingInfo(dbx: any, list: SalesHistoryRow[]) {
   const ids = sql.join(list.map(r => sql`${Number(r.id)}`), sql`, `);
   const pays = (await dbx.execute(sql`SELECT id, project_id, sequence, issue_date::text, amount, paid_date::text, deposit_status, deposit_confirmed
     FROM project_payments WHERE project_id IN (${ids}) ORDER BY project_id, sequence, id`)).rows as any[];
-  const txns = pays.length ? (await dbx.execute(sql`SELECT t.project_payment_id, t.paid_date::text, t.bank_account, t.customer_paid_amount
+  const fxMap = await loadFxSummaries(dbx, pays.map(p => Number(p.id)));
+  const txns = pays.length ? (await dbx.execute(sql`SELECT t.project_payment_id, t.paid_date::text, t.bank_account, t.customer_paid_amount, t.txn_type, t.currency, t.foreign_amount, t.fx_rate, t.krw_amount
     FROM payment_transactions t WHERE t.project_payment_id IN (${sql.join(pays.map(p => sql`${Number(p.id)}`), sql`, `)}) ORDER BY t.paid_date, t.id`)).rows as any[] : [];
   // 과거 CRM 전환 판매 — 원본 sales_list 값(플랫폼 청구정보가 없을 때만 사용)
   const conv = list.filter(r => r.origin === "legacy_crm" && r.saleNumber);
@@ -235,7 +251,7 @@ async function fillBillingInfo(dbx: any, list: SalesHistoryRow[]) {
   for (const r of list) {
     const ps = byProj.get(Number(r.id)) ?? [];
     const payIds = new Set(ps.map(p => Number(p.id)));
-    const b = summarizeBillingForList(r.amount, ps, txns.filter(t => payIds.has(Number(t.project_payment_id))));
+    const b = summarizeBillingForList(r.amount, ps, txns.filter(t => payIds.has(Number(t.project_payment_id))), fxMap);
     const src = r.origin === "legacy_crm" && r.saleNumber ? raw.get(r.saleNumber) : null;
     r.taxInvoiceDate = b.taxInvoiceDate ?? src?.tax_date ?? null;
     if (b.paymentMemo) { r.paymentDate = b.paymentDate; r.paymentMemo = b.paymentMemo; r.paymentStatus = b.paymentStatus; }

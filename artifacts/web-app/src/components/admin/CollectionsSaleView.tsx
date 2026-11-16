@@ -12,7 +12,7 @@ import { Card, FilterPill, GhostBtn } from '../ui';
 import { Pagination } from '../ui/Paginator';
 import './readTableView.css';
 import { formatDisplayDate } from '../../lib/dateFormat';
-import { exportSaleCollections, installmentSummary, SALE_STATUS_LABEL, INSTALLMENT_STATUS_LABEL, type SaleCollectionExportRow } from '../../lib/collectionsExcel';
+import { exportSaleCollections, installmentSummary, saleFxText, SALE_STATUS_LABEL, INSTALLMENT_STATUS_LABEL, type SaleCollectionExportRow } from '../../lib/collectionsExcel';
 import { displayPaymentMethod } from '../../lib/paymentMethodDisplay';
 import { VAT_MODE_LABEL, type VatMode } from '../../lib/quoteTaxType';
 
@@ -55,6 +55,7 @@ const STATUS_STYLE: Record<SaleCollectionRow['status'], { bg: string; color: str
 };
 const INST_STYLE: Record<string, { bg: string; color: string }> = {
   completed: { bg: '#dcfce7', color: '#15803d' }, partial: { bg: '#fef3c7', color: '#b45309' }, scheduled: { bg: '#f3f4f6', color: '#6b7280' },
+  review: { bg: '#ffedd5', color: '#c2410c' },
 };
 
 const th: React.CSSProperties = {
@@ -258,7 +259,7 @@ export function CollectionsSaleView({ token, onToast, onOpenSalesDetail, onOpenL
                         {r.saleTaxType && r.saleTaxType !== 'taxable' && (
                           <div data-testid={`sale-tax-type-${r.rowKey}`} style={{ fontSize: 11, fontWeight: 600, color: r.saleTaxType === 'unknown' ? '#b45309' : '#6b7280' }}>{r.saleTaxType === 'unknown' ? '세금 유형 확인 필요' : VAT_MODE_LABEL[r.saleTaxType as VatMode]}</div>
                         )}</td>
-                      <td style={tdNum} title={r.status === 'review' && r.parsedDepositAmount != null ? `입금내역에서 읽힌 금액 ${formatWon(r.parsedDepositAmount)} (미확정 — 집계 제외)` : undefined}>{wonOrDash(r.paidAmount)}</td>
+                      <td style={tdNum} title={r.status === 'review' && r.parsedDepositAmount != null ? `입금내역에서 읽힌 금액 ${formatWon(r.parsedDepositAmount)} (미확정 — 집계 제외)` : undefined}>{wonOrDash(r.paidAmount)}{saleFxText(r) && <div data-testid={`sale-fx-${r.rowKey}`} style={{ fontSize: 11, fontWeight: 600, color: '#4338ca', whiteSpace: 'normal', minWidth: 220, textAlign: 'right' }}>{saleFxText(r)}</div>}</td>
                       <td style={{ ...tdNum, fontWeight: hasRecv ? 700 : 400, color: hasRecv ? '#dc2626' : '#9ca3af' }}>{wonOrDash(r.receivable)}</td>
                       <td style={tdNum}><RateCell rate={r.paidRate} overpaid={r.overpaid} /></td>
                       <td style={{ ...td, whiteSpace: 'nowrap' }}>

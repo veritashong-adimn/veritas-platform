@@ -40,6 +40,11 @@ export const paymentTransactionsTable = pgTable("payment_transactions", {
   approvalNo: text("approval_no"),                   // 카드 승인번호
   cardPgType: text("card_pg_type"),                  // 카드/PG 구분(신용카드)
   note: text("note"),
+  // 거래유형(2026-11 추가, NULL 허용) — NULL·'deposit' = 실제 입금(기존) · 'offset' = 선입금(초과입금) 상계(실제 은행 입금 아님).
+  //  상계는 offset_source_payment_id(초과입금이 발생한 원천 청구회차)와 연결. 외화 청구회차에서 fx_rate=입금 적용환율(외화 1단위당 원화),
+  //  krw_amount=확정 원화 환산액, fee_amount=거래 통화 단위 수수료, customer_paid_amount=확정 원화 환산액(미확정 0).
+  txnType: varchar("txn_type", { length: 20 }),
+  offsetSourcePaymentId: integer("offset_source_payment_id").references(() => projectPaymentsTable.id, { onDelete: "set null" }),
 
   createdBy: integer("created_by").references(() => usersTable.id),
   createdAt: timestamp("created_at").notNull().defaultNow(),

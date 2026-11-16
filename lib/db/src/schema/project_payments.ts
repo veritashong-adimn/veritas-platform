@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, numeric, timestamp, date, pgEnum, text, boolean } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, numeric, timestamp, date, pgEnum, text, boolean, varchar } from "drizzle-orm/pg-core";
 import { projectsTable } from "./projects";
 import { usersTable } from "./users";
 import { companiesTable } from "./companies";
@@ -48,6 +48,13 @@ export const projectPaymentsTable = pgTable("project_payments", {
   billingCompanyNameSnapshot: text("billing_company_name_snapshot"),
   billingContactNameSnapshot: text("billing_contact_name_snapshot"),
   note: text("note"),                                  // 비고
+  // 외화 청구(2026-11 추가, 모두 NULL 허용) — NULL·'KRW' = 원화 청구(기존 동작 그대로). amount/supply/vat 는 계속 원화 기준.
+  //  · foreign_amount = 외화 청구금액(인보이스, billing_currency 단위) · invoice_fx_rate = 인보이스 적용환율(외화 1단위당 원화)
+  //  · 외화 청구회차의 미수금·입금상태는 외화 금액 기준(services/fxBilling). 판매금액·원화 청구금액은 환율로 바꾸지 않는다.
+  billingCurrency: varchar("billing_currency", { length: 3 }),
+  foreignAmount: numeric("foreign_amount", { precision: 14, scale: 2 }),
+  invoiceFxRate: numeric("invoice_fx_rate", { precision: 18, scale: 6 }),
+  invoiceFxDate: date("invoice_fx_date"),
   createdBy: integer("created_by").references(() => usersTable.id),
   updatedBy: integer("updated_by").references(() => usersTable.id),
   createdAt: timestamp("created_at").notNull().defaultNow(),

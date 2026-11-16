@@ -19,6 +19,7 @@ import { requireAuth, requireRole } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
 import { normalizeCompanyName } from "../lib/normalizeCompany";
 import { parseDepositAmounts } from "../services/legacySaleActivation";
+import { loadFxSummaries } from "../services/fxBilling";
 import { loadFacts, loadOverrides, gradeInfo, todayKst, GRADES, GRADE_RULES, type Grade, type Fact } from "../services/customerPerformance";
 
 const router: IRouter = Router();
@@ -157,7 +158,8 @@ router.get("/admin/customer-management", ...viewGuard, async (req, res) => {
                max(r.last_paid)::text AS last_paid
         FROM (
           SELECT coalesce(pp.billing_company_id, p.company_id) AS company_id, coalesce(pp.amount, 0) AS amount,
-            CASE WHEN coalesce(tx.tx_cnt, 0) > 0 THEN coalesce(tx.tx_paid, 0)
+            CASE WHEN pp.billing_currency IS NOT NULL AND upper(pp.billing_currency) <> 'KRW' THEN 0   -- 외화 청구회차: 아래 외화 기준으로 보정
+                 WHEN coalesce(tx.tx_cnt, 0) > 0 THEN coalesce(tx.tx_paid, 0)
                  WHEN pp.deposit_status = 'completed' THEN coalesce(pp.amount, 0) ELSE 0 END AS paid_row,
             coalesce(tx.last_paid, CASE WHEN coalesce(tx.tx_cnt, 0) = 0 THEN pp.paid_date END) AS last_paid
           FROM project_payments pp
@@ -168,6 +170,19 @@ router.get("/admin/customer-management", ...viewGuard, async (req, res) => {
             AND NOT EXISTS (SELECT 1 FROM quotes q2 WHERE q2.project_id = pp.project_id AND q2.is_current = true
                               AND q2.deleted_at IS NULL AND q2.quote_type IN ('b2c_prepaid', 'prepaid_deduction'))
         ) r GROUP BY r.company_id`)) billBy.set(Number(r.company_id), r);
+      // 외화 청구회차 보정 — 외화 기준 수금(환율 차이로 미수 생성 없음). 위 SQL 은 이 행들의 입금을 0 으로 두었다.
+      const fxRows = await rowsOf(sql`SELECT pp.id, coalesce(pp.billing_company_id, p.company_id) AS company_id, coalesce(pp.amount, 0) AS amount
+        FROM project_payments pp JOIN projects p ON p.id = pp.project_id
+        WHERE coalesce(pp.billing_company_id, p.company_id) IN (${ids(pageIds)}) AND pp.billing_currency IS NOT NULL AND upper(pp.billing_currency) <> 'KRW'
+          AND NOT EXISTS (SELECT 1 FROM quotes q2 WHERE q2.project_id = pp.project_id AND q2.is_current = true
+                            AND q2.deleted_at IS NULL AND q2.quote_type IN ('b2c_prepaid', 'prepaid_deduction'))`);
+      const fxMap = await loadFxSummaries(db, fxRows.map((x: any) => Number(x.id)));
+      for (const x of fxRows as any[]) {
+        const fx = fxMap.get(Number(x.id)); const e = billBy.get(Number(x.company_id)); if (!fx || !e) continue;
+        const amt = Number(x.amount);
+        e.paid = Number(e.paid) + fx.paidKrwForSale;
+        e.receivable = Number(e.receivable) - amt + (fx.receivableKrwRef ?? amt);
+      }
     }
     const legacy = await legacyRefIndex();
     const facts = await loadFacts();

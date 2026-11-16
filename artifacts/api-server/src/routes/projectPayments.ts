@@ -12,6 +12,7 @@ import { z } from "zod";
 import { requireAuth, requireRole, requireRolePermission } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
 import { fetchCompanyName, fetchContactName } from "../lib/nameSnapshot";
+import { summarizeFxRow, isForeignCurrency, toScaled, fromScaled, krwOf, FX_CURRENCIES, loadFxSummaries } from "../services/fxBilling";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -40,8 +41,18 @@ export async function loadPaymentRecords(projectId: number) {
     : [];
   const byPayment = new Map<number, typeof txns>();
   for (const t of txns) { const arr = byPayment.get(t.projectPaymentId) ?? []; arr.push(t); byPayment.set(t.projectPaymentId, arr); }
-  return records.map((r) => ({ ...r, transactions: byPayment.get(r.id) ?? [] }));
+  // 외화 청구회차 — 외화 기준 수금 요약(fx) 첨부(additive). 이 회차를 원천으로 다른 회차에 상계한 거래(offsetsOut)도 반영.
+  const fxIds = records.filter((r) => isForeignCurrency(r.billingCurrency)).map((r) => r.id);
+  const outs = fxIds.length ? await db.select().from(paymentTransactionsTable).where(inArray(paymentTransactionsTable.offsetSourcePaymentId, fxIds)) : [];
+  return records.map((r) => {
+    const own = byPayment.get(r.id) ?? [];
+    const fx = isForeignCurrency(r.billingCurrency) ? summarizeFxRow(fxBill(r), own.map(fxTxn), outs.filter((o) => o.offsetSourcePaymentId === r.id).map(fxTxn)) : null;
+    return { ...r, transactions: own, fx };
+  });
 }
+// drizzle(camelCase) → fxBilling 입력(snake)
+export const fxBill = (r: any) => ({ id: r.id, amount: r.amount, billing_currency: r.billingCurrency, foreign_amount: r.foreignAmount, invoice_fx_rate: r.invoiceFxRate, invoice_fx_date: r.invoiceFxDate });
+export const fxTxn = (t: any) => ({ txn_type: t.txnType, currency: t.currency, foreign_amount: t.foreignAmount, fx_rate: t.fxRate, krw_amount: t.krwAmount, fee_amount: t.feeAmount, offset_source_payment_id: t.offsetSourcePaymentId, paid_date: t.paidDate });
 
 // 청구업체 표시명 결정(회차 1건) — 사용자가 저장한 청구업체를 판매 거래처/Master 이름으로 덮어쓰지 않는다.
 //  ① 같은 거래처 연결 + 이름 미변경(또는 이름 미전송) → 기존 Snapshot 유지(과거 CRM 원본명·당시 이름 보존)
@@ -57,6 +68,27 @@ async function resolveBillingCompanyName(tx: any, r: { billingCompanyId?: number
   }
   if (id != null) return typed ?? await fetchCompanyName(tx, id);
   return typed ?? null;
+}
+
+// 외화 청구 필드 저장값 — 원화 청구(NULL/KRW)면 외화 필드 모두 NULL. 요청에 없으면(구버전) 기존 값 유지.
+function fxBillingValues(r: { billingCurrency?: string | null; foreignAmount?: unknown; invoiceFxRate?: unknown; invoiceFxDate?: string | null }, prev?: PrevPay) {
+  if (r.billingCurrency === undefined) {
+    return prev ? {} : { billingCurrency: null, foreignAmount: null, invoiceFxRate: null, invoiceFxDate: null };
+  }
+  const cur = (r.billingCurrency ?? "").trim().toUpperCase();
+  if (!cur || cur === "KRW") return { billingCurrency: null, foreignAmount: null, invoiceFxRate: null, invoiceFxDate: null };
+  const fa = toScaled(r.foreignAmount, 2), rate = toScaled(r.invoiceFxRate, 6);
+  return { billingCurrency: cur, foreignAmount: fa != null ? fromScaled(fa, 2) : null, invoiceFxRate: rate != null ? fromScaled(rate, 6) : null, invoiceFxDate: r.invoiceFxDate || null };
+}
+function fxBillingError(r: { billingCurrency?: string | null; foreignAmount?: unknown; invoiceFxRate?: unknown }): string | null {
+  const cur = (r.billingCurrency ?? "").trim().toUpperCase();
+  if (!cur || cur === "KRW") return null;
+  if (!(FX_CURRENCIES as readonly string[]).includes(cur)) return `지원하지 않는 청구통화(${cur})`;
+  const fa = toScaled(r.foreignAmount, 2);
+  if (r.foreignAmount != null && r.foreignAmount !== "" && (fa == null || fa < 0n)) return "외화 청구금액 형식 오류";
+  const rate = toScaled(r.invoiceFxRate, 6);
+  if (r.invoiceFxRate != null && r.invoiceFxRate !== "" && (rate == null || rate <= 0n)) return "인보이스 환율 형식 오류";
+  return null;
 }
 
 const PAYMENT_TYPE = ["advance", "interim", "balance", "lump_sum", "other"] as const;
@@ -83,6 +115,11 @@ const rowSchema = z.object({
   billingCompanyName: z.string().max(200).nullable().optional(),
   billingContactId: z.number().int().nullable().optional(),    // 담당자
   note: z.string().nullable().optional(),
+  // 외화 청구(선택) — 생략 시 기존 값 유지. NULL/'KRW' = 원화 청구. 금액·환율은 문자열로 받아 정밀도 보존.
+  billingCurrency: z.string().max(3).nullable().optional(),
+  foreignAmount: z.union([z.string(), z.number()]).nullable().optional(),
+  invoiceFxRate: z.union([z.string(), z.number()]).nullable().optional(),
+  invoiceFxDate: z.string().nullable().optional(),
 });
 const batchSchema = z.object({
   rows: z.array(rowSchema),
@@ -113,6 +150,28 @@ router.put("/admin/projects/:id/payment-records", ...adminGuard, requireRolePerm
         || n2(r.amount) !== n2(b.amount) || n2(r.supplyAmount) !== n2(b.supplyAmount) || n2(r.vatAmount) !== n2(b.vatAmount)) {
       res.status(409).json({ error: `입금확인된 수금기록(id ${b.id})의 금액·입금일·확인상태는 변경할 수 없습니다.` }); return;
     }
+  }
+
+  for (const [i, r] of rows.entries()) {
+    const e = fxBillingError(r);
+    if (e) { res.status(400).json({ error: `${i + 1}회차: ${e}` }); return; }
+  }
+  // 입금·상계 거래가 있는 회차의 청구통화 변경 금지(기존 입금기록의 통화 의미 보호)
+  const txOwners = before.length ? new Set((await db.select({ pid: paymentTransactionsTable.projectPaymentId }).from(paymentTransactionsTable)
+    .where(inArray(paymentTransactionsTable.projectPaymentId, before.map(b => b.id)))).map(t => t.pid)) : new Set<number>();
+  for (const [i, r] of rows.entries()) {
+    const b = r.id ? beforeById.get(r.id) : undefined;
+    if (!b || r.billingCurrency === undefined || !txOwners.has(b.id)) continue;
+    const norm = (c?: string | null) => { const v = (c ?? "").trim().toUpperCase(); return v && v !== "KRW" ? v : null; };
+    if (norm(r.billingCurrency) !== norm(b.billingCurrency)) {
+      res.status(409).json({ error: `${i + 1}회차: 입금기록이 있는 청구회차의 청구통화는 변경할 수 없습니다(${norm(b.billingCurrency) ?? "KRW"} → ${norm(r.billingCurrency) ?? "KRW"}).` }); return;
+    }
+  }
+  // 다른 회차의 상계 원천으로 사용된 청구회차는 삭제 금지(상계 근거 보존)
+  if (deletedIds.length) {
+    const used = await db.select({ id: paymentTransactionsTable.id, src: paymentTransactionsTable.offsetSourcePaymentId }).from(paymentTransactionsTable)
+      .where(inArray(paymentTransactionsTable.offsetSourcePaymentId, deletedIds));
+    if (used.length) { res.status(409).json({ error: `상계 원천으로 사용된 청구회차는 삭제할 수 없습니다 (id: ${[...new Set(used.map(u => u.src))].join(", ")}).` }); return; }
   }
 
   try {
@@ -159,6 +218,7 @@ router.put("/admin/projects/:id/payment-records", ...adminGuard, requireRolePerm
           billingContactId: r.billingContactId ?? null,
           billingCompanyNameSnapshot,
           billingContactNameSnapshot,
+          ...fxBillingValues(r, prev),
           note: r.note ?? null,
           updatedBy: userId,
           updatedAt: new Date(),
@@ -207,7 +267,16 @@ const txnRowSchema = z.object({
   approvalNo: z.string().nullable().optional(),
   cardPgType: z.string().nullable().optional(),
   note: z.string().nullable().optional(),
+  // 거래유형 — 'deposit'(기본, 실제 입금) · 'offset'(선입금·초과입금 상계 — 실제 은행 입금 아님)
+  txnType: z.enum(["deposit", "offset"]).nullable().optional(),
+  offsetSourcePaymentId: z.number().int().nullable().optional(),   // 상계 원천 청구회차(초과입금 발생 회차)
 }).superRefine((r, ctx) => {
+  if (r.txnType === "offset") {
+    if (!r.currency) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['currency'], message: '상계는 통화가 필요합니다.' });
+    if (!(typeof r.foreignAmount === 'number' && r.foreignAmount > 0)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['foreignAmount'], message: '상계금액은 0보다 커야 합니다.' });
+    if (!r.offsetSourcePaymentId) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['offsetSourcePaymentId'], message: '상계 원천 청구회차가 필요합니다.' });
+    return;
+  }
   // 필수/조건부 필수(§3/§4) — 결제방법별로 성립 조건이 다르다:
   //  · 외화송금: 통화 + 외화입금액(>0) 이 필수. 원화 고객결제액(customerPaidAmount)은 환산 확정 전이면 0/미확정 허용.
   //    (외화 원장 정보만으로 거래를 저장하되, 원화 미수금은 감소시키지 않는다 — §18 미수금은 customer_paid 기준.)
@@ -230,10 +299,42 @@ router.put("/admin/project-payments/:paymentId/transactions", ...adminGuard, req
   const userId = req.user?.id ?? null;
 
   // 청구행 존재 확인 + projectId 확보(수금거래 denormalized projectId 세팅용).
-  const [pay] = await db.select({ id: projectPaymentsTable.id, projectId: projectPaymentsTable.projectId })
+  const [pay] = await db.select({ id: projectPaymentsTable.id, projectId: projectPaymentsTable.projectId, billingCurrency: projectPaymentsTable.billingCurrency })
     .from(projectPaymentsTable).where(eq(projectPaymentsTable.id, paymentId));
   if (!pay) { res.status(404).json({ error: "청구행을 찾을 수 없습니다." }); return; }
   const txBefore = await db.select().from(paymentTransactionsTable).where(eq(paymentTransactionsTable.projectPaymentId, paymentId));
+
+  // ── 외화 청구회차 검증·환산(원화 청구회차는 기존 동작 그대로) ──
+  const billCur = isForeignCurrency(pay.billingCurrency) ? String(pay.billingCurrency).toUpperCase() : null;
+  const fxCalc = new Map<number, { krw: number | null; paid: number }>();   // rows index → 확정 원화 환산·고객결제(원화)
+  for (const [i, r] of rows.entries()) {
+    const label = `${i + 1}번째 거래`;
+    if (!billCur) {
+      if (r.txnType === "offset") { res.status(400).json({ error: `${label}: 원화 청구회차의 상계는 선입금 관리에서 처리합니다.` }); return; }
+      continue;
+    }
+    const cur = String(r.currency ?? "").toUpperCase();
+    if (cur !== billCur) { res.status(400).json({ error: `${label}: 입금통화(${cur || "없음"})가 청구통화(${billCur})와 다릅니다.` }); return; }
+    if (!(typeof r.foreignAmount === "number" && r.foreignAmount > 0)) { res.status(400).json({ error: `${label}: 외화 금액(${billCur})이 필요합니다.` }); return; }
+    const fa = String(r.foreignAmount);
+    const rate = r.fxRate != null ? String(r.fxRate) : null;
+    if (rate != null && (toScaled(rate, 6) ?? 0n) <= 0n) { res.status(400).json({ error: `${label}: 적용환율 형식 오류` }); return; }
+    // 원화 환산액: 은행 확인 원화액(krwAmount) 직접 입력이 있으면 우선, 없으면 외화 × 환율(원 단위 반올림). 환율 없으면 미확정(null).
+    const krw = rate == null ? null : (r.krwAmount != null ? Math.round(r.krwAmount) : krwOf(fa, rate));
+    if (r.txnType === "offset") {
+      const src = r.offsetSourcePaymentId!;
+      if (src === paymentId) { res.status(400).json({ error: `${label}: 같은 회차를 상계 원천으로 지정할 수 없습니다.` }); return; }
+      const [sp] = await db.select().from(projectPaymentsTable).where(eq(projectPaymentsTable.id, src));
+      if (!sp || String(sp.billingCurrency ?? "").toUpperCase() !== billCur) { res.status(400).json({ error: `${label}: 상계 원천은 같은 통화(${billCur})의 외화 청구회차여야 합니다.` }); return; }
+      const sIn = await db.select().from(paymentTransactionsTable).where(eq(paymentTransactionsTable.projectPaymentId, src));
+      const sOut = (await db.select().from(paymentTransactionsTable).where(eq(paymentTransactionsTable.offsetSourcePaymentId, src))).filter((t) => t.id !== r.id);
+      const avail = toScaled(summarizeFxRow(fxBill(sp), sIn.map(fxTxn), sOut.map(fxTxn)).overpaidForeign, 2) ?? 0n;
+      if ((toScaled(fa, 2) ?? 0n) > avail) { res.status(400).json({ error: `${label}: 상계금액이 원천 회차의 남은 초과입금(${billCur} ${fromScaled(avail, 2)})보다 큽니다.` }); return; }
+      fxCalc.set(i, { krw, paid: 0 });   // 상계는 실제 은행 입금이 아니므로 원화 고객결제액 0(원화 집계 중복 방지)
+    } else {
+      fxCalc.set(i, { krw, paid: krw ?? 0 });   // 확정 환산액만 원화 집계에 반영(미확정 0 — 외화 기준 판정은 fx 요약)
+    }
+  }
 
   try {
     await db.transaction(async (tx) => {
@@ -241,23 +342,26 @@ router.put("/admin/project-payments/:paymentId/transactions", ...adminGuard, req
         await tx.delete(paymentTransactionsTable)
           .where(and(eq(paymentTransactionsTable.projectPaymentId, paymentId), inArray(paymentTransactionsTable.id, deletedIds)));
       }
-      for (const r of rows) {
+      for (const [i, r] of rows.entries()) {
         const num = (v: number | null | undefined) => (v == null ? null : String(v));
+        const fx = fxCalc.get(i);
         const values = {
           paidDate: r.paidDate || null,
-          method: r.method ?? null,
-          customerPaidAmount: String(r.customerPaidAmount ?? 0),
+          method: fx ? (r.txnType === "offset" ? "상계" : (r.method || "외화송금")) : (r.method ?? null),
+          customerPaidAmount: fx ? String(fx.paid) : String(r.customerPaidAmount ?? 0),
           settledAmount: num(r.settledAmount),
           feeAmount: num(r.feeAmount),
           currency: r.currency || "KRW",
           fxRate: num(r.fxRate),
           foreignAmount: num(r.foreignAmount),
-          krwAmount: num(r.krwAmount),
+          krwAmount: fx ? (fx.krw != null ? String(fx.krw) : null) : num(r.krwAmount),
           bankAccount: r.bankAccount ?? null,
           payerName: r.payerName ?? null,
           approvalNo: r.approvalNo ?? null,
           cardPgType: r.cardPgType ?? null,
           note: r.note ?? null,
+          txnType: r.txnType === "offset" ? "offset" : (fx ? "deposit" : null),
+          offsetSourcePaymentId: r.txnType === "offset" ? (r.offsetSourcePaymentId ?? null) : null,
           updatedBy: userId,
           updatedAt: new Date(),
         };
@@ -271,12 +375,35 @@ router.put("/admin/project-payments/:paymentId/transactions", ...adminGuard, req
     });
     // 갱신된 프로젝트 전체 청구정보(청구행 + 거래) 반환 → 화면이 미수금/입금상태를 재계산.
     await logEvent("project", pay.projectId, "payment_transactions_saved", req.log, req.user ? { id: req.user.id, email: req.user.email } : undefined,
-      JSON.stringify({ paymentId, beforeTx: txBefore.map(t => ({ id: t.id, paidDate: t.paidDate, customerPaidAmount: t.customerPaidAmount })),
-        saved: rows.map(r => ({ id: r.id ?? null, paidDate: r.paidDate ?? null, customerPaidAmount: r.customerPaidAmount ?? null })), deletedIds }));
+      JSON.stringify({ paymentId, beforeTx: txBefore.map(t => ({ id: t.id, paidDate: t.paidDate, customerPaidAmount: t.customerPaidAmount, currency: t.currency, foreignAmount: t.foreignAmount, fxRate: t.fxRate, krwAmount: t.krwAmount, feeAmount: t.feeAmount, txnType: t.txnType, offsetSourcePaymentId: t.offsetSourcePaymentId })),
+        saved: rows.map((r, i) => ({ id: r.id ?? null, paidDate: r.paidDate ?? null, customerPaidAmount: fxCalc.get(i)?.paid ?? r.customerPaidAmount ?? null, currency: r.currency ?? null, foreignAmount: r.foreignAmount ?? null, fxRate: r.fxRate ?? null, krwAmount: fxCalc.get(i)?.krw ?? r.krwAmount ?? null, feeAmount: r.feeAmount ?? null, txnType: r.txnType ?? null, offsetSourcePaymentId: r.offsetSourcePaymentId ?? null })), deletedIds }));
     res.json({ rows: await loadPaymentRecords(pay.projectId) });
   } catch (err) {
     req.log.error({ err }, "수금거래 저장 실패");
     res.status(500).json({ error: "수금거래 저장 중 오류가 발생했습니다." });
+  }
+});
+
+// ── 상계 원천 후보 — 같은 통화 외화 청구회차 중 남은 초과입금(상계 가능 잔액)이 있는 회차(같은 청구업체 또는 같은 판매 거래처). READ-ONLY ──
+router.get("/admin/project-payments/:paymentId/offset-sources", ...adminGuard, async (req, res) => {
+  const paymentId = Number(req.params.paymentId);
+  if (!Number.isInteger(paymentId) || paymentId <= 0) { res.status(400).json({ error: "잘못된 청구행 ID" }); return; }
+  try {
+    const [t] = (await db.execute(sql`SELECT pp.id, pp.billing_currency, pp.billing_company_id, p.company_id FROM project_payments pp JOIN projects p ON p.id = pp.project_id WHERE pp.id = ${paymentId}`)).rows as any[];
+    if (!t) { res.status(404).json({ error: "청구행을 찾을 수 없습니다." }); return; }
+    if (!isForeignCurrency(t.billing_currency)) { res.json({ rows: [] }); return; }
+    const cands = (await db.execute(sql`SELECT pp.id, pp.project_id, pp.sequence, p.title, COALESCE(pp.billing_company_name_snapshot, c.name) AS billing_company_name
+      FROM project_payments pp JOIN projects p ON p.id = pp.project_id LEFT JOIN companies c ON c.id = pp.billing_company_id
+      WHERE pp.id <> ${paymentId} AND upper(pp.billing_currency) = upper(${t.billing_currency})
+        AND ((${t.billing_company_id}::int IS NOT NULL AND pp.billing_company_id = ${t.billing_company_id}) OR (${t.company_id}::int IS NOT NULL AND p.company_id = ${t.company_id}))
+      ORDER BY pp.project_id DESC, pp.sequence`)).rows as any[];
+    const fx = await loadFxSummaries(db, cands.map((c) => Number(c.id)));
+    res.json({ rows: cands.map((c) => ({ id: Number(c.id), projectId: Number(c.project_id), sequence: c.sequence, saleTitle: c.title, billingCompanyName: c.billing_company_name,
+      currency: fx.get(Number(c.id))?.currency ?? null, overpaidForeign: fx.get(Number(c.id))?.overpaidForeign ?? "0.00" }))
+      .filter((c) => (toScaled(c.overpaidForeign, 2) ?? 0n) > 0n) });
+  } catch (err) {
+    req.log.error({ err }, "상계 원천 조회 실패");
+    res.status(500).json({ error: "상계 원천 조회 중 오류가 발생했습니다." });
   }
 });
 
