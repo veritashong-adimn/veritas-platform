@@ -2276,6 +2276,32 @@ export function QuoteEditorWorkspace({
   const convertedRef = useRef(false);   // 판매확정 견적 저장 시 변경사유(versionReason) 전달 판단용
   const reasonInputRef = useRef<HTMLInputElement>(null);
 
+  // 저장 직후 서버 확정값 대조 — 품목(순서별 수량·단가)·선입/이월(예약 상태일 때 유형·금액) 비교. 일치하면 null, 아니면 사유 문자열.
+  //  · 할인 행은 서버가 금액을 다시 계산하므로 수량·단가 비교에서 제외. 확정(판매전환)된 선입은 서버가 입력을 쓰지 않으므로 제외.
+  const verifySavedQuote = async (quoteId: number, sentItems: Array<{ quantity?: number; unitPrice?: number; itemType?: string }>,
+    sentPrepaid: Array<{ type: string; amount: number }> | null): Promise<string | null> => {
+    let d: any;
+    try { const r = await fetch(api(`/api/admin/quotes/${quoteId}`), { headers: authH }); if (!r.ok) return `저장 후 재조회 실패(${r.status})`; d = await r.json(); }
+    catch { return '저장 후 재조회 실패(네트워크)'; }
+    const got: any[] = Array.isArray(d?.items) ? d.items : [];
+    if (got.length !== sentItems.length) return `품목 수 불일치(입력 ${sentItems.length}건 · 저장 ${got.length}건)`;
+    const r2 = (n: unknown) => Math.round(Number(n) * 100) / 100;
+    for (let i = 0; i < sentItems.length; i++) {
+      if (sentItems[i].itemType === 'discount') continue;
+      if (r2(got[i].quantity) !== r2(sentItems[i].quantity) || r2(got[i].unitPrice) !== r2(sentItems[i].unitPrice))
+        return `${i + 1}행 불일치(입력 ${sentItems[i].quantity} × ${Number(sentItems[i].unitPrice).toLocaleString()} · 저장 ${Number(got[i].quantity)} × ${Number(got[i].unitPrice).toLocaleString()})`;
+    }
+    if (sentPrepaid) {
+      const lines: any[] = Array.isArray(d?.prepaidLines) ? d.prepaidLines : [];
+      if (!lines.some(l => l.status === 'confirmed')) {
+        const key = (a: Array<{ type: string; amount: number }>) => a.map(l => `${l.type}:${Math.round(Number(l.amount))}`).sort().join(',');
+        const inflow = lines.filter(l => l.type !== 'deduction');
+        if (key(inflow) !== key(sentPrepaid)) return `선입/이월 불일치(입력 ${key(sentPrepaid) || '없음'} · 저장 ${key(inflow) || '없음'})`;
+      }
+    }
+    return null;
+  };
+
   // 저장 실행부 — 편집 화면을 닫지 않고 저장만 수행하고 { quoteId, projectId }를 반환한다.
   // 신규 견적은 최초 저장 시 생성하고 savedQuoteId를 기록 → 이후(저장/견적서)엔 동일 견적을 업데이트(중복 생성 방지).
   const persistQuote = useCallback(async (): Promise<{ quoteId: number; projectId: number | null } | null> => {
@@ -2324,23 +2350,47 @@ export function QuoteEditorWorkspace({
           body: JSON.stringify(payload),
         });
         let data = await res.json();
+        // 재시도 시 앞서 받은 확인(원본 총액 확인)을 유지하기 위한 누적 플래그
+        const retryExtra: Record<string, unknown> = {};
         // 과거 CRM 전환 견적: 원본 총액과 다른 금액으로 저장하려면 직원 확인(임의 VAT 가산 방지)
         if (res.status === 409 && await confirmLegacyVatChange(data, m => confirmDialog({ title: '원본 총액 변경 확인', message: m, confirmLabel: '변경 저장', cancelLabel: '취소' }))) {
-          res = await fetch(url, { method: 'PUT', headers: { ...authH, 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, confirmLegacyVat: true }) });
+          retryExtra.confirmLegacyVat = true;
+          res = await fetch(url, { method: 'PUT', headers: { ...authH, 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, ...retryExtra }) });
           data = await res.json();
         }
         if (!res.ok && data?.code === 'REASON_REQUIRED') {
-          // 판매확정 견적의 금액 변경 — 저장되지 않았음을 분명히 알리고 변경 사유 입력칸으로 이동
-          onToast('저장되지 않았습니다: 판매확정 견적의 금액을 바꾸려면 아래 \'변경 사유\'를 입력한 뒤 다시 저장하세요.');
-          reasonInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          reasonInputRef.current?.focus();
-          return null;
+          // 판매확정 견적의 금액 변경 — 판매상세와 같은 방식으로 그 자리에서 변경 사유를 받아 다시 저장한다.
+          //  취소하면 저장하지 않았음을 분명히 알리고 변경 사유 입력칸으로 이동(토스트만으로는 놓치기 쉬움).
+          const r = await promptDialog({
+            title: '판매확정 견적 금액 변경 사유',
+            message: '판매확정 견적의 금액(수량·단가·공급가액·부가세)이 바뀝니다. 변경 사유를 입력해야 저장됩니다(감사로그에 변경 전후 값과 함께 기록).',
+            placeholder: '예: 실제 진행 수량(36.5페이지)으로 정정', confirmLabel: '사유 입력 후 저장',
+          });
+          if (r == null || !r.trim()) {
+            await alertDialog({ title: '저장되지 않았습니다', message: '변경 사유가 없어 저장하지 않았습니다. 입력한 값은 화면에만 있고 DB에는 반영되지 않았습니다.', variant: 'warning' });
+            reasonInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            reasonInputRef.current?.focus();
+            return null;
+          }
+          setVersionReason(r.trim());
+          res = await fetch(url, { method: 'PUT', headers: { ...authH, 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, ...retryExtra, versionReason: r.trim() }) });
+          data = await res.json();
+          if (res.status === 409 && !retryExtra.confirmLegacyVat && await confirmLegacyVatChange(data, m => confirmDialog({ title: '원본 총액 변경 확인', message: m, confirmLabel: '변경 저장', cancelLabel: '취소' }))) {
+            res = await fetch(url, { method: 'PUT', headers: { ...authH, 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, confirmLegacyVat: true, versionReason: r.trim() }) });
+            data = await res.json();
+          }
         }
         if (!res.ok) {
           const msg = res.status === 404 ? '견적 수정 API를 찾을 수 없습니다. (서버 재시작 필요)'
                     : res.status === 400 ? `입력값을 확인해 주세요: ${data.error}`
                     : `서버 오류 (${res.status}): ${data.error ?? data.message ?? ''}`;
           onToast(`견적 수정 실패: ${msg}`); return null;
+        }
+        // 저장 결과 검증 — 성공 응답만 믿지 않고 서버 확정값을 다시 읽어 보낸 값과 비교한다(불일치면 성공 처리 안 함).
+        const mismatch = await verifySavedQuote(savedQuoteId, itemsBody, isPrepaidQuote ? prepaidLinesToApi(prepaidLines) : null);
+        if (mismatch) {
+          await alertDialog({ title: '저장 결과 확인 필요', message: `저장 요청은 처리됐지만 DB에 저장된 값이 입력값과 다릅니다.\n${mismatch}\n화면을 닫지 말고 값을 확인한 뒤 다시 저장하거나 관리자에게 알려 주세요.`, variant: 'warning' });
+          return null;
         }
         if (vatType !== 'unknown') setStoredVatMode(vatType);   // 저장된 유형으로 확정(확인 필요 해제)
         return { quoteId: savedQuoteId, projectId: null };
