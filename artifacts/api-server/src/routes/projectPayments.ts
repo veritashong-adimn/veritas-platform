@@ -115,6 +115,9 @@ const rowSchema = z.object({
   billingCompanyName: z.string().max(200).nullable().optional(),
   billingContactId: z.number().int().nullable().optional(),    // 담당자
   note: z.string().nullable().optional(),
+  // 입금은행(청구 회차 단위)·은행 확인 — 생략(undefined) 시 기존 값 유지(구버전 화면 호환).
+  depositBank: z.string().max(100).nullable().optional(),
+  depositBankConfirmed: z.boolean().nullable().optional(),
   // 외화 청구(선택) — 생략 시 기존 값 유지. NULL/'KRW' = 원화 청구. 금액·환율은 문자열로 받아 정밀도 보존.
   billingCurrency: z.string().max(3).nullable().optional(),
   foreignAmount: z.union([z.string(), z.number()]).nullable().optional(),
@@ -220,6 +223,11 @@ router.put("/admin/projects/:id/payment-records", ...adminGuard, requireRolePerm
           billingContactNameSnapshot,
           ...fxBillingValues(r, prev),
           note: r.note ?? null,
+          // 입금은행·확인 — 전달된 경우만 반영(생략 시 기존 값 유지). 은행이 비면 확인도 해제.
+          ...(r.depositBank !== undefined ? { depositBank: (r.depositBank ?? "").trim() || null } : {}),
+          ...(r.depositBankConfirmed !== undefined || r.depositBank !== undefined
+            ? { depositBankConfirmed: !!r.depositBankConfirmed && !!((r.depositBank !== undefined ? r.depositBank : prev?.depositBank) ?? "").trim() }
+            : {}),
           updatedBy: userId,
           updatedAt: new Date(),
         };

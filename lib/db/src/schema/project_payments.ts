@@ -48,6 +48,10 @@ export const projectPaymentsTable = pgTable("project_payments", {
   billingCompanyNameSnapshot: text("billing_company_name_snapshot"),
   billingContactNameSnapshot: text("billing_contact_name_snapshot"),
   note: text("note"),                                  // 비고
+  // 입금은행(청구 회차 단위) — 입금 전에도 선택·저장. NULL 이면 화면은 최근 입금거래 은행을 표시(기존 행 호환).
+  depositBank: text("deposit_bank"),
+  // 입금은행 확인 — 미확인(false)이면 은행명 붉은색, 확인(true)이면 검정색. 은행을 바꾸면 화면에서 해제.
+  depositBankConfirmed: boolean("deposit_bank_confirmed").notNull().default(false),
   // 외화 청구(2026-11 추가, 모두 NULL 허용) — NULL·'KRW' = 원화 청구(기존 동작 그대로). amount/supply/vat 는 계속 원화 기준.
   //  · foreign_amount = 외화 청구금액(인보이스, billing_currency 단위) · invoice_fx_rate = 인보이스 적용환율(외화 1단위당 원화)
   //  · 외화 청구회차의 미수금·입금상태는 외화 금액 기준(services/fxBilling). 판매금액·원화 청구금액은 환율로 바꾸지 않는다.

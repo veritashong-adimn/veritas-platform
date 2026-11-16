@@ -185,7 +185,7 @@ export function FxTxnAddForm({ paymentId, cur, token, busy, onSave, onCancel }: 
         </div>
       )}
       {type === 'deposit' && <ClickSelect value={f.bank} onChange={(v: string) => setF({ ...f, bank: v })} triggerStyle={{ ...tinp, width: 110 }}
-        options={['기업은행', '국민은행', '우리은행', '기업은행외화'].map(b => ({ value: b, label: b }))} />}
+        options={['국민은행', '기업은행', '우리은행', '기업은행외화'].map(b => ({ value: b, label: b }))} />}
       <input style={{ ...tinp, width: 100, textAlign: 'right', fontWeight: 700 }} inputMode="decimal" placeholder="0.00" value={f.amount} data-testid="fx-add-amount"
         aria-label={`${type === 'deposit' ? '입금액' : '상계금액'}(${cur})`} onChange={e => setF({ ...f, amount: cleanForeignInput(e.target.value, cur) })} />{unitTag(cur)}
       {type === 'deposit' && <>

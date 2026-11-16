@@ -39,7 +39,8 @@ interface PayRow {
   id?: number;
   transactions?: PayTxn[];           // 이 청구행의 수금거래(입금/결제 내역) N건
   // ── 편집모드 전용 임시 필드(첫 입금을 기본 청구행에서 직접 입력) — project_payments 에는 저장 안 함 ──
-  _bank?: string;                    // 입금은행(첫 입금)
+  _bank?: string;                    // 입금은행(청구 회차 단위 deposit_bank 로 저장 · 첫 입금 거래의 은행으로도 사용)
+  _bankOk?: boolean;                 // 입금은행 확인(deposit_bank_confirmed)
   _paidAmt?: string;                 // 입금액(원화, 첫 입금)
   _curr?: string;                    // 통화(외화송금)
   _foreign?: string;                 // 외화입금액(외화송금)
@@ -54,6 +55,8 @@ interface PayRow {
   amount?: string | number | null;
   depositStatus?: string | null;
   depositConfirmed?: boolean | null; // 입금확인 — 체크 시 입금일=입금예정일·상태 입금완료
+  depositBank?: string | null;       // 입금은행(청구 회차 단위). NULL 이면 최근 입금거래 은행 표시
+  depositBankConfirmed?: boolean | null; // 입금은행 확인 — 미확인 붉은색 / 확인 검정색
   paymentCategory?: string | null;   // 결제유형: 일반결제 · 수출바우처
   payer?: string | null;             // 입금주체: 고객사 · 수출바우처 운영기관
   depositItem?: string | null;       // 입금항목: 공급가액 · 부가세 · 전체금액
@@ -129,8 +132,10 @@ const ITEM_SUPPLY = '공급가액', ITEM_VAT = '부가세', ITEM_TOTAL = '전체
 const DEPOSIT_ITEM_OPTS = [{ value: ITEM_SUPPLY, label: '공급가액' }, { value: ITEM_VAT, label: '부가세' }, { value: ITEM_TOTAL, label: '전체금액' }];
 const labelOf = (opts: { value: string; label: string }[], v?: string | null) => opts.find(o => o.value === v)?.label ?? '—';
 
-// 입금은행(§3) — 정해진 4개만. 해외송금 기본 '기업은행외화'.
-const BANK_OPTS = ['기업은행', '국민은행', '우리은행', '기업은행외화'];
+// 입금은행 — 선택 순서: 국민은행 → 기업은행 → 우리은행 → 기업은행외화 → 기타(직접입력). 신규 청구 기본 국민은행, 외화송금 기본 기업은행외화.
+const BANK_OPTS = ['국민은행', '기업은행', '우리은행', '기업은행외화'];
+const BANK_DEFAULT = '국민은행';
+const BANK_CUSTOM = '__bank_custom__';
 // 통화(§5) — ISO 4217 코드 저장, 화면은 코드+한글명. 외화송금에서만 사용.
 const CURRENCY_OPTS: { value: string; label: string }[] = [
   { value: 'USD', label: 'USD (미국 달러)' }, { value: 'EUR', label: 'EUR (유로)' }, { value: 'JPY', label: 'JPY (일본 엔)' },
@@ -185,6 +190,34 @@ function PaymentMethodField({ value, onChange, triggerStyle, testid }: {
   return (
     <ClickSelect value={v} triggerStyle={triggerStyle} options={METHOD_SELECT_OPTS}
       onChange={(nv: string) => { if (nv === CUSTOM_METHOD) { setManualCustom(true); onChange(''); } else onChange(nv); }} />
+  );
+}
+
+// 입금은행 필드 — 결제방법과 같은 인플레이스 패턴. 목록 4개 + '기타(직접입력)' 선택 시 같은 칸에서 은행명 직접 입력.
+//  · 저장값이 목록에 없으면(직접입력·과거값) 자동으로 직접입력 모드. ▾ 로 목록 복귀.
+function BankField({ value, onChange, triggerStyle, testid }: {
+  value: string; onChange: (v: string) => void; triggerStyle: React.CSSProperties; testid: string;
+}) {
+  const v = (value ?? '').trim();
+  const derivedCustom = !!v && !BANK_OPTS.includes(v);
+  const [manualCustom, setManualCustom] = useState(false);
+  useEffect(() => { if (v && BANK_OPTS.includes(v)) setManualCustom(false); }, [v]);
+  if (derivedCustom || manualCustom) {
+    return (
+      <div style={{ display: 'flex', gap: 4, alignItems: 'center', minWidth: 0, flex: 1 }}>
+        <input type="text" style={{ ...triggerStyle, flex: 1, minWidth: 0 }} value={value ?? ''} autoFocus={manualCustom}
+          onChange={e => onChange(e.target.value)} placeholder="은행명 직접입력" data-testid={`${testid}-custom`} aria-label="입금은행 직접입력" />
+        <button type="button" aria-label="은행 목록에서 선택" title="목록에서 선택" onClick={() => { setManualCustom(false); onChange(BANK_DEFAULT); }}
+          style={{ flexShrink: 0, border: `1px solid ${C.g300}`, borderRadius: 6, background: C.bgCard, color: C.textSecondary, cursor: 'pointer', padding: '4px 7px', fontSize: 11, lineHeight: 1 }}>▾</button>
+      </div>
+    );
+  }
+  return (
+    <div style={{ flex: 1, minWidth: 0 }} data-testid={testid}>
+      <ClickSelect value={v} triggerStyle={triggerStyle} aria-label="입금은행 선택"
+        options={[...BANK_OPTS.map(b => ({ value: b, label: b })), { value: BANK_CUSTOM, label: '기타(직접입력)' }]}
+        onChange={(nv: string) => { if (nv === BANK_CUSTOM) { setManualCustom(true); onChange(''); } else onChange(nv); }} />
+    </div>
   );
 }
 
@@ -298,7 +331,8 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   return {
     id: r.id, transactions: r.transactions ?? [],   // 수금거래는 하위행/기본행에서 관리 — 편집 중에도 계산 일관성 위해 보존
     _txnId: only?.id,
-    _bank: only?.bankAccount ?? '', _paidAmt: only && num(only.customerPaidAmount) > 0 ? String(num(only.customerPaidAmount)) : '',
+    // 입금은행 — 청구 회차에 저장된 값 우선, 없으면(기존 행) 첫 입금 거래 은행. 확인 여부는 저장값.
+    _bank: r.depositBank ?? only?.bankAccount ?? '', _bankOk: !!r.depositBankConfirmed && !!(r.depositBank ?? only?.bankAccount), _paidAmt: only && num(only.customerPaidAmount) > 0 ? String(num(only.customerPaidAmount)) : '',
     _curr: seedCurr, _foreign: only && num(only.foreignAmount) > 0 ? String(num(only.foreignAmount)) : '',
     // 발행일(세금계산서) — 수정 화면에서도 저장값 그대로(누락 시 저장하면 발행일이 지워짐)
     issueDate: r.issueDate ? String(r.issueDate).slice(0, 10) : null,
@@ -382,7 +416,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   const patchMethod = (i: number, v: string) => setRows(prev => prev.map((r, idx) => {
     if (idx !== i) return r;
     const next: PayRow = { ...r, paymentMethod: v, ...(!isInvoiceMethod(v) ? { issueDate: null } : {}) };
-    if (isOverseas(v)) { if (!next._bank) next._bank = '기업은행외화'; if (!next._curr) next._curr = 'USD'; if (!next.billingCurrency) next.billingCurrency = next._curr; }
+    if (isOverseas(v)) { if (!next._bank || (next._bank === BANK_DEFAULT && !next._bankOk)) { next._bank = '기업은행외화'; next._bankOk = false; } if (!next._curr) next._curr = 'USD'; if (!next.billingCurrency) next.billingCurrency = next._curr; }
     else next.billingCurrency = null;
     return next;
   }));
@@ -417,7 +451,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     }));
   };
   // 새 청구 기본값 — 청구업체=판매 거래처, 결제방법 세금계산서, 결제구분 일괄결제, 입금주체 고객사, 입금항목 전체금액.
-  const addRow = () => setRows(prev => [...prev, { depositStatus: 'scheduled', supplyAmount: '', vatAmount: '', amount: '', paymentMethod: category === CAT_GENERAL ? defaultMethod : '세금계산서', paymentType: 'lump_sum', paymentCategory: category, payer: PAYER_CUSTOMER, depositItem: ITEM_TOTAL, billingCompanyId: defaultCompany?.id ?? null, billingCompanyName: defaultCompany?.name ?? null }]);
+  const addRow = () => setRows(prev => [...prev, { _bank: BANK_DEFAULT, _bankOk: false, depositStatus: 'scheduled', supplyAmount: '', vatAmount: '', amount: '', paymentMethod: category === CAT_GENERAL ? defaultMethod : '세금계산서', paymentType: 'lump_sum', paymentCategory: category, payer: PAYER_CUSTOMER, depositItem: ITEM_TOTAL, billingCompanyId: defaultCompany?.id ?? null, billingCompanyName: defaultCompany?.name ?? null }]);
   const removeRow = (i: number) => setRows(prev => {
     const target = prev[i];
     if (target?.id != null) setDeletedIds(d => [...d, target.id!]);
@@ -452,6 +486,9 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
               : { billingCurrency: null }),
             ...((r.billingCompanyName ?? '').trim() || r.billingCompanyId != null ? {} : { billingCompanyId: defaultCompany?.id ?? null }),
             note: r.note || null,
+            // 입금은행·확인(청구 회차 단위) — 입금 전에도 저장. 은행이 없으면 확인도 해제.
+            depositBank: (r._bank ?? '').trim() || null,
+            depositBankConfirmed: !!r._bankOk && !!(r._bank ?? '').trim(),
           };
         }),
         deletedIds,
@@ -519,7 +556,8 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   const paidOf = (r: PayRow) => (isFxRow(r) ? (r.fx?.paidKrwForSale ?? 0) : hasTxn(r) ? txnPaid(r) : (isRowPaid(r) ? haap(r) : 0));
   const lastTxn = (r: PayRow): PayTxn | null => { const ts = r.transactions ?? []; return ts.length ? ts[ts.length - 1] : null; };  // 최근(마지막) 입금거래
   const dispPaidDate = (r: PayRow): string => { const t = lastTxn(r); return (t?.paidDate ? formatDisplayDate(t.paidDate) : (formatDisplayDate(r.paidDate) || '—')); };  // §11 입금일: 최종 입금일
-  const dispBank = (r: PayRow): string => { const t = lastTxn(r); return t?.bankAccount || '—'; };  // §3 입금은행: 최근 거래 은행
+  // 입금은행 — 청구 회차 저장값 우선, 없으면(기존 행) 최근 입금거래 은행
+  const dispBank = (r: PayRow): string => { const t = lastTxn(r); return (r.depositBank ?? '').trim() || t?.bankAccount || '—'; };
   // §7/§12 조회 compact 외화 표시 — 최근 거래가 외화송금이면 "USD 4,000" 처럼 결제방법 셀 아래 한 줄로. 없으면 빈 문자열.
   const dispForeign = (r: PayRow): string => { const t = lastTxn(r); return (t && isOverseas(t.method) && num(t.foreignAmount) > 0) ? fmtForeign(t.currency || 'FX', t.foreignAmount) : ''; };   // 통화 소수 자릿수 유지(반올림 금지)
   // 입금상태(§F) — 거래 존재 시 결제액 vs 청구액으로 파생. 없으면 기존 depositStatus.
@@ -589,7 +627,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     if (r.id == null) return;
     const m = normMethod(r.paymentMethod) || '기타';
     setExpanded(prev => new Set(prev).add(r.id as number));
-    setAddForm({ paidDate: new Date().toISOString().slice(0, 10), method: m, bankAccount: isOverseas(m) ? '기업은행외화' : '기업은행', currency: isOverseas(m) ? 'USD' : undefined });
+    setAddForm({ paidDate: new Date().toISOString().slice(0, 10), method: m, bankAccount: isOverseas(m) ? '기업은행외화' : ((r.depositBank ?? '').trim() || BANK_DEFAULT), currency: isOverseas(m) ? 'USD' : undefined });
     setAddingFor(r.id);
   };
   const cancelAdd = () => { setAddingFor(null); setAddForm(emptyTxn()); };
@@ -629,9 +667,9 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     return (
       <div style={{ paddingLeft: 28, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={{ fontWeight: 700, color: C.primaryText, fontSize: 12 }}>└ 입금 추가</span>
-        <ClickSelect value={m} onChange={(v: string) => setAF({ method: v, bankAccount: isOverseas(v) ? '기업은행외화' : (addForm.bankAccount || '기업은행'), currency: isOverseas(v) ? (addForm.currency || 'USD') : undefined })} triggerStyle={{ ...tinp, width: 110 }} options={TXN_METHOD_OPTS} />
+        <ClickSelect value={m} onChange={(v: string) => setAF({ method: v, bankAccount: isOverseas(v) ? '기업은행외화' : (addForm.bankAccount || BANK_DEFAULT), currency: isOverseas(v) ? (addForm.currency || 'USD') : undefined })} triggerStyle={{ ...tinp, width: 110 }} options={TXN_METHOD_OPTS} />
         <DateField style={{ ...tinp, width: 128 }} value={addForm.paidDate ?? ''} onChange={v => setAF({ paidDate: v || null })} testid="txn-add-date" ariaLabel="입금 추가 날짜" />
-        <ClickSelect value={addForm.bankAccount ?? ''} onChange={(v: string) => setAF({ bankAccount: v })} triggerStyle={{ ...tinp, width: 110 }} options={BANK_OPTS.map(b => ({ value: b, label: b }))} />
+        <div style={{ width: 130 }}><BankField value={addForm.bankAccount ?? ''} onChange={(v) => setAF({ bankAccount: v })} triggerStyle={{ ...tinp, width: '100%' }} testid="txn-add-bank" /></div>
         {overseas && <>
           <ClickSelect value={addForm.currency ?? ''} onChange={(v: string) => setAF({ currency: v })} triggerStyle={{ ...tinp, width: 78 }} options={CURRENCY_OPTS} />
           <input style={{ ...tinp, width: 88, textAlign: 'right' }} inputMode="decimal" value={String(addForm.foreignAmount ?? '')} onChange={e => setAF({ foreignAmount: e.target.value })} placeholder="외화액" data-testid="txn-add-foreign" />
@@ -774,11 +812,24 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
           {editable && !voucher ? priceCell(r.amount, v => patchHaap(i, v), `pay-haap-${i}`, '청구금액')
             : isFxRow(r) ? <FxBilledCell krw={a.amount} cur={String(r.billingCurrency).toUpperCase()} foreign={r.foreignAmount} /> : `${won(a.amount)}원`}
         </td>
-        {/* 입금은행(§3/§4) — 첫 입금이면 기본행에서 직접 선택(4개 고정). 그 외엔 최근 거래 은행 표시 */}
-        <td style={{ ...tdBase, width: 130 }} data-testid={`pay-bank-${i}`}>
-          {firstPayMode
-            ? <ClickSelect value={r._bank ?? ''} onChange={(v: string) => patchRow(i, { _bank: v })} triggerStyle={inp} options={BANK_OPTS.map(b => ({ value: b, label: b }))} />
-            : dispBank(r)}
+        {/* 입금은행 + 확인 체크 — 미확인 붉은색 / 확인 검정색. 은행을 바꾸면 확인 해제. 편집모드에서 모든 회차 선택·저장(입금 전에도). */}
+        <td style={{ ...tdBase, width: 168, overflow: 'visible' }} data-testid={`pay-bank-${i}`}>
+          {editable ? (() => {
+            const hasBank = !!(r._bank ?? '').trim();
+            return (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <BankField value={r._bank ?? ''} onChange={(v) => patchRow(i, { _bank: v, _bankOk: false })} testid={`pay-bank-select-${i}`}
+                  triggerStyle={{ ...inp, ...(hasBank && !r._bankOk ? { color: C.danger, borderColor: C.danger } : { color: C.textPrimary }) }} />
+                <input type="checkbox" checked={!!r._bankOk} disabled={!hasBank} onChange={() => patchRow(i, { _bankOk: !r._bankOk })}
+                  data-testid={`pay-bank-confirm-${i}`} aria-label="입금은행 확인" title={!hasBank ? '입금은행 선택 후 확인 가능' : (r._bankOk ? '입금은행 확인 완료' : '입금은행 미확인')}
+                  style={{ cursor: hasBank ? 'pointer' : 'default', flexShrink: 0 }} />
+              </div>
+            );
+          })() : (() => {
+            const b = dispBank(r), ok = !!r.depositBankConfirmed;
+            return <span data-testid={`pay-bank-text-${i}`} title={b === '—' ? undefined : (ok ? '입금은행 확인 완료' : '입금은행 미확인')}
+              style={{ color: b !== '—' && !ok ? C.danger : undefined }}>{b}{b !== '—' && ok ? ' ✓' : ''}</span>;
+          })()}
         </td>
         {/* 입금액(§5/§6/§14) — 첫 입금이면 기본행에서 직접 입력(저장 시 payment_transaction 생성). 그 외엔 Σ거래. 2차+는 '+ 입금' */}
         <td style={{ ...tdR, width: 128 }} data-testid={`pay-paid-amt-${i}`}>
@@ -884,7 +935,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
           <th style={{ ...thBase, width: 150 }}>입금일</th>
           <th style={{ ...thBase, width: 110 }}>결제구분</th>
           <th style={{ ...thBase, width: 132, textAlign: 'right' }}>청구금액</th>
-          <th style={{ ...thBase, width: 130 }}>입금은행</th>
+          <th style={{ ...thBase, width: 168 }}>입금은행</th>
           <th style={{ ...thBase, width: 128, textAlign: 'right' }}>입금액</th>
           <th style={{ ...thBase, width: 128, textAlign: 'right' }}>미수금</th>
           <th style={{ ...thBase, width: 110 }}>입금상태</th>
