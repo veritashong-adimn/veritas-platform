@@ -10,6 +10,21 @@
 BEGIN;
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
+
+-- 선행 마이그레이션(2026-11-17_prepaid_ledger_link) 적용 확인 — 미적용이면 잠금·변경 없이 즉시 중단(전체 롤백)
+DO $$
+DECLARE cols int; fk int; idx int;
+BEGIN
+  SELECT count(*) INTO cols FROM information_schema.columns
+   WHERE table_schema = 'public' AND table_name = 'prepaid_ledger' AND column_name IN ('linked_payment_id', 'confirmed_by', 'confirmed_at');
+  SELECT count(*) INTO fk FROM pg_constraint WHERE conname = 'prepaid_ledger_linked_payment_id_project_payments_id_fk';
+  SELECT count(*) INTO idx FROM pg_indexes
+   WHERE schemaname = 'public' AND tablename = 'prepaid_ledger' AND indexname IN ('uq_prepaid_ledger_linked_payment', 'uq_prepaid_ledger_quote_deduction');
+  IF cols <> 3 OR fk <> 1 OR idx <> 2 THEN
+    RAISE EXCEPTION '선행 마이그레이션 2026-11-17_prepaid_ledger_link.sql 미적용(컬럼 %/3 · FK %/1 · 인덱스 %/2) — 먼저 적용하세요. 아무것도 변경하지 않았습니다.', cols, fk, idx;
+  END IF;
+END $$;
+
 LOCK TABLE prepaid_ledger IN ACCESS EXCLUSIVE MODE;
 CREATE TEMP TABLE _plh_before ON COMMIT DROP AS
 SELECT count(*) AS n, md5(coalesce(string_agg((to_jsonb(l) - 'created_by' - 'memo')::text, ',' ORDER BY l.id), '')) AS h FROM prepaid_ledger l;
