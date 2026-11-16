@@ -292,7 +292,7 @@ router.post("/prepaid/quotes/:quoteId/confirm", ...adminGuard, requireStaffPermi
     const r = await db.transaction(tx => confirmApprovedQuoteReservations(tx, quoteId, { allowDuplicate }));
     if (r.result === "not_allowed") { res.status(409).json({ error: r.reason, code: "NOT_CONFIRMABLE" }); return; }
     if (r.result === "duplicate") {
-      res.status(409).json({ error: "같은 금액·발생일의 확정 입금이 이미 있습니다. 같은 입금을 두 번 반영하는지 확인하세요.", code: "POSSIBLE_DUPLICATE", matches: r.matches });
+      res.status(409).json({ error: "같은 돈이 이미 다른 곳에 기록돼 있을 수 있어 확정을 멈췄습니다. 아래 사유를 확인하세요(기존 기록은 바뀌지 않았습니다).", code: "POSSIBLE_DUPLICATE", matches: r.matches });
       return;
     }
     if (r.result === "nothing") { res.json({ ok: true, already: true }); return; }

@@ -131,8 +131,9 @@ export function PrepaidLedgerModal({ accountId, authHeaders, onClose, onUpdate, 
       let res = await post(false);
       let d = await res.json().catch(() => ({}));
       if (res.status === 409 && d?.code === "POSSIBLE_DUPLICATE") {
-        const list = (d.matches ?? []).map((m: any) => `· ${m.transactionDate ?? "-"} ${fmt(Number(m.amount))}원${m.quoteId ? ` (견적 #${m.quoteId})` : " (직접 입금)"}`).join("\n");
-        const again = await confirmDialog({ title: "중복 입금 의심", message: `${d.error}\n\n${list}\n\n다른 입금이 맞으면 '그래도 반영'을 누르세요.`, confirmLabel: "그래도 반영", variant: "danger" });
+        // 구체적인 중복 사유(선입 원장·다른 견적 예정·판매 청구회차·입금거래·차감) — 기존 기록은 바꾸지 않음
+        const list = (d.matches ?? []).map((m: any) => `· ${m.reason ?? `${m.date ?? "-"} ${fmt(Number(m.amount))}원`}`).join("\n");
+        const again = await confirmDialog({ title: "중복 의심 — 확정 보류", message: `${d.error}\n\n${list}\n\n서로 다른 돈이 확실한 경우에만 '그래도 반영'을 누르세요.`, confirmLabel: "그래도 반영", cancelLabel: "확정 보류", variant: "danger" });
         if (!again) return;
         res = await post(true); d = await res.json().catch(() => ({}));
       }

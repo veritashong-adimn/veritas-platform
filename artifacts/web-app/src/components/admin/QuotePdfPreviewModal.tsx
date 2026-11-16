@@ -41,7 +41,9 @@ const PAGE_STYLE: React.CSSProperties = {
 //  · 화면 전용: 인쇄/PDF 는 문서 요소의 innerHTML 만 별도 인쇄 창(A4 @page)에 쓰므로 이 배율의 영향을 받지 않는다.
 //  · 독립 창(portal)에서도 동작하도록 요소가 속한 창의 ResizeObserver·resize 이벤트를 사용한다.
 const A4_PX = 794;
-const FIT_PAD = 12;        // 창 가장자리와 문서 사이 최소 여백(좌우)
+const FIT_PAD = 6;         // 창 가장자리와 문서 사이 최소 여백(좌우)
+// 화면 미리보기 전용 문서 안쪽 여백(인쇄는 quotePrintHtml 의 A4 프레임 좌우 52px·상하 10mm 를 그대로 사용 — innerHTML 만 인쇄되므로 무관)
+const SCREEN_PAGE_PADDING = '24px 20px';
 const FIT_MAX = 1.35;      // 넓은 창에서 과도한 확대 방지
 function useFitToWidth(wrap: HTMLDivElement | null): number {
   const [scale, setScale] = useState(1);
@@ -163,7 +165,7 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
           <div
             ref={contentRef}
             id="quote-pdf-content"
-            style={{ ...PAGE_STYLE, boxShadow: '0 4px 24px rgba(0,0,0,0.25)', zoom: fitScale, flexShrink: 0 } as React.CSSProperties}
+            style={{ ...PAGE_STYLE, padding: SCREEN_PAGE_PADDING, boxShadow: '0 2px 12px rgba(0,0,0,0.18)', zoom: fitScale, flexShrink: 0 } as React.CSSProperties}
           >
             {/* ── 문서 헤더 ──────────────────────────────────────────────── */}
             <div className="qp-keep qp-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>

@@ -584,7 +584,7 @@ export async function confirmApprovedQuoteReservations(
   | { result: "confirmed"; accountId: number; balanceBefore: number; usageAmount: number; balanceAfter: number; inflow: number }
   | { result: "nothing" }
   | { result: "not_allowed"; reason: string }
-  | { result: "duplicate"; matches: Array<{ id: number; type: string; amount: number; transactionDate: string | null; quoteId: number | null }> }
+  | { result: "duplicate"; matches: DuplicateMatch[] }
 > {
   const [q] = await tx.select({ id: quotesTable.id, status: quotesTable.status, quoteType: quotesTable.quoteType, isCurrent: quotesTable.isCurrent, deletedAt: quotesTable.deletedAt })
     .from(quotesTable).where(eq(quotesTable.id, quoteId));
@@ -605,19 +605,7 @@ export async function confirmApprovedQuoteReservations(
   if (reserved.length === 0) return { result: "nothing" };   // 다른 요청이 먼저 확정함
 
   if (!opts.allowDuplicate) {
-    const inflow = reserved.filter((r: any) => isInflowType(r.type));
-    const matches: Array<{ id: number; type: string; amount: number; transactionDate: string | null; quoteId: number | null }> = [];
-    for (const r of inflow) {
-      const dup = await tx.select({ id: prepaidLedgerTable.id, type: prepaidLedgerTable.type, amount: prepaidLedgerTable.amount, transactionDate: prepaidLedgerTable.transactionDate, quoteId: prepaidLedgerTable.quoteId })
-        .from(prepaidLedgerTable)
-        .where(and(
-          eq(prepaidLedgerTable.accountId, accountId), eq(prepaidLedgerTable.status, "confirmed"),
-          inArray(prepaidLedgerTable.type, ["deposit", "carryover"]),
-          eq(prepaidLedgerTable.amount, r.amount),
-          r.transactionDate ? eq(prepaidLedgerTable.transactionDate, r.transactionDate) : sql`true`,
-        ));
-      for (const d of dup) matches.push({ id: d.id, type: d.type, amount: Number(d.amount), transactionDate: d.transactionDate ?? null, quoteId: d.quoteId ?? null });
-    }
+    const matches = await findPrepaidDuplicates(tx, quoteId, accountId, reserved);
     if (matches.length > 0) return { result: "duplicate", matches };
   }
 
@@ -625,4 +613,49 @@ export async function confirmApprovedQuoteReservations(
   const snap = await confirmQuoteReservations(tx, quoteId);
   if (!snap) return { result: "nothing" };
   return { result: "confirmed", accountId, ...snap, inflow: inflowSum };
+}
+
+// ─── 확정 전 중복 의심 탐지(차단 사유 제공 — 삭제·보정은 하지 않음) ─────────────────────────
+//  같은 돈이 다른 곳에 이미 기록돼 있으면 확정 시 이중 계상될 수 있다. 아래 근거가 하나라도 있으면 확정을 멈추고 사유를 돌려준다.
+//   ① 같은 계정의 확정 선입/이월 — 같은 금액, 발생일 ±7일
+//   ② 같은 계정의 다른 견적 예약 선입/이월 — 같은 금액·같은 발생일(여러 견적에서 같은 선입금 중복 사용)
+//   ③ 이 판매의 청구회차 — 같은 금액, 입금완료/입금확인(과거 CRM 이관 입금 등)
+//   ④ 이 판매의 입금거래 — 같은 고객결제액
+//   ⑤ 이 판매의 다른 견적 확정 차감 — 같은 금액(차감 중복)
+export type DuplicateMatch = { source: "prepaid_confirmed" | "prepaid_reserved_other" | "billing" | "payment_txn" | "deduction_other"; id: number; amount: number; date: string | null; quoteId: number | null; reason: string };
+export async function findPrepaidDuplicates(tx: Db, quoteId: number, accountId: number, reserved: any[]): Promise<DuplicateMatch[]> {
+  const out: DuplicateMatch[] = [];
+  const won = (n: unknown) => `${Math.round(Number(n)).toLocaleString("ko-KR")}원`;
+  const projectId: number | null = reserved.find((r: any) => r.projectId != null)?.projectId ?? null;
+  for (const r of reserved.filter((x: any) => isInflowType(x.type))) {
+    const amt = String(r.amount), date = r.transactionDate ?? null;
+    const c1 = (await tx.execute(sql`SELECT id, amount::text AS amount, transaction_date::text AS d, quote_id FROM prepaid_ledger
+      WHERE account_id = ${accountId} AND status = 'confirmed' AND type IN ('deposit','carryover') AND amount = ${amt}::numeric
+        AND (${date}::date IS NULL OR transaction_date IS NULL OR abs(transaction_date - ${date}::date) <= 7)`)).rows as any[];
+    for (const d of c1) out.push({ source: "prepaid_confirmed", id: d.id, amount: Number(d.amount), date: d.d, quoteId: d.quote_id,
+      reason: `선입금 원장에 같은 금액의 확정 입금이 있습니다(원장 #${d.id}, ${d.d ?? "-"}, ${won(d.amount)}${d.quote_id ? `, 견적 #${d.quote_id}` : ", 직접 입금"}).` });
+    const c2 = (await tx.execute(sql`SELECT l.id, l.amount::text AS amount, l.transaction_date::text AS d, l.quote_id, q.quote_number FROM prepaid_ledger l LEFT JOIN quotes q ON q.id = l.quote_id
+      WHERE l.account_id = ${accountId} AND l.status = 'reserved' AND l.type IN ('deposit','carryover') AND l.quote_id IS DISTINCT FROM ${quoteId}
+        AND l.amount = ${amt}::numeric AND l.transaction_date IS NOT DISTINCT FROM ${date}::date`)).rows as any[];
+    for (const d of c2) out.push({ source: "prepaid_reserved_other", id: d.id, amount: Number(d.amount), date: d.d, quoteId: d.quote_id,
+      reason: `다른 차감 견적(${d.quote_number ?? `#${d.quote_id}`})에 같은 선입금(${d.d ?? "-"}, ${won(d.amount)})이 예정돼 있습니다 — 같은 입금을 두 견적에서 쓰는지 확인하세요.` });
+    if (projectId != null) {
+      const c3 = (await tx.execute(sql`SELECT id, sequence, amount::text AS amount, paid_date::text AS d, deposit_status, deposit_confirmed FROM project_payments
+        WHERE project_id = ${projectId} AND amount = ${amt}::numeric AND (deposit_confirmed = true OR deposit_status = 'completed')`)).rows as any[];
+      for (const d of c3) out.push({ source: "billing", id: d.id, amount: Number(d.amount), date: d.d, quoteId: null,
+        reason: `이 판매의 청구회차 ${d.sequence}회차(#${d.id})에 같은 금액 ${won(d.amount)}이 입금완료로 기록돼 있습니다(입금일 ${d.d ?? "-"}). 같은 입금을 선입금으로 다시 반영하는지 확인하세요.` });
+      const c4 = (await tx.execute(sql`SELECT id, customer_paid_amount::text AS amount, paid_date::text AS d FROM payment_transactions
+        WHERE project_id = ${projectId} AND customer_paid_amount = ${amt}::numeric`)).rows as any[];
+      for (const d of c4) out.push({ source: "payment_txn", id: d.id, amount: Number(d.amount), date: d.d, quoteId: null,
+        reason: `이 판매의 입금거래(#${d.id}, ${d.d ?? "-"})에 같은 금액 ${won(d.amount)}이 있습니다.` });
+    }
+  }
+  const ded = reserved.find((x: any) => x.type === "deduction");
+  if (ded && projectId != null) {
+    const c5 = (await tx.execute(sql`SELECT l.id, l.amount::text AS amount, l.transaction_date::text AS d, l.quote_id, q.quote_number FROM prepaid_ledger l LEFT JOIN quotes q ON q.id = l.quote_id
+      WHERE l.project_id = ${projectId} AND l.status = 'confirmed' AND l.type = 'deduction' AND l.quote_id IS DISTINCT FROM ${quoteId} AND l.amount = ${String(ded.amount)}::numeric`)).rows as any[];
+    for (const d of c5) out.push({ source: "deduction_other", id: d.id, amount: Number(d.amount), date: d.d, quoteId: d.quote_id,
+      reason: `같은 판매에 같은 금액의 확정 차감이 이미 있습니다(원장 #${d.id}, ${d.d ?? "-"}, ${d.quote_id ? (d.quote_number ?? `견적 #${d.quote_id}`) : "직접 등록"}, ${won(d.amount)}).` });
+  }
+  return out;
 }

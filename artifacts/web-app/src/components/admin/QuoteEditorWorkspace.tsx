@@ -2051,8 +2051,12 @@ export function QuoteEditorWorkspace({
           type: (l.type === 'carryover' ? 'carryover' : 'deposit') as PrepaidLine['type'],
           amount: String(l.amount ?? ''),
           transactionDate: l.transactionDate ?? new Date().toISOString().slice(0, 10),
-          sourceRef: '',
-          note: (l.description ?? '').replace(/^[^·]*·?\s*/, ''),
+          // 원장 설명 "라벨 · 원천: X · 비고" 를 분해 — 원천 구간을 비고로 되돌리면 저장마다 "원천: -" 가 누적되던 문제 수정
+          ...(() => {
+            const parts = String(l.description ?? '').split(' · ').slice(1);
+            const src = parts.filter(p => p.startsWith('원천:')).map(p => p.slice(3).trim()).filter(v => v && v !== '-');
+            return { sourceRef: src[0] ?? '', note: parts.filter(p => !p.startsWith('원천:')).join(' · ') };
+          })(),
         }));
         if (parsed.length) setPrepaidLines(parsed);
       })
