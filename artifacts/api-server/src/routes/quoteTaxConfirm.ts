@@ -43,10 +43,14 @@ function planConfirm(items: Item[], taxType: string): { plan: Plan[] } | { error
   for (const it of items) {
     const before = { supply: n(it.supplyAmount), tax: n(it.taxAmount), total: n(it.totalAmount), taxType: it.taxType };
     if (!zeroTax(it) || Math.abs(before.supply) < 0.5) { plan.push({ id: it.id, productName: it.productName, before, after: { ...before, taxType: "taxable" } }); continue; }
-    // 단가 = 공급가가 되도록 분리 가능한 품목만(수량 1·투입인원 1) — 수량×단가 구조를 깨지 않기 위함
-    if (n(it.quantity) !== 1 || (it.interpreterCount != null && it.interpreterCount > 1)) return { error: `'${it.productName}' 품목은 수량·인원이 1이 아니어서 총액 유지 분리를 할 수 없습니다. 편집 화면에서 처리하세요.` };
+    // 수량×단가(×통역 인원) 구조 유지 — 분리한 공급가를 배수로 나눈 단가가 원 단위(소수 2자리)로 정확히 떨어질 때만 분리
+    //  (예: 8페이지 299,200원 → 공급가 272,000 = 8 × 34,000). 나누어떨어지지 않으면 편집 화면에서 처리.
     const supply = Math.round(before.total / 1.1);
-    plan.push({ id: it.id, productName: it.productName, before, after: { supply, tax: before.total - supply, total: before.total, taxType: "taxable", unitPrice: supply } });
+    const mult = n(it.quantity) * (it.itemType === "interpretation" && n(it.interpreterCount) > 0 ? n(it.interpreterCount) : 1);
+    const unit = mult > 0 ? Math.round((supply / mult) * 100) / 100 : NaN;
+    if (!Number.isFinite(unit) || Math.abs(unit * mult - supply) >= 0.005)
+      return { error: `'${it.productName}' 품목은 공급가(${supply.toLocaleString("ko-KR")}원)가 수량·인원으로 나누어떨어지지 않아 총액 유지 분리를 할 수 없습니다. 편집 화면에서 처리하세요.` };
+    plan.push({ id: it.id, productName: it.productName, before, after: { supply, tax: before.total - supply, total: before.total, taxType: "taxable", unitPrice: unit } });
   }
   return { plan };
 }
