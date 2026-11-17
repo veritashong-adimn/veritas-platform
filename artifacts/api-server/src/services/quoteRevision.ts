@@ -47,6 +47,7 @@ export async function createRevision(
     taxDocumentType: src.taxDocumentType, taxCategory: src.taxCategory,
     validUntil: src.validUntil, issueDate: src.issueDate, invoiceDueDate: src.invoiceDueDate, paymentDueDate: src.paymentDueDate,
     equipmentCommon: src.equipmentCommon,
+    customerDisplay: src.customerDisplay ?? null,   // 견적서 거래처정보 편집값 승계(변경견적도 같은 수신처)
     status: "pending", isCurrent: false, projectId: null,   // 생성 직후 유효본 아님(§10), project 미연결
     rootQuoteId: rootId, parentVersionId: src.id, relationType: "revision",
     version: Number(maxv) + 1, versionReason: opts.versionReason ?? null,

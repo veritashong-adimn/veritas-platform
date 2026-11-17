@@ -34,6 +34,8 @@ import { calcInterpretation, interpretationServiceDays, displayUnit, buildQuoteP
 import { QuoteRecipientRefreshBar } from './QuoteRecipientRefreshBar';
 import { generateQuoteTitle } from '../../lib/quoteTitle';
 import QuotePdfPreviewModal from './QuotePdfPreviewModal';
+import QuoteCustomerDisplayEditor from './QuoteCustomerDisplayEditor';
+import type { CustomerDisplay } from '../../lib/quotePdf';
 import { PageHeader } from './PageHeader';
 import { DateField } from './DatePickerShared';
 import { type VatMode, VAT_MODE_LABEL, VAT_ROW_LABEL, TAX_DOCUMENT_TYPE_BY_KIND, normalizeTaxKind, companyTaxTypeLabel } from '../../lib/quoteTaxType';
@@ -1865,6 +1867,8 @@ export function QuoteEditorWorkspace({
   const [companyTaxHint, setCompanyTaxHint] = useState<{ type: string | null; basis: string | null } | null>(null);
   const [note,           setNote]          = useState(inqPrefill?.note ?? initialNote ?? '');
   const [versionReason,  setVersionReason] = useState(initialVersionReason ?? '');
+  // 거래처정보 편집(이 견적서 전용) — undefined = 미편집(저장 시 미전달 → 기존값 보존)
+  const [customerDisplay, setCustomerDisplay] = useState<CustomerDisplay | null | undefined>(undefined);
   // 의뢰건 handoff items 가 있으면 견적 항목으로 시드(각 항목을 defaultItem 위에 병합). 없으면 기존 로직 유지.
   const [items,          setItems]         = useState<QuoteItemForm[]>(
     inqPrefill?.items?.length
@@ -1969,8 +1973,8 @@ export function QuoteEditorWorkspace({
   // 최초 로딩 완료(번역 수량 정규화 반영) 시점의 서명을 기준선으로 캡처하므로,
   // 마운트 시 정규화만으로는 dirty가 되지 않는다(이미 저장된 견적은 바로 판매전환).
   const formSig = useMemo(
-    () => JSON.stringify({ items, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note, versionReason, prepaidLines }),
-    [items, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note, versionReason, prepaidLines],
+    () => JSON.stringify({ items, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note, versionReason, prepaidLines, customerDisplay }),
+    [items, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note, versionReason, prepaidLines, customerDisplay],
   );
   const formSigRef     = useRef(formSig);
   formSigRef.current   = formSig;                          // 최신 서명을 ref에 미러링(핸들러 stale 방지)
@@ -2329,6 +2333,8 @@ export function QuoteEditorWorkspace({
       note: note.trim() || undefined,
       // 차감 견적서: 선입/이월 라인(잔액 충전) — 서버가 reserved 예약으로 기록
       ...(isPrepaidQuote ? { prepaidLines: prepaidLinesToApi(prepaidLines) } : {}),
+      // 거래처정보 편집 — 편집한 경우에만 전달(이 견적서에만 저장)
+      ...(customerDisplay !== undefined ? { customerDisplay } : {}),
     };
     setSaving(true);
     try {
@@ -2462,7 +2468,7 @@ export function QuoteEditorWorkspace({
       return { quoteId: data.id, projectId };
     } catch { onToast('견적 저장 중 오류가 발생했습니다.'); return null; }
     finally { setSaving(false); }
-  }, [items, projectId, savedQuoteId, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note, versionReason, token, prepaidLines, isPrepaidQuote, inqCustomer.plan, inqCustomer.choice]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [items, projectId, savedQuoteId, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note, versionReason, token, prepaidLines, isPrepaidQuote, inqCustomer.plan, inqCustomer.choice, customerDisplay]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSave = useCallback(async () => {
     if (batchClosed) { onToast('마감완료된 누적 견적서는 수정할 수 없습니다.'); return; }
@@ -2893,6 +2899,8 @@ export function QuoteEditorWorkspace({
               </div>
             );
           })()}
+          <QuoteCustomerDisplayEditor token={token} savedQuoteId={savedQuoteId} companyId={companyId} contactId={contactId}
+            value={customerDisplay} onChange={setCustomerDisplay} />
         </div>
       </Card>
 

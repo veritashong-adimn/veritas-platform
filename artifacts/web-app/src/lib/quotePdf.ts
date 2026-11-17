@@ -166,7 +166,12 @@ export interface QuoteDetailSettings {
   quoteValidityDays: number;
 }
 
+/** 견적서 거래처정보 편집(해당 견적서 전용) — fields 값이 있으면 그 값, hidden 항목은 미리보기·PDF 에서 숨김 */
+export type CustomerDisplayKey = 'companyName' | 'businessNumber' | 'representativeName' | 'contactName' | 'phone' | 'email' | 'address';
+export interface CustomerDisplay { fields: Partial<Record<CustomerDisplayKey, string>>; hidden: CustomerDisplayKey[] }
+
 export interface QuoteDetail {
+  customerDisplay?: CustomerDisplay | null;
   id: number;
   quoteNumber: string | null;
   title: string | null;
@@ -282,6 +287,7 @@ export interface QuotePdfData {
     contactDivision: string;
     contactPhone: string;
     contactEmail: string;
+    hidden?: CustomerDisplayKey[];   // 거래처정보 편집에서 숨긴 항목
   };
   manager: string;
   // 수신자 영역 서비스 요약
@@ -503,6 +509,25 @@ export function formatPhoneDisplay(v: string | null | undefined): string {
   return raw;
 }
 
+/** 거래처정보 편집값 적용 — 편집값이 있는 항목은 그 값으로(상호를 직접 입력하면 브랜드 덧붙임 생략), 숨김 항목 전달 */
+function applyCustomerDisplay(base: QuotePdfData['customer'], cd: CustomerDisplay | null | undefined): QuotePdfData['customer'] {
+  if (!cd) return base;
+  const f = cd.fields ?? {};
+  const pick = (k: CustomerDisplayKey, cur: string) => (typeof f[k] === 'string' ? f[k]! : cur);
+  return {
+    ...base,
+    companyName:        pick('companyName', base.companyName),
+    brandName:          typeof f.companyName === 'string' ? '' : base.brandName,
+    businessNumber:     pick('businessNumber', base.businessNumber),
+    representativeName: pick('representativeName', base.representativeName),
+    contactName:        pick('contactName', base.contactName),
+    contactPhone:       typeof f.phone === 'string' ? formatPhoneDisplay(f.phone) : base.contactPhone,
+    contactEmail:       pick('email', base.contactEmail),
+    address:            pick('address', base.address),
+    hidden:             cd.hidden ?? [],
+  };
+}
+
 // ─── buildQuotePdfData ────────────────────────────────────────────────────────
 
 export function buildQuotePdfData(source: QuoteDetail): QuotePdfData {
@@ -651,7 +676,7 @@ export function buildQuotePdfData(source: QuoteDetail): QuotePdfData {
       phone:          s.phone          ?? '',
       email:          s.email          ?? '',
     },
-    customer: {
+    customer: applyCustomerDisplay({
       // 견적별 고객정보 고정: 고정된 견적은 고정값만(Master 연결·수정으로 발행 문서가 바뀌지 않음),
       //  고정값이 없는 기존 견적은 이전과 같이 연결된 거래처·담당자 Master 값
       companyName:         fixed ? (detail.customerCompanyName ?? detail.companyName ?? '') : (detail.companyName ?? detail.customerCompanyName ?? ''),
@@ -663,7 +688,7 @@ export function buildQuotePdfData(source: QuoteDetail): QuotePdfData {
       contactDivision:     fixed ? (detail.customerContactDepartment ?? '') : (detail.contactDivision ?? detail.customerContactDepartment ?? ''),
       contactPhone:        formatPhoneDisplay(fixed ? (detail.customerContactPhone ?? detail.customerContactMobile ?? '') : (detail.contactPhone ?? detail.customerContactPhone ?? detail.customerContactMobile ?? '')),
       contactEmail:        fixed ? (detail.customerContactEmail ?? '') : (detail.contactEmail ?? detail.customerContactEmail ?? ''),
-    },
+    }, detail.customerDisplay),
     manager:      detail.adminName ?? '',
     summary,
     items,

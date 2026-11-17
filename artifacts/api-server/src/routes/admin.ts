@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import { sanitizeCustomerDisplay } from "../services/quoteCustomerDisplay";
 import { findReusableProjectForInquiry } from "../services/quoteDeletion";
 import { legacyVerifiedSaleSupply } from "../services/legacyActivationLineage";
 import {
@@ -1681,8 +1682,9 @@ router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), a
     prepaidBalanceBefore, prepaidUsageAmount, prepaidBalanceAfter,
     prepaidLines,
     batchPeriodStart, batchPeriodEnd,
-    inquiryCustomer, customerSnapshot,
+    inquiryCustomer, customerSnapshot, customerDisplay,
   } = req.body as {
+    customerDisplay?: unknown;   // 견적서 거래처정보 편집(해당 견적서에만 저장)
     title?: string; companyId?: number; contactId?: number; divisionId?: number | null; adminId?: number;
     // 의뢰건에서 작성한 견적: 저장 트랜잭션 안에서 거래처·담당자 판정/연결/신규등록 + 의뢰건 연결(선택 필드, 기존 호출 무영향)
     inquiryCustomer?: { inquiryId: number } & CustomerChoice;
@@ -1821,6 +1823,7 @@ router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), a
         customerContactPhone: snapshot?.customerContactPhone ?? null,
         customerContactMobile: snapshot?.customerContactMobile ?? null,
         customerContactEmail: snapshot?.customerContactEmail ?? null,
+        customerDisplay: sanitizeCustomerDisplay(customerDisplay) ?? null,
       }).returning();
 
       if (hasItems) {
@@ -3528,7 +3531,8 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
     parentItemIndex?: number | null;   // 서비스 그룹: 같은 items[] 내 본 서비스 인덱스(부대항목만 지정)
     sourceItemId?: number | null;      // 편집 전 기존 품목 id(편집 화면 _lid 'S{id}') — 수행정보 판매항목 연결 승계용
   };
-  const { title, items, note, quoteType, issueDate, validUntil, companyId, contactId, divisionId, adminId, versionReason, prepaidLines, taxDocumentType } = req.body as {
+  const { title, items, note, quoteType, issueDate, validUntil, companyId, contactId, divisionId, adminId, versionReason, prepaidLines, taxDocumentType, customerDisplay } = req.body as {
+    customerDisplay?: unknown;   // 견적서 거래처정보 편집 — 전달된 경우에만 갱신(null = 편집 해제)
     title?: string; items?: PutItemInput[]; note?: string; taxDocumentType?: string;
     quoteType?: string; issueDate?: string; validUntil?: string;
     companyId?: number | null; contactId?: number | null; divisionId?: number | null;
@@ -3648,6 +3652,7 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
         ...(taxDocumentType && TAX_DOCUMENT_TYPES.has(taxDocumentType) ? { taxDocumentType } : {}),
         // 변경사유(version_reason) — 전달된 경우에만 갱신(미전달 시 기존값 보존)
         ...(versionReason !== undefined ? { versionReason: versionReason.trim() || null } : {}),
+        ...(customerDisplay !== undefined ? { customerDisplay: sanitizeCustomerDisplay(customerDisplay) ?? null } : {}),
       }).where(eq(quotesTable.id, quoteId));
       // 수정 전 품목 id(수행정보 판매항목 연결 승계용) — 품목은 아래에서 전량 재삽입되어 id 가 바뀐다.
       const oldItemIds = new Set((await tx.select({ id: quoteItemsTable.id }).from(quoteItemsTable).where(eq(quoteItemsTable.quoteId, quoteId))).map(r => r.id));
@@ -3812,6 +3817,7 @@ router.get("/admin/quotes/:id", ...adminGuard, async (req, res) => {
         customerContactPhone:      quotesTable.customerContactPhone,
         customerContactMobile:     quotesTable.customerContactMobile,
         customerContactEmail:      quotesTable.customerContactEmail,
+        customerDisplay:           quotesTable.customerDisplay,
       })
       .from(quotesTable)
       .leftJoin(projectsTable, eq(quotesTable.projectId, projectsTable.id))

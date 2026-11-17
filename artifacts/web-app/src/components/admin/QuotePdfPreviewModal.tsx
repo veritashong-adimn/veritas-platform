@@ -226,6 +226,7 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
                   phone={data.customer.contactPhone}
                   email={data.customer.contactEmail}
                   address={data.customer.address}
+                  hide={data.customer.hidden}
                 />
               </InfoBox>
             </div>

@@ -1,9 +1,17 @@
-import { pgTable, serial, integer, numeric, timestamp, pgEnum, text, varchar, date, boolean, type AnyPgColumn } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, numeric, timestamp, pgEnum, text, varchar, date, boolean, jsonb, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { projectsTable } from "./projects";
 import { companiesTable } from "./companies";
 import { contactsTable } from "./contacts";
+
+// 견적서 수신처(거래처정보) 표시 편집 — 해당 견적서에만 저장. fields 의 값이 있으면 그 값으로 출력,
+//  hidden 에 든 항목은 견적서 미리보기·PDF 에서 숨긴다. 거래처 Master·다른 견적서와 무관.
+export type QuoteCustomerDisplayKey = "companyName" | "businessNumber" | "representativeName" | "contactName" | "phone" | "email" | "address";
+export interface QuoteCustomerDisplay {
+  fields: Partial<Record<QuoteCustomerDisplayKey, string>>;
+  hidden: QuoteCustomerDisplayKey[];
+}
 
 export const quoteStatusEnum = pgEnum("quote_status", ["pending", "sent", "approved", "rejected"]);
 
@@ -90,6 +98,8 @@ export const quotesTable = pgTable("quotes", {
   customerContactPhone: text("customer_contact_phone"),
   customerContactMobile: text("customer_contact_mobile"),
   customerContactEmail: text("customer_contact_email"),
+  // 견적서 거래처정보 편집(상호·사업자번호·대표자·담당자·연락처·이메일·주소 + 표시 여부). NULL = 기존 출력 그대로.
+  customerDisplay: jsonb("customer_display").$type<QuoteCustomerDisplay>(),
 
   createdAt: timestamp("created_at").notNull().defaultNow(),
 

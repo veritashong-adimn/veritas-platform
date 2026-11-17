@@ -67,21 +67,24 @@ export function InfoBox({ title, children, aside }: { title: string; children: R
 
 // 공급자·수신자 박스 공통 행 — 항목 순서·행 간격·글자 크기·정렬을 양쪽 동일하게 유지. 담당자 행은 수신자만(showContact).
 //  omitEmptyContact: 담당자·연락처·이메일 값이 없으면 행을 숨긴다(거래명세서 수신자). 기본값은 공란 행 유지(견적서).
-export function PartyRows({ companyName, businessNumber, representative, contactName, phone, email, address, showContact = true, omitEmptyContact = false }: {
+export function PartyRows({ companyName, businessNumber, representative, contactName, phone, email, address, showContact = true, omitEmptyContact = false, hide = [] }: {
   companyName?: string; businessNumber?: string; representative?: string; contactName?: string;
   phone?: string; email?: string; address?: string; showContact?: boolean; omitEmptyContact?: boolean;
+  /** 숨길 항목(견적서 거래처정보 편집) — companyName·businessNumber·representativeName·contactName·phone·email·address */
+  hide?: string[];
 }) {
   const shown = (v?: string) => !omitEmptyContact || !!v?.trim();
+  const on = (k: string) => !hide.includes(k);
   return (
     <>
-      <InfoRow label="상호"       value={companyName    || ''} />
-      <InfoRow label="사업자번호" value={businessNumber || ''} />
-      <InfoRow label="대표자"     value={representative || ''} />
-      {showContact && shown(contactName) && <InfoRow label="담당자"     value={contactName    || ''} />}
-      {shown(phone) && <InfoRow label="연락처"     value={phone          || ''} />}
-      {shown(email) && <InfoRow label="이메일"     value={email          || ''} />}
+      {on('companyName') && <InfoRow label="상호"       value={companyName    || ''} />}
+      {on('businessNumber') && <InfoRow label="사업자번호" value={businessNumber || ''} />}
+      {on('representativeName') && <InfoRow label="대표자"     value={representative || ''} />}
+      {showContact && on('contactName') && shown(contactName) && <InfoRow label="담당자"     value={contactName    || ''} />}
+      {on('phone') && shown(phone) && <InfoRow label="연락처"     value={phone          || ''} />}
+      {on('email') && shown(email) && <InfoRow label="이메일"     value={email          || ''} />}
       {/* 긴 주소는 InfoRow 가 단어 단위로 자동 줄바꿈 */}
-      <InfoRow label="주소"       value={address        || ''} />
+      {on('address') && <InfoRow label="주소"       value={address        || ''} />}
     </>
   );
 }
