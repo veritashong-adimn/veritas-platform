@@ -14,6 +14,7 @@ import { logEvent } from "../lib/logEvent";
 import {
   buildActivationPlan, executeActivation, getLegacyOrigin, resolvePayoutReview, publicPlan, ActivationError,
 } from "../services/legacySaleActivation";
+import { confirmRegularPaid, isLegacyActivationRow, PaidConfirmError } from "../services/performancePaidConfirm";
 import { checkLegacySaleRevert, executeLegacySaleRevert, REVERT_BLOCKED_MESSAGE } from "../services/legacySaleRevert";
 
 const router: IRouter = Router();
@@ -70,7 +71,8 @@ function paidInput(b: any): { actualPaymentDate: string; actualPaymentAmount: nu
 async function resolveAndLog(req: any, id: number, decision: "paid" | "unpaid", reason: string, paid?: { actualPaymentDate: string; actualPaymentAmount: number }, projectId?: number) {
   const r = await resolvePayoutReview(id, decision, reason, { id: req.user?.id ?? null }, paid, projectId);
   await logEvent("project", r.projectId, "legacy_payout_review_resolved", req.log, performerOf(req),
-    JSON.stringify({ assignmentId: id, decision, reason, performerName: r.performerName,
+    // 근거(지급 증빙)는 선택 — 미입력이면 evidence: 'missing' 으로 남긴다
+    JSON.stringify({ assignmentId: id, decision, reason: reason || null, evidence: reason ? "provided" : "missing", performerName: r.performerName,
       confirmedBy: req.user?.id ?? null, confirmedAt: new Date().toISOString(),
       ...(paid ? { actualPaymentDate: paid.actualPaymentDate, actualPaymentAmount: paid.actualPaymentAmount } : {}),
       before: r.before, after: { paymentStatus: decision === "paid" ? "paid" : "unpaid", ...(paid ?? {}) } }));
@@ -82,13 +84,38 @@ router.post("/admin/performances/:id/legacy-payout-review", ...adminGuard, requi
   const { decision, reason } = (req.body ?? {}) as { decision?: string; reason?: string };
   if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "유효하지 않은 id." }); return; }
   if (decision !== "paid" && decision !== "unpaid") { res.status(400).json({ error: "decision 은 paid | unpaid 여야 합니다." }); return; }
-  if (!reason || !reason.trim()) { res.status(400).json({ error: "확인 근거(사유)를 입력하세요." }); return; }
+  // 미지급 확인은 사유 필수, 지급완료 확인의 증빙은 선택
+  if (decision === "unpaid" && (!reason || !reason.trim())) { res.status(400).json({ error: "확인 근거(사유)를 입력하세요." }); return; }
   let paid: { actualPaymentDate: string; actualPaymentAmount: number } | undefined;
   if (decision === "paid") { const p = paidInput(req.body); if (typeof p === "string") { res.status(400).json({ error: p }); return; } paid = p; }
   try {
-    await resolveAndLog(req, id, decision, reason.trim(), paid);
+    await resolveAndLog(req, id, decision, (reason ?? "").trim(), paid);
     res.json({ ok: true, assignmentId: id, decision, ...(paid ?? {}) });
   } catch (err) { sendError(res, req, err, "과거 지급 확인 처리 실패."); }
+});
+
+// 수행정보 지급완료 확인(단건) — 지급일·실제 지급액 필수, 증빙 선택. 과거 CRM 전환 행은 기존 확인 경로, 일반 행은 회차 밖 실제 지급 기록.
+//   새 지급회차·이체·정산 레코드는 만들지 않는다(중복 지급거래 없음). 확인자·일시·근거는 감사로그.
+router.post("/admin/performances/:id/paid-confirm", ...adminGuard, requirePermission("settlement.pay"), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "유효하지 않은 id." }); return; }
+  const p = paidInput(req.body); if (typeof p === "string") { res.status(400).json({ error: p }); return; }
+  const reason = String((req.body as any)?.reason ?? "").trim();
+  try {
+    if (await isLegacyActivationRow(id)) {
+      await resolveAndLog(req, id, "paid", reason, p);
+    } else {
+      const r = await confirmRegularPaid(id, p, { id: req.user?.id ?? null });
+      await logEvent("project", r.projectId, "performance_paid_confirmed", req.log, performerOf(req), JSON.stringify({
+        assignmentId: id, reason: reason || null, evidence: reason ? "provided" : "missing", performerName: r.performerName,
+        confirmedBy: req.user?.id ?? null, confirmedAt: new Date().toISOString(), ...p,
+        before: r.before, after: { paymentStatus: "paid", ...p } }));
+    }
+    res.json({ ok: true, assignmentId: id, ...p });
+  } catch (err) {
+    if (err instanceof PaidConfirmError) { res.status(err.status).json({ error: err.message }); return; }
+    sendError(res, req, err, "지급완료 확인 실패.");
+  }
 });
 
 // 일괄 지급완료 확인 — 선택한 건별로 실제 지급일·지급액을 받아 각각 확정(건별 트랜잭션·중복 확정 차단). 송금 실행 아님.
@@ -97,7 +124,7 @@ router.post("/admin/projects/:id/legacy-payout-review/bulk", ...adminGuard, requ
   const projectId = Number(req.params.id);
   const { reason, items } = (req.body ?? {}) as { reason?: string; items?: any[] };
   if (!Number.isInteger(projectId) || projectId <= 0) { res.status(400).json({ error: "유효하지 않은 id." }); return; }
-  if (!reason || !reason.trim()) { res.status(400).json({ error: "확인 근거(지급 증빙)를 입력하세요." }); return; }
+  // 지급 증빙(reason)은 선택 — 미입력 시 감사로그에 evidence: missing
   if (!Array.isArray(items) || items.length === 0 || items.length > 200) { res.status(400).json({ error: "확인할 수행정보를 선택하세요(최대 200건)." }); return; }
   const ids = items.map(i => Number(i?.assignmentId));
   if (ids.some(i => !Number.isInteger(i) || i <= 0) || new Set(ids).size !== ids.length) { res.status(400).json({ error: "수행정보 id 가 올바르지 않거나 중복되었습니다." }); return; }
@@ -106,7 +133,7 @@ router.post("/admin/projects/:id/legacy-payout-review/bulk", ...adminGuard, requ
     const id = Number(it.assignmentId);
     const p = paidInput(it);
     if (typeof p === "string") { results.push({ assignmentId: id, ok: false, error: p }); continue; }
-    try { const r = await resolveAndLog(req, id, "paid", reason.trim(), p, projectId); results.push({ assignmentId: id, ok: true, performerName: r.performerName }); }
+    try { const r = await resolveAndLog(req, id, "paid", (reason ?? "").trim(), p, projectId); results.push({ assignmentId: id, ok: true, performerName: r.performerName }); }
     catch (err: any) { results.push({ assignmentId: id, ok: false, error: err instanceof ActivationError ? err.message : "처리 실패" }); if (!(err instanceof ActivationError)) req.log.error({ err }, "bulk payout review"); }
   }
   res.json({ ok: results.every(r => r.ok), succeeded: results.filter(r => r.ok).length, failed: results.filter(r => !r.ok).length, results });

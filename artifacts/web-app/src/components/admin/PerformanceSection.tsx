@@ -16,6 +16,7 @@ import InlinePerformerPicker from './InlinePerformerPicker';
 import type { TranslatorContactResult } from './TranslatorPreviewPopover';
 import { AmountDetailPopup, AdjustmentPopup, RatePopup } from './performancePopups';
 import ServiceDetailCell from './performanceServiceDetail';
+import { PayoutPaidConfirmDialog, type PaidConfirmLine } from './PayoutPaidConfirmDialog';
 import './readTableView.css';
 import {
   Row, ExpenseRow, toRow, won, num, round2, commafy, dateVal, calcRowCostPreview, calcPaymentDate, isEquipmentKind, isInterpretationKind, isTranslationKind, perPersonSnapshot,
@@ -67,6 +68,25 @@ export default function PerformanceSection({ projectId, token, performances, onC
   const [editMode, setEditMode] = useState(false);
   const [showBulkImport, setShowBulkImport] = useState(false);   // 수행자 배정 대량등록(§7차)
   const [rows, setRows] = useState<Row[]>([]);
+  // 지급완료 확인(일반 행) — 회차 밖에서 이미 지급한 미지급 건을 지급일·실제 지급금액·증빙(선택)으로 기록
+  const [paidDialog, setPaidDialog] = useState<PaidConfirmLine | null>(null);
+  const [paidBusy, setPaidBusy] = useState(false);
+  const savePaidConfirm = async ({ lines, evidence }: { lines: PaidConfirmLine[]; evidence: string }) => {
+    const l = lines[0]; if (!l) return;
+    setPaidBusy(true);
+    try {
+      const res = await fetch(api(`/api/admin/performances/${l.id}/paid-confirm`), {
+        method: 'POST', headers: authH,
+        body: JSON.stringify({ actualPaymentDate: l.date, actualPaymentAmount: Number(l.amount.replace(/,/g, '')), reason: evidence }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { onToast(`지급완료 확인 실패: ${d.error ?? res.status}`); return; }
+      onToast('지급완료로 반영했습니다.');
+      setPaidDialog(null);
+      await onChanged();
+    } catch { onToast('처리 중 오류가 발생했습니다.'); }
+    finally { setPaidBusy(false); }
+  };
   const [deletedIds, setDeletedIds] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
   const [searchIdx, setSearchIdx] = useState<number | null>(null);
@@ -891,6 +911,16 @@ export default function PerformanceSection({ projectId, token, performances, onC
               : editable && (r.paymentStatus ?? 'unpaid') !== 'paid'
               ? <ClickSelect value={r.paymentStatus ?? 'unpaid'} onChange={(v: string) => patchRow(i, { paymentStatus: v })} triggerStyle={inp} options={PAYMENT_STATUS_SELECTABLE_OPTS} />
               : <PaymentBadge value={r.paymentStatus} />}
+            {/* 지급완료 확인 — 저장된 일반 행 중 미지급·회차 미배정 건(회차 밖에서 이미 지급한 건 기록). 기본값: 지급예정일(오늘 이전)·세후 지급액 */}
+            {!editable && r.id != null && !r.legacyPayout?.display && (r.paymentStatus ?? 'unpaid') === 'unpaid' && r.payoutRoundId == null && (
+              <GhostBtn onClick={() => {
+                  const today = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+                  const due = String(r.expectedPaymentDate ?? '').slice(0, 10);
+                  const amt = r.actualPaymentAmount != null && Number(r.actualPaymentAmount) > 0 ? Number(r.actualPaymentAmount) : after;
+                  setPaidDialog({ id: r.id!, name: r.performerNameSnapshot ?? null, date: /^\d{4}-\d{2}-\d{2}$/.test(due) && due <= today ? due : today, amount: String(Math.round(amt)) });
+                }}
+                style={{ fontSize: 11, padding: '2px 7px' }} data-testid={`btn-perf-paid-confirm-${i}`} aria-label="지급완료 확인">지급완료 확인</GhostBtn>
+            )}
             {/* §18 회차 배정 표시(최소) — 지급회차에 포함된 건 표기. 상세는 정산 화면에서 관리. */}
             {r.payoutRoundId != null && (
               <span title={`지급회차 배정됨 (#${r.payoutRoundId}) — 정산 화면에서 관리`} aria-label="지급회차 배정됨"
@@ -1016,6 +1046,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
   return (
     <Card>
       {header}
+      {paidDialog && <PayoutPaidConfirmDialog lines={[paidDialog]} busy={paidBusy} onCancel={() => setPaidDialog(null)} onConfirm={savePaidConfirm} />}
 
       {/* ── 조회모드 (수정과 동일 컬럼 구조 §16) ── */}
       {!editMode && (

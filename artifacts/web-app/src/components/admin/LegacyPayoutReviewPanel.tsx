@@ -1,11 +1,12 @@
 // ─── 과거 지급 확인 필요 — 지급완료 확인(개별·일괄) ─────────────────────────────────────
-//  이미 완료된 지급을 '확인'하는 기능이다(송금·지급 실행 아님). 지급완료 확인 시 실제 지급일·실제 지급액·확인 근거를
-//  필수로 받아 실제 지급확정 기록(수행정보 actual_payment_date/amount + 감사로그: 확인자·일시·근거)으로 남긴다.
+//  이미 완료된 지급을 '확인'하는 기능이다(송금·지급 실행 아님). 지급완료 확인 시 창 하나에서 실제 지급일·실제 지급액(필수)과
+//  증빙(선택)을 받아 실제 지급확정 기록(수행정보 actual_payment_date/amount + 감사로그: 확인자·일시·근거)으로 남긴다.
 //  지급예정일·원가·원천세 등 기존 값은 변경하지 않는다. 확인 전 표시: 지급예정(예정일 도래 전) / 확인 필요(예정일 경과·없음).
 //  서버: POST /admin/projects/:id/legacy-payout-review/bulk (건별 처리·중복 확정 차단·건별 결과)
 import React, { useMemo, useState } from 'react';
 import { api } from '../../lib/constants';
-import { GhostBtn, confirmDialog, promptDialog } from '../ui';
+import { GhostBtn } from '../ui';
+import { PayoutPaidConfirmDialog, type PaidConfirmLine } from './PayoutPaidConfirmDialog';
 
 export type PayoutReviewItem = {
   assignmentId: number; performerName: string | null; costTotal: number | null; originalPreTax: number | null;
@@ -33,35 +34,25 @@ export function LegacyPayoutReviewPanel({ projectId, token, items, onToast, onDo
   const allSel = items.length > 0 && items.every(p => sel.has(p.assignmentId));
   const byId = useMemo(() => new Map(items.map(p => [p.assignmentId, p])), [items]);
 
-  const confirmPaid = async (ids: number[]) => {
+  // 지급완료 확인 — 창 하나(지급일·실제 지급금액·증빙 선택). 저장하면 바로 지급완료 반영(새 지급거래 없음)
+  const [dialog, setDialog] = useState<PaidConfirmLine[] | null>(null);
+  const confirmPaid = (ids: number[]) => {
     if (!ids.length) { onToast('지급완료 확인할 건을 선택하세요.'); return; }
-    const bad = ids.filter(id => !/^\d{4}-\d{2}-\d{2}$/.test(f(id).date) || f(id).date > today || !(Number(f(id).amount.replace(/,/g, '')) > 0));
-    if (bad.length) { onToast(`실제 지급일(오늘 이전)과 지급액을 입력하세요 — ${bad.map(id => byId.get(id)?.performerName ?? `#${id}`).slice(0, 5).join(', ')}${bad.length > 5 ? ` 외 ${bad.length - 5}건` : ''}`); return; }
-    const total = ids.reduce((a, id) => a + Number(f(id).amount.replace(/,/g, '')), 0);
-    const lines = ids.slice(0, 12).map(id => `· ${byId.get(id)?.performerName ?? `#${id}`} — 지급일 ${f(id).date} · ${won(Number(f(id).amount.replace(/,/g, '')))}`).join('\n');
-    const ok = await confirmDialog({
-      title: `지급완료 확인 ${ids.length}건`,
-      message: `이미 지급된 건으로 확정합니다(송금 실행 아님). 지급회차·대량이체 대상에서 계속 제외됩니다.\n\n${lines}${ids.length > 12 ? `\n· … 외 ${ids.length - 12}건` : ''}\n\n합계 ${won(total)}`,
-      confirmLabel: '다음(증빙 입력)', cancelLabel: '취소',
-    });
-    if (!ok) return;
-    const reason = await promptDialog({
-      title: '지급 증빙 확인', message: '실제 지급을 확인한 근거를 입력하세요(통장 이체내역·지급파일 등).',
-      placeholder: '예: 2026-11-13 기업은행 대량이체 내역 확인', confirmLabel: '지급완료 확인',
-    });
-    if (reason == null || !reason.trim()) return;
+    setDialog(ids.map(id => ({ id, name: byId.get(id)?.performerName ?? null, date: f(id).date, amount: f(id).amount })));
+  };
+  const savePaid = async ({ lines, evidence }: { lines: PaidConfirmLine[]; evidence: string }) => {
     setBusy(true); setFailures([]);
     try {
       const r = await fetch(api(`/api/admin/projects/${projectId}/legacy-payout-review/bulk`), {
         method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason: reason.trim(), items: ids.map(id => ({ assignmentId: id, actualPaymentDate: f(id).date, actualPaymentAmount: Number(f(id).amount.replace(/,/g, '')) })) }),
+        body: JSON.stringify({ reason: evidence, items: lines.map(l => ({ assignmentId: l.id, actualPaymentDate: l.date, actualPaymentAmount: Number(l.amount.replace(/,/g, '')) })) }),
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { onToast(`지급완료 확인 실패: ${d.error ?? r.status}`); return; }
       const fails = (d.results ?? []).filter((x: any) => !x.ok);
       setFailures(fails);
       onToast(`지급완료 확인 ${d.succeeded}건${fails.length ? ` · 실패 ${fails.length}건(아래 사유 확인)` : ''}`);
-      setSel(new Set());
+      setSel(new Set()); setDialog(null);
       await onDone();
     } catch { onToast('처리 중 오류가 발생했습니다.'); }
     finally { setBusy(false); }
@@ -69,6 +60,7 @@ export function LegacyPayoutReviewPanel({ projectId, token, items, onToast, onDo
 
   return (
     <div style={{ border: '1px solid #fde68a', borderRadius: 8, marginBottom: 12, overflow: 'hidden' }} data-testid="legacy-payout-review-panel">
+      {dialog && <PayoutPaidConfirmDialog lines={dialog} busy={busy} onCancel={() => setDialog(null)} onConfirm={savePaid} />}
       <div style={{ padding: '6px 10px', background: '#fffbeb', fontSize: 12, fontWeight: 700, color: '#92400e', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <span>과거 지급 확인 필요 — 확인 전에는 지급회차·기업은행 대량이체에서 제외됩니다(지급예정일만으로 지급완료 처리하지 않음)</span>
         <span style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
