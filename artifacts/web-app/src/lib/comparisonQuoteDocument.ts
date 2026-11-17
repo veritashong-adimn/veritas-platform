@@ -76,34 +76,28 @@ export const COMPARISON_DOC_CSS = `
 .cqd-simband b { background: #b45309; color: #fff; border-radius: 3px; padding: 1px 7px; font-size: 10.5px; letter-spacing: .5px; }
 .cqd-wm { position: absolute; top: 380px; left: 50%; transform: translate(-50%, 0) rotate(-28deg); font-size: 78px; font-weight: 900;
   color: rgba(180, 83, 9, .065); letter-spacing: 10px; white-space: nowrap; pointer-events: none; z-index: 5; }
-.cqd-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 18px; position: relative; z-index: 1; }
-.cqd-brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.cqd-logo { max-height: 46px; max-width: 150px; object-fit: contain; display: block; }
-.cqd-brand-name { font-size: 21px; font-weight: 800; color: #111827; letter-spacing: -.3px; line-height: 1.25; }
-.cqd-brand-sub { font-size: 11px; color: #6b7280; margin-top: 2px; }
-.cqd-titlebox { text-align: right; flex-shrink: 0; }
-.cqd-title { font-size: 30px; font-weight: 900; color: var(--ac); letter-spacing: 9px; line-height: 1.1; margin-right: -9px; }
-.cqd-title-en { font-size: 10px; font-weight: 700; color: #9ca3af; letter-spacing: 4px; margin: 4px 0 8px; }
-.cqd-meta { border-collapse: collapse; margin-left: auto; }
-.cqd-meta th { font-size: 11px; color: #6b7280; font-weight: 600; text-align: left; padding: 1px 10px 1px 0; white-space: nowrap; }
-.cqd-meta td { font-size: 12px; color: #111827; font-weight: 600; text-align: right; padding: 1px 0; font-variant-numeric: tabular-nums; }
-.cqd-rule { height: 3px; background: var(--ac); margin: 14px 0 18px; border-radius: 1px; position: relative; z-index: 1; }
-.cqd-parties { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 16px; position: relative; z-index: 1; }
-.cqd-party { border: 1px solid #e5e7eb; border-radius: 6px; padding: 12px 15px; background: #fff; }
-.cqd-party-label { font-size: 10px; font-weight: 800; color: var(--ac); letter-spacing: 1.5px; padding-bottom: 5px; margin-bottom: 6px; border-bottom: 1px solid var(--ac-line); }
-.cqd-party-name { font-size: 15px; font-weight: 800; color: #111827; margin-bottom: 5px; }
-.cqd-party-name small { font-size: 11px; font-weight: 500; color: #6b7280; margin-left: 3px; }
-.cqd-row { display: flex; align-items: baseline; gap: 8px; margin: 2px 0; }
+.cqd-top { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding-bottom: 10px; border-bottom: 2px solid var(--ac); position: relative; z-index: 1; }
+.cqd-brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.cqd-logo { max-height: 40px; max-width: 140px; object-fit: contain; display: block; }
+.cqd-brand-name { font-size: 18px; font-weight: 800; color: var(--ac); letter-spacing: -.2px; line-height: 1.25; }
+.cqd-contact { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 2px 14px; font-size: 11px; color: #4b5563; text-align: right; }
+.cqd-contact span { white-space: nowrap; }
+.cqd-contact b { color: var(--ac); font-weight: 700; margin-right: 4px; }
+.cqd-titlewrap { text-align: center; margin: 22px 0 18px; position: relative; z-index: 1; }
+.cqd-title { font-size: 28px; font-weight: 900; color: #111827; letter-spacing: 12px; line-height: 1.1; margin-right: -12px; }
+.cqd-title-en { font-size: 10px; font-weight: 700; color: var(--ac); letter-spacing: 5px; margin-top: 5px; }
+.cqd-info { display: grid; grid-template-columns: 1fr 1fr; column-gap: 28px; border-top: 1px solid #d1d5db; position: relative; z-index: 1; }
+.cqd-info-col { min-width: 0; }
+.cqd-info-h { font-size: 10px; font-weight: 800; color: var(--ac); letter-spacing: 1.5px; padding: 7px 0 4px; }
+.cqd-to { font-size: 15px; font-weight: 800; color: #111827; padding: 2px 0 6px; border-bottom: 1px solid #e5e7eb; }
+.cqd-to small { font-size: 11px; font-weight: 500; color: #6b7280; margin-left: 4px; }
+.cqd-row { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; border-bottom: 1px solid #f1f5f9; }
 .cqd-row span:first-child { font-size: 10.5px; color: #6b7280; font-weight: 600; width: 84px; flex-shrink: 0; }
 .cqd-row.nw span:last-child { white-space: nowrap; }          /* 연락처·이메일 — 줄바꿈 없이 한 줄 */
 .cqd-row span:last-child { font-size: 11.5px; color: #111827; min-width: 0; }
-.cqd-party-empty { font-size: 11px; color: #9ca3af; }
-.cqd-amount { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: var(--ac-soft); border: 1px solid var(--ac-line);
-  border-radius: 6px; padding: 11px 16px; margin-bottom: 4px; position: relative; z-index: 1; }
-.cqd-amount-label { font-size: 11.5px; font-weight: 700; color: #374151; }
-.cqd-amount-words { font-size: 14px; font-weight: 800; color: #111827; }
-.cqd-amount-num { font-size: 17px; font-weight: 900; color: var(--ac); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.cqd-greet { font-size: 11.5px; color: #4b5563; margin: 12px 0 8px; }
+.cqd-row.em span:last-child { font-weight: 700; font-variant-numeric: tabular-nums; }
+.cqd-party-empty { font-size: 11px; color: #9ca3af; padding: 4px 0; }
+.cqd-greet { font-size: 11.5px; color: #4b5563; margin: 16px 0 8px; }
 .cqd-items { width: 100%; border-collapse: collapse; table-layout: fixed; position: relative; z-index: 1; }
 .cqd-items-cont { margin-bottom: 12px; }
 .cqd-items th { background: var(--ac); color: #fff; font-size: 11px; font-weight: 700; padding: 8px 8px; white-space: nowrap; }
@@ -117,12 +111,13 @@ export const COMPARISON_DOC_CSS = `
 .cqd-items .amt { font-weight: 700; color: #111827; }
 .cqd-items tfoot td { border-bottom: 0; }
 .cqd-tail { display: flex; justify-content: flex-end; position: relative; z-index: 1; }
-.cqd-totals { width: 310px; border-collapse: collapse; }
+.cqd-totals { width: 340px; border-collapse: collapse; margin-top: 4px; }
 .cqd-totals th { text-align: left; font-size: 11.5px; color: #6b7280; font-weight: 600; padding: 6px 4px; border-bottom: 1px solid #f1f5f9; }
 .cqd-totals td { text-align: right; font-size: 12.5px; color: #111827; font-weight: 600; padding: 6px 4px; border-bottom: 1px solid #f1f5f9; font-variant-numeric: tabular-nums; }
-.cqd-totals tr.grand th, .cqd-totals tr.grand td { border-top: 2px solid var(--ac); border-bottom: 0; padding-top: 8px; }
+.cqd-totals tr.grand th, .cqd-totals tr.grand td { border-top: 2px solid var(--ac); border-bottom: 2px solid var(--ac); background: var(--ac-soft); padding: 10px 8px; }
 .cqd-totals tr.grand th { color: #111827; font-weight: 800; font-size: 12.5px; }
-.cqd-totals tr.grand td { color: var(--ac); font-weight: 900; font-size: 17px; }
+.cqd-totals tr.grand td { color: var(--ac); font-weight: 900; font-size: 19px; white-space: nowrap; }
+.cqd-totals tr.words td { text-align: right; font-size: 11px; color: #4b5563; font-weight: 600; border-bottom: 0; padding-top: 5px; }
 .cqd-sec { margin-top: 16px; position: relative; z-index: 1; }
 .cqd-sec-title { font-size: 12px; font-weight: 800; color: #111827; padding-left: 8px; border-left: 3px solid var(--ac); margin-bottom: 6px; line-height: 1.3; }
 .cqd-terms { width: 100%; border-collapse: collapse; border-top: 1px solid #d1d5db; }
@@ -159,26 +154,23 @@ export function renderComparisonQuoteBody(d: ComparisonQuotePdfData): string {
 
   const cust = d.customer;
   const custRows = [row('대표자', cust.representativeName), row('담당자', cust.contactName), row('연락처', cust.phone, true), row('이메일', cust.email, true)].join('');
-  const customerBox = `<div class="cqd-party">
-      <div class="cqd-party-label">수신 · TO</div>
-      ${has(cust.companyName) ? `<div class="cqd-party-name">${esc(cust.companyName)}<small>귀중</small></div>` : ''}
+  const customerCol = `<div class="cqd-info-col">
+      <div class="cqd-info-h">수신 · TO</div>
+      ${has(cust.companyName) ? `<div class="cqd-to">${esc(cust.companyName)}<small>귀중</small></div>` : ''}
       ${custRows}
       ${!has(cust.companyName) && !custRows ? '<div class="cqd-party-empty">수신처 정보 없음</div>' : ''}
     </div>`;
 
-  const supplierBox = `<div class="cqd-party">
-      <div class="cqd-party-label">${sim ? '비교 대상 업체 · 내부 비교용' : '공급자 · FROM'}</div>
-      <div class="cqd-party-name">${esc(c.name)}</div>
-      ${row('대표자', c.representativeName)}${row('사업자등록번호', c.businessNumber)}${row('연락처', c.phone, true)}${row('이메일', c.email, true)}
-      ${row('주소', c.address)}${row('홈페이지', c.website)}${row('담당자', c.contactName)}
+  const emRow = (k: string, v: unknown) => (has(v) ? `<div class="cqd-row em"><span>${esc(k)}</span><span>${esc(v)}</span></div>` : '');
+  const issueCol = `<div class="cqd-info-col">
+      <div class="cqd-info-h">${sim ? '발행정보 · 내부 비교용' : '발행정보'}</div>
+      ${emRow('견적번호', d.displayNumber)}${emRow('발행일', d.issueDate)}
+      ${row('대표자', c.representativeName)}${row('사업자등록번호', c.businessNumber)}${row('담당자', c.contactName)}${row('주소', c.address)}
     </div>`;
 
-  const meta = [
-    has(d.displayNumber) ? `<tr><th>견적번호</th><td>${esc(d.displayNumber)}</td></tr>` : '',
-    has(d.issueDate) ? `<tr><th>발행일</th><td>${esc(d.issueDate)}</td></tr>` : '',
-  ].join('');
-
-  const subline = [c.phone, c.website].filter(has).map(esc).join(' · ');
+  // 상단 연락처(회사명 오른쪽 가로 배치) — 공급자 연락처는 이 한 곳에만 표시
+  const contact = [['TEL', c.phone], ['E-MAIL', c.email], ['WEB', c.website]]
+    .filter(([, v]) => has(v)).map(([k, v]) => `<span><b>${k}</b>${esc(v)}</span>`).join('');
 
   // 품목 행 — 마지막 2행은 합계·발행정보 블록(.cqd-final) 안의 이어지는 표로 렌더(인쇄 시 함께 이동).
   const rowHtml = (it: ComparisonQuotePdfData['items'][number], i: number) => `<tr${i % 2 === 1 ? ' class="z"' : ''}>
@@ -224,24 +216,18 @@ export function renderComparisonQuoteBody(d: ComparisonQuotePdfData): string {
   return `<div class="cqd" style="--ac:${esc(ac)};--ac-soft:${hexToRgba(ac, 0.07)};--ac-line:${hexToRgba(ac, 0.28)}">
   ${sim ? `<div class="cqd-wm">내부 비교용</div><div class="cqd-simband"><b>INTERNAL</b>내부 비교용 시뮬레이션 · 실제 업체가 발행한 견적서가 아닙니다</div>` : ''}
   <div class="cqd-keep">
-    <div class="cqd-head">
+    <div class="cqd-top">
       <div class="cqd-brand">
         ${logo ? `<img class="cqd-logo" src="${esc(logo)}" alt="로고">` : ''}
-        <div><div class="cqd-brand-name">${esc(c.name)}</div>${subline ? `<div class="cqd-brand-sub">${subline}</div>` : ''}</div>
+        <div class="cqd-brand-name">${esc(c.name)}</div>
       </div>
-      <div class="cqd-titlebox">
-        <div class="cqd-title">${esc(sim ? '비교 견적' : d.design.docTitle)}</div>
-        <div class="cqd-title-en">${sim ? 'INTERNAL COMPARISON' : 'QUOTATION'}</div>
-        ${meta ? `<table class="cqd-meta">${meta}</table>` : ''}
-      </div>
+      ${contact ? `<div class="cqd-contact">${contact}</div>` : ''}
     </div>
-    <div class="cqd-rule"></div>
-    <div class="cqd-parties">${customerBox}${supplierBox}</div>
-    <div class="cqd-amount">
-      <span class="cqd-amount-label">${esc(totalLabel)}</span>
-      <span class="cqd-amount-words">일금 ${koreanAmount(d.totals.total)}원정</span>
-      <span class="cqd-amount-num">₩ ${fmt(d.totals.total)}</span>
+    <div class="cqd-titlewrap">
+      <div class="cqd-title">${esc(sim ? '비교 견적' : d.design.docTitle)}</div>
+      <div class="cqd-title-en">${sim ? 'INTERNAL COMPARISON' : 'QUOTATION'}</div>
     </div>
+    <div class="cqd-info">${customerCol}${issueCol}</div>
     <div class="cqd-greet">${sim ? '아래는 내부 가격 비교를 위한 견적 시뮬레이션입니다.' : '아래와 같이 견적합니다.'}</div>
   </div>
   ${headRows ? `<table class="cqd-items">${cols}${thead}<tbody>${headRows}</tbody></table>` : ''}
@@ -251,7 +237,8 @@ export function renderComparisonQuoteBody(d: ComparisonQuotePdfData): string {
     <table class="cqd-totals">
       <tr><th>공급가액</th><td>${fmt(d.totals.supply)}</td></tr>
       <tr><th>${esc(vatLabel)}</th><td>${fmt(d.totals.tax)}</td></tr>
-      <tr class="grand"><th>${esc(totalLabel)}</th><td>${fmt(d.totals.total)} 원</td></tr>
+      <tr class="grand"><th>${esc(totalLabel)}</th><td>₩ ${fmt(d.totals.total)}</td></tr>
+      <tr class="words"><td colspan="2">일금 ${koreanAmount(d.totals.total)}원정</td></tr>
     </table>
   </div>
   ${termRows ? `<div class="cqd-sec cqd-terms-sec"><div class="cqd-sec-title cqd-heading">견적 조건</div><table class="cqd-terms">${termRows}</table></div>` : ''}
