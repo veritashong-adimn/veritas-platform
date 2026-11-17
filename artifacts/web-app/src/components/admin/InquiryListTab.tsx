@@ -6,7 +6,7 @@
  * 행 클릭 → 상세, 체크박스 → 선택(동작 분리). 기존 ERP 목록 디자인 패턴을 따른다.
  */
 import React, { useState, useEffect, useCallback } from 'react';
-import { confirmAndDeleteInquiry } from './inquiryDeleteFlow';
+import { confirmAndDeleteInquiries } from './inquiryDeleteFlow';
 import { formatDisplayDate } from '../../lib/dateFormat';
 import { api } from '../../lib/constants';
 import { CHANNEL_LABEL, PROCESSING_META, QUOTE_PROGRESS_META, kstTodayStr, inquiryServiceLabel } from '../../lib/inquiryMeta';
@@ -51,6 +51,22 @@ const badge = (m: { label: string; color: string; bg: string; border: string }):
 const fmtDateTime = (s: string | null) => s ? new Date(s).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', year: '2-digit', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
 const lang = (r: InquiryRow) => [r.languageFrom, r.languageTo].filter(Boolean).join('→') || '—';
 
+// 조회 기간(등록일 기준) — 기준일(date)로부터 거슬러 시작일 계산
+type PeriodKey = 'today' | 'd3' | 'd7' | 'd15' | 'm1' | 'm3' | 'all';
+const PERIODS: { key: PeriodKey; label: string }[] = [
+  { key: 'today', label: '오늘' }, { key: 'd3', label: '3일' }, { key: 'd7', label: '7일' }, { key: 'd15', label: '15일' },
+  { key: 'm1', label: '1개월' }, { key: 'm3', label: '3개월' }, { key: 'all', label: '전체' },
+];
+function periodFrom(base: string, p: PeriodKey): string {
+  if (p === 'all') return 'all';
+  if (p === 'today') return base;
+  const [y, m, d] = base.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (p === 'm1' || p === 'm3') dt.setUTCMonth(dt.getUTCMonth() - (p === 'm1' ? 1 : 3));
+  else dt.setUTCDate(dt.getUTCDate() - ({ d3: 3, d7: 7, d15: 15 }[p] - 1));
+  return dt.toISOString().slice(0, 10);
+}
+
 function StatCard({ label, value, accent, highlight }: { label: string; value: number; accent?: string; highlight?: boolean }) {
   return (
     <div style={{ flex: '1 1 120px', minWidth: 110, background: highlight ? '#fef2f2' : '#fff', border: `1px solid ${highlight ? '#fecaca' : '#e5e7eb'}`, borderRadius: 10, padding: '12px 14px' }}>
@@ -62,7 +78,7 @@ function StatCard({ label, value, accent, highlight }: { label: string; value: n
 
 export function InquiryListTab({ token, onOpenDetail, onOpenQuote, onRegister, refreshTick, canDelete = false, onToast }: {
   token: string;
-  /** 의뢰건 삭제 권한(관리자·견적 수정 권한) — 행의 [삭제] 표시. 서버에서도 검증 */
+  /** 의뢰건 삭제 권한(관리자·견적 수정 권한) — 상단 [선택 삭제] 표시. 서버에서도 검증 */
   canDelete?: boolean;
   onToast?: (msg: string) => void;
   onOpenDetail: (id: number) => void;
@@ -75,24 +91,39 @@ export function InquiryListTab({ token, onOpenDetail, onOpenQuote, onRegister, r
   const [data, setData] = useState<ListResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [period, setPeriod] = useState<PeriodKey>('today');
+  const from = periodFrom(date, period);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(api(`/api/admin/inquiries?date=${date}`), { headers: authH });
+      const res = await fetch(api(`/api/admin/inquiries?date=${date}&from=${from}`), { headers: authH });
       const d = await res.json().catch(() => null);
       if (!res.ok) { setData(null); return; }
       setData(d);
       setSelected(new Set());
     } catch { setData(null); }
     finally { setLoading(false); }
-  }, [date, token]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [date, from, token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { load(); }, [load, refreshTick]);
 
   const toggle = (id: number) => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const s = data?.summary;
+  const rows = data?.rows ?? [];
+  const allChecked = rows.length > 0 && rows.every(r => selected.has(r.id));
+  const toggleAll = () => setSelected(allChecked ? new Set() : new Set(rows.map(r => r.id)));
+  const bulkDelete = async () => {
+    if (bulkDeleting || selected.size === 0) return;
+    setBulkDeleting(true);
+    try {
+      const items = rows.filter(r => selected.has(r.id)).map(r => ({ id: r.id, label: r.inquiryNumber ?? `#${r.id}` }));
+      const out = await confirmAndDeleteInquiries(token, items);
+      if (out.deletedCount > 0) { onToast?.(`의뢰건 ${out.deletedCount}건이 삭제 처리되었습니다.`); await load(); }
+    } finally { setBulkDeleting(false); }
+  };
+  const rangeLabel = from === 'all' ? `전체 ~ ${date}` : from === date ? date : `${from} ~ ${date}`;
 
   return (
     <div data-testid="inquiry-list-tab">
@@ -102,10 +133,25 @@ export function InquiryListTab({ token, onOpenDetail, onOpenQuote, onRegister, r
           <p style={{ fontSize: 12, color: '#9ca3af', margin: '4px 0 0' }}>당일 접수는 당일 처리를 원칙으로 합니다. 이월 미처리를 우선 확인하세요.</p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <button type="button" onClick={() => setDate(kstTodayStr())} data-testid="btn-inquiry-today"
-            style={{ padding: '8px 12px', fontSize: 13, fontWeight: 600, borderRadius: 8, border: '1px solid #d1d5db', background: '#f9fafb', color: '#374151', cursor: 'pointer' }}>오늘</button>
+          <div role="group" aria-label="조회 기간" style={{ display: 'flex', border: '1px solid #d1d5db', borderRadius: 8, overflow: 'hidden' }}>
+            {PERIODS.map((p, i) => {
+              const on = period === p.key;
+              return (
+                <button key={p.key} type="button" aria-pressed={on} aria-label={`조회 기간 ${p.label}`} data-testid={`btn-inquiry-period-${p.key}`}
+                  onClick={() => { setPeriod(p.key); if (p.key === 'today') setDate(kstTodayStr()); }}
+                  style={{ padding: '8px 10px', fontSize: 12, fontWeight: on ? 700 : 500, border: 'none', borderLeft: i ? '1px solid #e5e7eb' : 'none', background: on ? '#2563eb' : '#f9fafb', color: on ? '#fff' : '#374151', cursor: 'pointer', whiteSpace: 'nowrap' }}>{p.label}</button>
+              );
+            })}
+          </div>
           <DateField value={date} onChange={v => setDate(v)} testid="input-inquiry-date" ariaLabel="조회 날짜"
             style={{ padding: '7px 10px', fontSize: 13, border: '1px solid #d1d5db', borderRadius: 8, outline: 'none' }} />
+          {canDelete && (
+            <button type="button" onClick={bulkDelete} disabled={selected.size === 0 || bulkDeleting}
+              data-testid="inquiry-bulk-delete" aria-label="선택한 의뢰건 삭제"
+              style={{ padding: '8px 12px', fontSize: 13, fontWeight: 700, borderRadius: 8, border: `1px solid ${selected.size ? '#fca5a5' : '#e5e7eb'}`, background: selected.size ? '#fef2f2' : '#f9fafb', color: selected.size ? '#dc2626' : '#9ca3af', cursor: selected.size && !bulkDeleting ? 'pointer' : 'not-allowed', whiteSpace: 'nowrap' }}>
+              {bulkDeleting ? '삭제 중…' : `선택 삭제${selected.size ? ` (${selected.size})` : ''}`}
+            </button>
+          )}
           {onRegister && (
             <button type="button" onClick={onRegister} data-testid="btn-inquiry-register-nav"
               style={{ padding: '8px 14px', fontSize: 13, fontWeight: 700, borderRadius: 8, border: 'none', background: '#2563eb', color: '#fff', cursor: 'pointer' }}>+ 의뢰건 등록</button>
@@ -114,7 +160,7 @@ export function InquiryListTab({ token, onOpenDetail, onOpenQuote, onRegister, r
       </div>
 
       {/* 일일 현황 */}
-      <div style={{ marginBottom: 8, fontSize: 13, fontWeight: 700, color: '#374151' }}>{date} 의뢰 현황</div>
+      <div style={{ marginBottom: 8, fontSize: 13, fontWeight: 700, color: '#374151' }}>{rangeLabel} 의뢰 현황</div>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 6 }}>
         <StatCard label="총 접수" value={s?.total ?? 0} />
         <StatCard label="신규/미처리" value={s?.new ?? 0} accent="#b45309" />
@@ -124,7 +170,7 @@ export function InquiryListTab({ token, onOpenDetail, onOpenQuote, onRegister, r
         <StatCard label="견적없이 종결" value={s?.closedNoQuote ?? 0} accent="#6b7280" />
       </div>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
-        <StatCard label="오늘 미처리" value={s?.unresolvedToday ?? 0} highlight={(s?.unresolvedToday ?? 0) > 0} />
+        <StatCard label={period === 'today' ? '오늘 미처리' : '기간 내 미처리'} value={s?.unresolvedToday ?? 0} highlight={(s?.unresolvedToday ?? 0) > 0} />
         <StatCard label="이월 미처리" value={data?.carryoverCount ?? 0} highlight={(data?.carryoverCount ?? 0) > 0} />
         {selected.size > 0 && <div style={{ alignSelf: 'center', fontSize: 12, color: '#2563eb', fontWeight: 700 }}>선택 {selected.size}건</div>}
       </div>
@@ -134,15 +180,17 @@ export function InquiryListTab({ token, onOpenDetail, onOpenQuote, onRegister, r
         <table className="veritas-read-table vz-sticky" style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1180 }}>
           <thead>
             <tr style={{ background: '#f9fafb' }}>
-              <th style={{ ...th, width: 40 }}></th>
+              <th style={{ ...th, width: 40 }}>
+                <input type="checkbox" checked={allChecked} onChange={toggleAll} disabled={rows.length === 0}
+                  aria-label="현재 목록 전체 선택" data-testid="inquiry-select-all" style={{ width: 15, height: 15, cursor: 'pointer' }} />
+              </th>
               {['등록일시', '접수번호', '회사명', '담당자', '서비스', '언어', '접수경로', '담당PM', '처리상태', '견적상태', '견적번호', '견적발송일시', '종결'].map(h => <th key={h} style={th}>{h}</th>)}
-              {canDelete && <th style={{ ...th, width: 64 }}>관리</th>}
             </tr>
           </thead>
           <tbody>
             {!data || data.rows.length === 0 ? (
-              <tr><td colSpan={canDelete ? 15 : 14} style={{ ...td, textAlign: 'center', color: '#9ca3af', padding: '32px 8px' }}>
-                {loading ? '불러오는 중…' : '해당 일자의 의뢰건이 없습니다.'}
+              <tr><td colSpan={14} style={{ ...td, textAlign: 'center', color: '#9ca3af', padding: '32px 8px' }}>
+                {loading ? '불러오는 중…' : '해당 기간의 의뢰건이 없습니다.'}
               </td></tr>
             ) : data.rows.map(r => {
               const pm = PROCESSING_META[r.processingStatus] ?? PROCESSING_META.new;
@@ -184,23 +232,6 @@ export function InquiryListTab({ token, onOpenDetail, onOpenQuote, onRegister, r
                   </td>
                   <td style={td}>{r.quoteProgress === 'sent' ? (r.quoteIssueDate ? formatDisplayDate(r.quoteIssueDate) : '—') : '—'}</td>
                   <td style={td}>{r.processingStatus === 'closed_no_quote' ? <span style={badge(PROCESSING_META.closed_no_quote)}>종결</span> : '—'}</td>
-                  {canDelete && (
-                    <td style={td} onClick={e => e.stopPropagation()}>
-                      <button type="button" disabled={deletingId === r.id}
-                        onClick={async () => {
-                          if (deletingId != null) return;
-                          setDeletingId(r.id);
-                          try {
-                            const out = await confirmAndDeleteInquiry(token, r.id);
-                            if (out.deleted) { onToast?.(out.message!); await load(); }
-                          } finally { setDeletingId(null); }
-                        }}
-                        data-testid={`inquiry-delete-${r.id}`} aria-label={`${r.inquiryNumber ?? r.id} 의뢰건 삭제`}
-                        style={{ padding: '4px 10px', fontSize: 12, fontWeight: 700, borderRadius: 6, border: '1px solid #fecaca', background: '#fff', color: '#dc2626', cursor: deletingId === r.id ? 'not-allowed' : 'pointer', opacity: deletingId === r.id ? 0.6 : 1 }}>
-                        삭제
-                      </button>
-                    </td>
-                  )}
                 </tr>
               );
             })}

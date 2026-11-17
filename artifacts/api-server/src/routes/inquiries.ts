@@ -79,8 +79,15 @@ router.get("/admin/inquiries", ...adminGuard, async (req, res) => {
         ? sql`SELECT ${dateParam}::date::text AS d`
         : sql`SELECT (now() AT TIME ZONE 'Asia/Seoul')::date::text AS d`,
     )).rows as any;
+    // 조회 기간 시작일(선택) — 미지정이면 기준일 하루(기존 동작), 'all' 이면 기준일 이전 전체.
+    const fromRaw = typeof req.query.from === "string" ? req.query.from : null;
+    const fromAll = fromRaw === "all";
+    const fromDate = fromRaw && /^\d{4}-\d{2}-\d{2}$/.test(fromRaw) && fromRaw <= baseDate ? fromRaw : baseDate;
+    const inRange = fromAll
+      ? sql`${kstDate(inquiriesTable.receivedAt)} <= ${baseDate}`
+      : sql`${kstDate(inquiriesTable.receivedAt)} BETWEEN ${fromDate} AND ${baseDate}`;
 
-    // 조회 대상: 기준일 접수건 + 이월 미처리(기준일 이전 접수 & 미처리)
+    // 조회 대상: 기간(등록일 기준) 접수건 + 이월 미처리(기간 시작일 이전 접수 & 미처리)
     const rows = await db
       .select({
         inq: inquiriesTable,
@@ -100,8 +107,8 @@ router.get("/admin/inquiries", ...adminGuard, async (req, res) => {
       .leftJoin(usersTable, eq(inquiriesTable.assignedPmId, usersTable.id))
       .where(and(
         isNull(inquiriesTable.deletedAt),
-        sql`(${kstDate(inquiriesTable.receivedAt)} = ${baseDate}
-             OR (${kstDate(inquiriesTable.receivedAt)} < ${baseDate}
+        sql`(${inRange}
+             OR (${fromAll ? sql`false` : sql`${kstDate(inquiriesTable.receivedAt)} < ${fromDate}`}
                  AND ${inquiriesTable.quoteId} IS NULL
                  AND ${inquiriesTable.status} <> 'closed_no_quote'))`,
       ))
@@ -122,7 +129,7 @@ router.get("/admin/inquiries", ...adminGuard, async (req, res) => {
         quoteProgress: dq.progress,
         saleConverted: dq.saleConverted,
         processingStatus: deriveProcessing({ status: r.inq.status, quoteId: r.inq.quoteId }, q),
-        isCarryover: r.recvDate !== baseDate,
+        isCarryover: !fromAll && String(r.recvDate) < fromDate,
       };
     });
 
