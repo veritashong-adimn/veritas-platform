@@ -1869,6 +1869,8 @@ export function QuoteEditorWorkspace({
   const [versionReason,  setVersionReason] = useState(initialVersionReason ?? '');
   // 거래처정보 편집(이 견적서 전용) — undefined = 미편집(저장 시 미전달 → 기존값 보존)
   const [customerDisplay, setCustomerDisplay] = useState<CustomerDisplay | null | undefined>(undefined);
+  // 적용 후 견적 저장 전 — '저장 필요' 안내(저장 성공 시 markClean 에서 해제)
+  const [cdPending, setCdPending] = useState(false);
   // 의뢰건 handoff items 가 있으면 견적 항목으로 시드(각 항목을 defaultItem 위에 병합). 없으면 기존 로직 유지.
   const [items,          setItems]         = useState<QuoteItemForm[]>(
     inqPrefill?.items?.length
@@ -1983,7 +1985,7 @@ export function QuoteEditorWorkspace({
     if (baselineSigRef.current === null && !loading) baselineSigRef.current = formSig;
   }, [formSig, loading]);
   // 저장 성공 후 기준선 갱신 → 변경사항 없음 상태로 리셋
-  const markClean = useCallback(() => { baselineSigRef.current = formSigRef.current; }, []);
+  const markClean = useCallback(() => { baselineSigRef.current = formSigRef.current; setCdPending(false); }, []);
   // 미저장 견적(savedQuoteId 없음) 또는 기준선과 서명이 다르면 변경사항 있음
   const hasUnsavedChanges = () =>
     savedQuoteId == null || baselineSigRef.current === null || formSigRef.current !== baselineSigRef.current;
@@ -2681,13 +2683,15 @@ export function QuoteEditorWorkspace({
       if (!res.ok) { onToast('견적서 미리보기에 실패했습니다.'); return; }
       const detail = await res.json();
       if (!detail.items || detail.items.length === 0) { onToast('견적 품목이 없습니다. 품목을 먼저 입력해 주세요.'); return; }
-      setPdfData({ data: buildQuotePdfData(detail), title: title.trim() || detail.title || String(detail.quoteNumber ?? '') });
+      // 거래처정보 편집: '적용'한 값은 저장 전이라도 미리보기에 바로 반영(저장 데이터보다 우선)
+      const withCd = customerDisplay !== undefined ? { ...detail, customerDisplay } : detail;
+      setPdfData({ data: buildQuotePdfData(withCd), title: title.trim() || detail.title || String(detail.quoteNumber ?? '') });
     } catch {
       onToast('견적서 생성 중 오류가 발생했습니다.');
     } finally {
       setPdfLoading(false);
     }
-  }, [savedQuoteId, title, onToast]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [savedQuoteId, title, onToast, customerDisplay]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── 판매전환 실행 ────────────────────────────────────────────────────────
   // 확인창 [판매전환] 클릭 시 호출. 순서: ① 미저장 변경사항 자동 저장 → ② 저장 성공 확인
@@ -2900,7 +2904,7 @@ export function QuoteEditorWorkspace({
             );
           })()}
           <QuoteCustomerDisplayEditor token={token} savedQuoteId={savedQuoteId} companyId={companyId} contactId={contactId}
-            value={customerDisplay} onChange={setCustomerDisplay} />
+            value={customerDisplay} onChange={v => { setCustomerDisplay(v); setCdPending(true); }} pending={cdPending} />
         </div>
       </Card>
 

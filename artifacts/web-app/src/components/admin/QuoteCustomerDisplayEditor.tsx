@@ -22,7 +22,7 @@ type Values = Record<CustomerDisplayKey, string>;
 const EMPTY: Values = { companyName: '', businessNumber: '', representativeName: '', contactName: '', phone: '', email: '', address: '' };
 const t = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
 
-export function QuoteCustomerDisplayEditor({ token, savedQuoteId, companyId, contactId, value, onChange }: {
+export function QuoteCustomerDisplayEditor({ token, savedQuoteId, companyId, contactId, value, onChange, pending = false }: {
   token: string;
   savedQuoteId: number | null;
   companyId: number | null;
@@ -30,6 +30,8 @@ export function QuoteCustomerDisplayEditor({ token, savedQuoteId, companyId, con
   /** undefined = 이번 편집에서 손대지 않음(저장 시 미전달 → 기존값 보존) */
   value: CustomerDisplay | null | undefined;
   onChange: (v: CustomerDisplay) => void;
+  /** 적용 후 견적 저장 전 — '저장 필요' 안내 */
+  pending?: boolean;
 }) {
   const authH = { Authorization: `Bearer ${token}` };
   const [stored, setStored] = useState<CustomerDisplay | null>(null);   // 저장된 편집값(요약 표시용)
@@ -113,6 +115,7 @@ export function QuoteCustomerDisplayEditor({ token, savedQuoteId, companyId, con
         {current && !open && (
           <span data-testid="quote-customer-display-summary" style={{ fontSize: 12, color: '#2563eb', fontWeight: 600 }}>
             이 견적서 전용 수신처 적용{hiddenLabels.length ? ` · 숨김: ${hiddenLabels.join(', ')}` : ''}
+            {pending && <span data-testid="quote-customer-display-pending" style={{ marginLeft: 8, color: '#b45309', fontWeight: 700 }}>· 저장 필요</span>}
           </span>
         )}
       </div>
