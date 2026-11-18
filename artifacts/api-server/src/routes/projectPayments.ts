@@ -52,6 +52,7 @@ export async function loadPaymentRecords(projectId: number) {
 }
 // drizzle(camelCase) → fxBilling 입력(snake)
 export const fxBill = (r: any) => ({ id: r.id, amount: r.amount, billing_currency: r.billingCurrency, foreign_amount: r.foreignAmount, invoice_fx_rate: r.invoiceFxRate, invoice_fx_date: r.invoiceFxDate });
+const isCardMethod = (m?: string | null) => ["카드", "신용카드", "card"].includes(String(m ?? "").trim());
 export const fxTxn = (t: any) => ({ txn_type: t.txnType, currency: t.currency, foreign_amount: t.foreignAmount, fx_rate: t.fxRate, krw_amount: t.krwAmount, fee_amount: t.feeAmount, offset_source_payment_id: t.offsetSourcePaymentId, paid_date: t.paidDate });
 
 // 청구업체 표시명 결정(회차 1건) — 사용자가 저장한 청구업체를 판매 거래처/Master 이름으로 덮어쓰지 않는다.
@@ -356,7 +357,12 @@ router.put("/admin/project-payments/:paymentId/transactions", ...adminGuard, req
         const values = {
           paidDate: r.paidDate || null,
           method: fx ? (r.txnType === "offset" ? "상계" : (r.method || "외화송금")) : (r.method ?? null),
-          customerPaidAmount: fx ? String(fx.paid) : String(r.customerPaidAmount ?? 0),
+          // 카드결제(실제 입금액 + 카드사 수수료가 함께 입력된 거래): 고객결제액 = 실제 입금액 + 수수료(원 단위).
+          //  → 미수금 = 청구금액 − 실제 입금액 − 수수료. 수수료는 fee_amount 로 별도 보관(매출·할인 아님). 그 외 결제방법은 기존 그대로.
+          customerPaidAmount: fx ? String(fx.paid)
+            : (isCardMethod(r.method) && r.settledAmount != null && r.feeAmount != null
+                ? String(Math.round(Number(r.settledAmount)) + Math.round(Number(r.feeAmount)))
+                : String(r.customerPaidAmount ?? 0)),
           settledAmount: num(r.settledAmount),
           feeAmount: num(r.feeAmount),
           currency: r.currency || "KRW",
