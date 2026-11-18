@@ -172,6 +172,30 @@ export function buildRestorePlan(a: LegacyAnalysis): RestorePlan {
   return { convention, deposits: [...deposits, ...a.deposits.map(depFromAi)], items };
 }
 
+// ─── 이미 원장에 올라간 같은 내역 찾기(중복 계산 방지) ─────────────────────────────
+//  같은 거래처 선입금 계정에 예약/확정 원장 행이 있는 차감 견적 중, PDF 항목 파일명의 과반(3건 이상)이
+//  그 견적 품목(memo '파일: …')에 있으면 같은 내역으로 본다. excludeQuoteId(지금 편집 중인 견적)는 제외.
+export async function findExistingRestore(companyId: number, a: LegacyAnalysis, excludeQuoteId: number | null, dbh: any = db) {
+  const names = [...new Set(a.items.map(it => String(it.fileName ?? "").trim()).filter(x => x.length >= 4))];
+  if (names.length < 3) return null;
+  const quotes = (await dbh.execute(sql`SELECT DISTINCT q.id, q.quote_number, q.status FROM prepaid_ledger l
+      JOIN prepaid_accounts ac ON ac.id = l.account_id JOIN quotes q ON q.id = l.quote_id
+     WHERE ac.company_id = ${companyId} AND l.status IN ('reserved','confirmed') AND q.deleted_at IS NULL
+       AND (${excludeQuoteId}::int IS NULL OR q.id <> ${excludeQuoteId}::int)`)).rows as any[];
+  for (const q of quotes) {
+    const memos = ((await dbh.execute(sql`SELECT coalesce(memo,'') AS m FROM quote_items WHERE quote_id = ${q.id}`)).rows as any[]).map(r => String(r.m));
+    const hit = names.filter(nm => memos.some(m => m.includes(nm))).length;
+    if (hit >= 3 && hit * 2 >= names.length) {
+      const led = ((await dbh.execute(sql`SELECT type, status, amount::text AS amount FROM prepaid_ledger WHERE quote_id = ${q.id} AND status IN ('reserved','confirmed')`)).rows as any[]);
+      const inflow = led.filter(r => r.type !== "deduction" && r.type !== "refund").reduce((s, r) => s + Number(r.amount), 0);
+      const deduction = led.filter(r => r.type === "deduction" || r.type === "refund").reduce((s, r) => s + Number(r.amount), 0);
+      return { quoteId: Number(q.id), quoteNumber: q.quote_number as string | null, quoteStatus: q.status as string,
+        ledgerStatus: led.some(r => r.status === "confirmed") ? "confirmed" : "reserved", inflow, deduction, matched: hit, total: names.length };
+    }
+  }
+  return null;
+}
+
 // 원본 대조 — 차감내역(항목별 수량×단가, 항목별 부가세 10% 반올림 = 플랫폼 계산과 동일) + 선입금(공급가·부가세) = PDF 공급가액·부가세·합계
 export function calcAnalysisTotals(a: LegacyAnalysis) {
   let itemSupply = 0, itemVat = 0;
@@ -298,6 +322,10 @@ router.post("/admin/quotes/legacy-deduction/analyze", ...adminGuard, upload.sing
       }
     }
 
+    const editingQuoteId = Number(req.body?.quoteId) > 0 ? Number(req.body.quoteId) : null;
+    const existingRestore = company ? await findExistingRestore(company.id, analysis, editingQuoteId) : null;
+    if (existingRestore) flags.unshift(`이 PDF 내역은 이미 견적 ${existingRestore.quoteNumber ?? `#${existingRestore.quoteId}`}에 선입금 원장(${existingRestore.ledgerStatus === "confirmed" ? "확정" : "예약"})으로 올라가 있습니다 — 새 견적으로 다시 저장하면 같은 거래가 두 번 계산됩니다. 그 견적을 열어 확인·수정하세요.`);
+
     let fileKey: string | null = null;
     if (isR2Configured()) {
       fileKey = `legacy-deduction/${sha256}.pdf`;
@@ -305,7 +333,7 @@ router.post("/admin/quotes/legacy-deduction/analyze", ...adminGuard, upload.sing
     } else flags.push("파일 저장소(R2)가 설정되지 않아 원본 PDF를 보관하지 못합니다.");
 
     res.json({
-      analysis, plan, flags, company, contact, depositMatches,
+      analysis, plan, flags, company, contact, depositMatches, existingRestore,
       priorRestores: prior.map(p => ({ quoteId: p.quote_id, quoteNumber: p.quote_number })),
       source: { fileKey, fileName, sha256, pages: images.length || null },
     });
@@ -331,6 +359,16 @@ router.post("/admin/quotes/:id/legacy-restore", ...adminGuard, requireStaffPermi
   if (Number(q.price) < 0) {
     res.status(409).json({ code: "NEGATIVE_TOTAL", error: `차감내역 합계가 음수(${Math.round(Number(q.price)).toLocaleString("ko-KR")}원)라 선입금 원장에 반영하지 않았습니다(견적은 저장됨). 원장 반영 방식 확정 후 다시 저장하세요.` });
     return;
+  }
+  // 같은 PDF 내역이 이미 다른 견적으로 원장에 올라가 있으면 반영하지 않는다(중복 계산 방지 — 그 견적에서 처리).
+  if (body.analysis && Array.isArray(body.analysis.items)) {
+    const comp = (await db.execute(sql`SELECT p.company_id FROM quotes q JOIN projects p ON p.id = q.project_id WHERE q.id = ${quoteId}`)).rows as any[];
+    const cid = Number(comp[0]?.company_id) || null;
+    const dup = cid ? await findExistingRestore(cid, body.analysis as LegacyAnalysis, quoteId) : null;
+    if (dup) {
+      res.status(409).json({ code: "ALREADY_RESTORED", error: `같은 내역이 이미 견적 ${dup.quoteNumber ?? `#${dup.quoteId}`}에 선입금 원장(${dup.ledgerStatus === "confirmed" ? "확정" : "예약"})으로 올라가 있어 반영하지 않았습니다(견적은 저장됨). 기존 견적에서 확인·수정하세요.` });
+      return;
+    }
   }
   try {
     const out = await db.transaction(async tx => {

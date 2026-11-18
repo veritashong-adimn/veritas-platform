@@ -27,6 +27,8 @@ export type LegacyAnalyzeResult = {
   company: { id: number; name: string } | null; contact: { id: number; name: string } | null;
   depositMatches: Array<{ index: number; ledgerId: number; status: string; date: string | null; quoteId: number | null }>;
   priorRestores: Array<{ quoteId: number; quoteNumber: string | null }>;
+  // 같은 거래처의 다른 차감 견적에 같은 내역(파일명 과반 일치)이 이미 원장(예약/확정)에 있음 → 새로 채우지 않음(중복 계산 방지)
+  existingRestore: { quoteId: number; quoteNumber: string | null; quoteStatus: string; ledgerStatus: 'reserved' | 'confirmed'; inflow: number; deduction: number; matched: number; total: number } | null;
   source: { fileKey: string | null; fileName: string; sha256: string; pages: number | null };
 };
 export type LegacyRestoreInfo = { fileKey?: string | null; fileName?: string | null; flags?: string[]; result?: string; restoredAt?: string; restoredBy?: string | null; useExisting?: boolean; excludedLedgerIds?: number[] } | null;
@@ -80,6 +82,7 @@ export function LegacyDeductionImport({ token, savedQuoteId, pending, saved, dis
   const [busy, setBusy] = useState(false);
   const [showDrop, setShowDrop] = useState(false);   // 버튼 클릭 → 업로드 영역(드래그 놓기 · 클릭 선택)
   const [dragOver, setDragOver] = useState(false);
+  const [blocked, setBlocked] = useState<LegacyAnalyzeResult | null>(null);   // 이미 다른 견적으로 원장에 있는 내역
   const MAX_MB = 20;                                 // 서버 업로드 제한과 동일
   const pick = (f: File | undefined) => {
     if (!f) return;
@@ -92,11 +95,14 @@ export function LegacyDeductionImport({ token, savedQuoteId, pending, saved, dis
     setBusy(true);
     try {
       const fd = new FormData(); fd.append('file', f);
+      if (savedQuoteId != null) fd.append('quoteId', String(savedQuoteId));   // 지금 편집 중인 견적은 중복 비교에서 제외
       const res = await fetch(api('/api/admin/quotes/legacy-deduction/analyze'), { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) { onToast(d.error ?? `분석 실패(${res.status})`); return; }
-      onAnalyzed(d as LegacyAnalyzeResult);
       setShowDrop(false);
+      if ((d as LegacyAnalyzeResult).existingRestore) { setBlocked(d as LegacyAnalyzeResult); return; }   // 입력칸에 채우지 않음
+      setBlocked(null);
+      onAnalyzed(d as LegacyAnalyzeResult);
     } catch { onToast('AI 분석 중 오류가 발생했습니다.'); }
     finally { setBusy(false); if (fileRef.current) fileRef.current.value = ''; }
   };
@@ -136,6 +142,18 @@ export function LegacyDeductionImport({ token, savedQuoteId, pending, saved, dis
           {busy ? 'AI 분석 중… 잠시 기다려 주세요.' : <>과거 차감견적서 <b>PDF를 여기로 끌어다 놓거나</b> 클릭해 선택하세요 · PDF만 · 최대 {MAX_MB}MB</>}
         </div>
       )}
+
+      {blocked?.existingRestore && (() => {
+        const e = blocked.existingRestore;
+        return (
+          <div style={{ ...box, background: '#fef2f2', border: '1px solid #fecaca' }} data-testid="legacy-deduction-already">
+            <b style={{ color: C.danger }}>이미 원장에 반영된 내역입니다 — 입력칸에 채우지 않았습니다.</b>
+            <div>{blocked.source.fileName}의 차감 항목 {e.total}건 중 {e.matched}건이 견적 <b>{e.quoteNumber ?? `#${e.quoteId}`}</b>에 있고,
+              그 견적의 선입금 원장({e.ledgerStatus === 'confirmed' ? '확정' : '예약'})에 입금 {won(e.inflow)} · 차감 {won(e.deduction)}이 올라가 있습니다.</div>
+            <div style={{ color: C.textSecondary }}>새 견적으로 다시 저장하면 같은 거래가 두 번 계산됩니다. 견적 목록에서 {e.quoteNumber ?? `#${e.quoteId}`}를 열어 확인·수정하세요(그 견적 안에서 다시 불러오면 같은 원장 행을 갱신합니다).</div>
+          </div>
+        );
+      })()}
 
       {pending && (
         <div style={{ ...box, background: '#eff6ff', border: '1px solid #bfdbfe' }} data-testid="legacy-deduction-pending">
