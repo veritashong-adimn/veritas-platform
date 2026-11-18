@@ -15,7 +15,7 @@ import { requireAuth, requireRole, requireStaffPermission } from "../middlewares
 import { extractText } from "../lib/textExtractor";
 import { uploadToR2, getR2ObjectBuffer, isR2Configured } from "../lib/r2";
 import { logEvent } from "../lib/logEvent";
-import { confirmApprovedQuoteReservations, isPrepaidDeductionQuoteType } from "../services/prepaidDeductionQuote";
+import { confirmApprovedQuoteReservations, isPrepaidDeductionQuoteType, independentSnapshot } from "../services/prepaidDeductionQuote";
 
 const router = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -350,7 +350,7 @@ router.post("/admin/quotes/legacy-deduction/analyze", ...adminGuard, upload.sing
 router.post("/admin/quotes/:id/legacy-restore", ...adminGuard, requireStaffPermission("prepaid.manage"), async (req, res) => {
   const quoteId = Number(req.params.id);
   if (!Number.isInteger(quoteId) || quoteId <= 0) { res.status(400).json({ error: "유효하지 않은 견적 ID" }); return; }
-  const body = (req.body ?? {}) as { source?: any; analysis?: any; flags?: string[]; useExisting?: boolean; allowDuplicate?: boolean };
+  const body = (req.body ?? {}) as { source?: any; analysis?: any; flags?: string[]; useExisting?: boolean; allowDuplicate?: boolean; prepaidLines?: any[] };
   const user = (req as any).user as { id: number; email: string; role: string } | undefined;
   const [q] = await db.select({ id: quotesTable.id, quoteType: quotesTable.quoteType, price: quotesTable.price }).from(quotesTable).where(eq(quotesTable.id, quoteId));
   if (!q) { res.status(404).json({ error: "견적을 찾을 수 없습니다." }); return; }
@@ -361,12 +361,27 @@ router.post("/admin/quotes/:id/legacy-restore", ...adminGuard, requireStaffPermi
     return;
   }
   // 같은 PDF 내역이 이미 다른 견적으로 원장에 올라가 있으면 반영하지 않는다(중복 계산 방지 — 그 견적에서 처리).
+  // 같은 거래가 이미 다른 견적으로 원장에 있으면: 이 견적은 '원장 미반영(견적서만)' — 원장 행을 만들지 않고(중복 방지)
+  //  견적서 단독 금액(이전 0 · 선입금 − 차감)만 저장. 선입금 줄은 이력에 보존(재조회 표시용). 기존 견적·원장은 건드리지 않음.
   if (body.analysis && Array.isArray(body.analysis.items)) {
     const comp = (await db.execute(sql`SELECT p.company_id FROM quotes q JOIN projects p ON p.id = q.project_id WHERE q.id = ${quoteId}`)).rows as any[];
     const cid = Number(comp[0]?.company_id) || null;
     const dup = cid ? await findExistingRestore(cid, body.analysis as LegacyAnalysis, quoteId) : null;
     if (dup) {
-      res.status(409).json({ code: "ALREADY_RESTORED", error: `같은 내역이 이미 견적 ${dup.quoteNumber ?? `#${dup.quoteId}`}에 선입금 원장(${dup.ledgerStatus === "confirmed" ? "확정" : "예약"})으로 올라가 있어 반영하지 않았습니다(견적은 저장됨). 기존 견적에서 확인·수정하세요.` });
+      const lines = Array.isArray(body.prepaidLines) ? body.prepaidLines : [];
+      const sum = independentSnapshot(lines, Number(q.price));
+      await db.transaction(async tx => {
+        await tx.delete(prepaidLedgerTable).where(and(eq(prepaidLedgerTable.quoteId, quoteId), eq(prepaidLedgerTable.status, "reserved")));
+        await tx.update(quotesTable).set({ prepaidBalanceBefore: "0", prepaidUsageAmount: String(sum.appliedDeduction), prepaidBalanceAfter: String(sum.remainingAfter) })
+          .where(eq(quotesTable.id, quoteId));
+      });
+      await logEvent("quote", quoteId, LOG_ACTION, req.log, user ?? undefined, JSON.stringify({
+        fileKey: body.source?.fileKey ?? null, fileName: body.source?.fileName ?? null, sha256: body.source?.sha256 ?? null,
+        analysis: body.analysis ?? null, flags: Array.isArray(body.flags) ? body.flags : [],
+        result: "ledger_skipped", existing: dup, prepaidLines: lines,
+        balanceBefore: 0, usageAmount: sum.appliedDeduction, balanceAfter: sum.remainingAfter,
+      }));
+      res.json({ ok: true, result: "ledger_skipped", existing: dup, balanceBefore: 0, usageAmount: sum.appliedDeduction, balanceAfter: sum.remainingAfter });
       return;
     }
   }

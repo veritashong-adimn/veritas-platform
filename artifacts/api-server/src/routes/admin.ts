@@ -32,6 +32,9 @@ import adminNotesRouter from "./admin/notes";
 import {
   isPrepaidDeductionQuoteType,
   syncQuoteReservations,
+  getLegacyLedgerSkip,
+  independentSnapshot,
+  LEGACY_RESTORE_ACTION,
   confirmQuoteReservations,
   revertQuoteReservationsToReserved,
   releaseQuoteReservations,
@@ -3714,7 +3717,20 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
       }
 
       // ── 차감 견적서: 선입/이월 + 차감 예약 재동기화 ───────────────────────────
-      if (isPrepaidDeductionQuoteType(quoteType ?? "b2b_standard")) {
+      //  과거 견적서 복원 중 '원장 미반영(견적서만)' 견적: 원장 행을 만들지 않고(같은 거래 중복 방지) 견적서 단독 금액만 저장.
+      const ledgerSkip = isPrepaidDeductionQuoteType(quoteType ?? "b2b_standard") ? await getLegacyLedgerSkip(tx, quoteId) : null;
+      if (ledgerSkip) {
+        await tx.delete(prepaidLedgerTable).where(and(eq(prepaidLedgerTable.quoteId, quoteId), eq(prepaidLedgerTable.status, "reserved")));
+        const lines = Array.isArray(prepaidLines) ? prepaidLines : (ledgerSkip.prepaidLines ?? []);
+        const sum = independentSnapshot(lines, totalPrice);
+        await tx.update(quotesTable).set({ prepaidBalanceBefore: "0", prepaidUsageAmount: String(sum.appliedDeduction), prepaidBalanceAfter: String(sum.remainingAfter) })
+          .where(eq(quotesTable.id, quoteId));
+        if (Array.isArray(prepaidLines)) {
+          const u = (req as any).user as { id?: number; email?: string } | undefined;
+          await tx.insert(logsTable).values({ entityType: "quote", entityId: quoteId, action: LEGACY_RESTORE_ACTION, performedBy: u?.id ?? null, performedByEmail: u?.email ?? null,
+            metadata: JSON.stringify({ ...ledgerSkip, prepaidLines }) });
+        }
+      } else if (isPrepaidDeductionQuoteType(quoteType ?? "b2b_standard")) {
         const [q] = await tx.select({ projectId: quotesTable.projectId }).from(quotesTable).where(eq(quotesTable.id, quoteId));
         let resolvedCompanyId: number | null = companyId ?? null;
         const resolvedProjectId: number | null = q?.projectId ?? null;

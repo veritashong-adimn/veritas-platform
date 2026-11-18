@@ -835,3 +835,18 @@ export async function getLinkedAmountByAccount(dbh: Db, accountIds: number[]): P
   for (const r of rows) out.set(r.account_id, Number(r.s));
   return out;
 }
+
+// ─── 과거 견적서 복원 — '원장 미반영(견적서만)' 견적 ─────────────────────────────────
+//  같은 선입금·차감 거래가 이미 다른 견적으로 원장에 있을 때, 복원 견적서는 문서로만 저장하고 원장 행을 만들지 않는다.
+//  표시·PDF 용 선입금 줄은 견적 이력(logs, action=legacy_deduction_restore)의 prepaidLines 로 보존한다(스키마 변경 없음).
+export const LEGACY_RESTORE_ACTION = "legacy_deduction_restore";
+export async function getLegacyLedgerSkip(dbh: Db, quoteId: number): Promise<any | null> {
+  const rows = (await dbh.execute(sql`SELECT metadata FROM logs WHERE entity_type = 'quote' AND entity_id = ${quoteId}
+    AND action = ${LEGACY_RESTORE_ACTION} ORDER BY id DESC LIMIT 1`)).rows as any[];
+  if (!rows.length) return null;
+  try { const m = JSON.parse(rows[0].metadata ?? "{}"); return m?.result === "ledger_skipped" ? m : null; } catch { return null; }
+}
+// 견적서 단독 계산(거래처 원장 잔액 미합산): 이전 0 · 차감 = min(선입금, 견적금액) · 잔액 = 선입금 − 차감
+export function independentSnapshot(lines: Array<{ amount?: unknown }> | null | undefined, quoteTotal: number) {
+  return computeDeductionSummary({ previousAvailable: 0, incomingPrepaid: (lines ?? []).reduce((s: number, l) => s + Math.max(0, Number(l?.amount) || 0), 0), quoteTotal });
+}

@@ -2242,6 +2242,11 @@ export function QuoteEditorWorkspace({
       const r = await fetch(api(`/api/admin/quotes/${qid}/legacy-restore`), { headers: authH });
       const d = r.ok ? await r.json() : null;
       setLegacySaved(d?.restore ?? null);
+      // 원장 미반영(견적서만) 견적 — 원장 행이 없으므로 이력에 보존한 선입금 줄로 복원
+      if (d?.restore?.result === 'ledger_skipped' && Array.isArray(d.restore.prepaidLines) && d.restore.prepaidLines.length) {
+        setPrepaidLines(d.restore.prepaidLines.map((l: any) => ({ type: l.type === 'carryover' ? 'carryover' : 'deposit', amount: String(l.amount ?? ''),
+          transactionDate: l.transactionDate ?? '', sourceRef: l.sourceRef ?? '', note: l.note ?? '' })));
+      }
     } catch { /* 표시용 — 실패해도 편집 영향 없음 */ }
   }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (isPrepaidQuote && savedQuoteId != null) void loadLegacySaved(savedQuoteId); else setLegacySaved(null); }, [isPrepaidQuote, savedQuoteId, loadLegacySaved]);
@@ -2279,7 +2284,7 @@ export function QuoteEditorWorkspace({
     const post = async (extra: Record<string, unknown>) => {
       const res = await fetch(api(`/api/admin/quotes/${qid}/legacy-restore`), {
         method: 'POST', headers: { ...authH, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source: legacyPending.source, analysis: legacyPending.analysis, flags: legacyPending.flags, ...extra }),
+        body: JSON.stringify({ source: legacyPending.source, analysis: legacyPending.analysis, flags: legacyPending.flags, prepaidLines: prepaidLinesToApi(prepaidLines), ...extra }),
       });
       return { res, d: await res.json().catch(() => ({})) as any };
     };
@@ -2302,6 +2307,12 @@ export function QuoteEditorWorkspace({
     }
     setLegacyPending(null);
     void loadLegacySaved(qid);
+    if (d.result === 'ledger_skipped') {
+      const e = d.existing ?? {};
+      await alertDialog({ title: '견적서만 저장(원장 미반영)',
+        message: `같은 선입금·차감 거래가 이미 견적 ${e.quoteNumber ?? `#${e.quoteId}`}로 선입금 원장에 있어, 이 견적서는 원장에 반영하지 않고 견적서 금액만 저장했습니다(중복 방지 · 기존 견적은 그대로).\n이 견적서: 선입금 ${Math.round(sumPrepaidLines(prepaidLines)).toLocaleString()}원 · 차감 ${Math.round(d.usageAmount ?? 0).toLocaleString()}원 · 잔액 ${Math.round(d.balanceAfter ?? 0).toLocaleString()}원` });
+      return true;
+    }
     onToast(d.result === 'confirmed' ? `선입금 원장에 반영했습니다(차감 ${Math.round(d.usageAmount ?? 0).toLocaleString()}원 · 잔액 ${Math.round(d.balanceAfter ?? 0).toLocaleString()}원).` : '원장 반영할 예약 내역이 없습니다.');
     return true;
   };
@@ -2475,7 +2486,7 @@ export function QuoteEditorWorkspace({
           onToast(`견적 수정 실패: ${msg}`); return null;
         }
         // 저장 결과 검증 — 성공 응답만 믿지 않고 서버 확정값을 다시 읽어 보낸 값과 비교한다(불일치면 성공 처리 안 함).
-        const mismatch = await verifySavedQuote(savedQuoteId, itemsBody, isPrepaidQuote ? prepaidLinesToApi(prepaidLines) : null);
+        const mismatch = await verifySavedQuote(savedQuoteId, itemsBody, isPrepaidQuote && legacySaved?.result !== 'ledger_skipped' ? prepaidLinesToApi(prepaidLines) : null);
         if (mismatch) {
           await alertDialog({ title: '저장 결과 확인 필요', message: `저장 요청은 처리됐지만 DB에 저장된 값이 입력값과 다릅니다.\n${mismatch}\n화면을 닫지 말고 값을 확인한 뒤 다시 저장하거나 관리자에게 알려 주세요.`, variant: 'warning' });
           return null;
@@ -2554,7 +2565,7 @@ export function QuoteEditorWorkspace({
     // 과거 견적서 복원: 원장 반영 전 필수 확인 — 거래처, 선입금 입금일(PDF에 없으면 직접 입력. 임의 날짜 생성 금지)
     if (legacyPending) {
       if (companyId == null) { onToast('거래처를 선택해야 선입금 원장에 반영할 수 있습니다.'); return; }
-      if (prepaidLines.some(l => Number(String(l.amount).replace(/,/g, '')) > 0 && !l.transactionDate)) { onToast('입금일이 없는 선입금이 있습니다 — 확인된 날짜를 입력하세요.'); return; }
+      if (!legacyPending.existingRestore && prepaidLines.some(l => Number(String(l.amount).replace(/,/g, '')) > 0 && !l.transactionDate)) { onToast('입금일이 없는 선입금이 있습니다 — 확인된 날짜를 입력하세요.'); return; }
       const diffs = legacyDiffs(legacyPending, { ...totals, deposit: sumPrepaidLines(prepaidLines) });
       if (diffs.length && !(await confirmDialog({ title: '원본 PDF와 다른 값', confirmLabel: '확인 후 저장', cancelLabel: '취소', variant: 'warning',
         message: `${diffs.map(d => `· ${d}`).join('\n')}\n\n입력값 기준으로 저장하고 선입금 원장에 반영합니다.` }))) return;
@@ -3035,7 +3046,7 @@ export function QuoteEditorWorkspace({
       {/* ── B-1. 차감 견적서 전용: 차감 잔액 요약 (차감 사용내역 아래) ───────────── */}
       {isPrepaidQuote && (
         <PrepaidSummarySection
-          previousAvailable={prevAvailable}
+          previousAvailable={legacyPending || legacySaved ? 0 : prevAvailable}
           incomingPrepaid={sumPrepaidLines(prepaidLines)}
           quoteTotal={totals.total}
           loadingBalance={balanceLoading}
