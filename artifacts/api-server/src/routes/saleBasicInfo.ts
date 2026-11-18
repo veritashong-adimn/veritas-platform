@@ -13,6 +13,7 @@
 //     quotes(견적서명·견적일·수신자 고정값), 그리고 명시 선택 시 contacts 뿐이다.
 //   · 변경 전후·사유·Master 동시 수정 여부는 logs 에 같은 트랜잭션으로 남긴다.
 //   · 판매일: 운영 판매의 판매일은 별도 저장 칸이 없고 견적일(quotes.issue_date)을 그대로 쓴다 — 견적일 수정이 곧 판매일 수정이다.
+import { comparePhones, normEmail } from "../services/contactCompare";
 import { Router, type IRouter } from "express";
 import { sql } from "drizzle-orm";
 import { db, logsTable } from "@workspace/db";
@@ -89,13 +90,14 @@ async function buildView(dbx: any, projectId: number) {
   // 이 판매건(견적 출력) 값과 현재 담당자 Master 값의 차이 — 표시만, 자동 반영 없음
   const diffs: Array<{ field: string; label: string; sale: string | null; master: string | null }> = [];
   if (master && !master.deletedAt) {
-    const pairs: Array<[string, string, string | null, string | null]> = [
-      ["mobile", "휴대전화", cur.mobile, nz(master.mobile)],
-      ["phone", "일반전화", cur.phone, nz(master.phone ?? (master.mobile ? null : master.officePhone))],
-      ["email", "이메일", cur.email, nz(master.email)],
-    ];
-    const norm = (f: string, v: string | null) => (v == null ? "" : f === "email" ? v.toLowerCase() : v.replace(/\D/g, ""));
-    for (const [f, l, a, b] of pairs) if (norm(f, a) !== norm(f, b)) diffs.push({ field: f, label: l, sale: a, master: b });
+    // 전화(휴대·일반)는 칸이 아니라 실제 번호 집합으로 비교(services/contactCompare) — 저장 위치만 다르면 차이 아님.
+    //  실제로 다른 번호가 있을 때만 두 칸을 함께 보여 준다. 이메일은 앞뒤 공백·대소문자 무시.
+    const masterPhone = nz(master.phone ?? (master.mobile ? null : master.officePhone));
+    if (!comparePhones([cur.mobile, cur.phone], [master.mobile, masterPhone]).same) {
+      diffs.push({ field: "mobile", label: "휴대전화", sale: cur.mobile, master: nz(master.mobile) });
+      diffs.push({ field: "phone", label: "일반전화", sale: cur.phone, master: masterPhone });
+    }
+    if (normEmail(cur.email) !== normEmail(master.email)) diffs.push({ field: "email", label: "이메일", sale: cur.email, master: nz(master.email) });
   }
   return {
     projectId, saleNo: sale.p.saleNo ?? null, status: sale.p.status,

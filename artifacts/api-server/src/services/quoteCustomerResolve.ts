@@ -21,6 +21,7 @@
  *   · 없음 → create(이름 + 이메일 또는 휴대폰이 있을 때만) / 정보 부족 → none(스냅샷만 보존)
  * 기존 Master 는 수정하지 않는다.
  */
+import { phoneSet, phonesIntersect } from "./contactCompare";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { db, companiesTable, contactsTable, inquiriesTable } from "@workspace/db";
 
@@ -116,10 +117,12 @@ export async function planCustomer(dbx: Dbx, inq: InquiryRow, choice: CustomerCh
   else if (!companyKnown) plan.contact = { action: "none", reason: "거래처가 정해지지 않아 담당자를 연결·등록하지 않음", candidates: [] };
   else {
     const email = normEmail(snapshot.customerContactEmail), mobile = digits(snapshot.customerContactMobile), name = normName(snapshot.customerContactName);
-    const inCompany = coId ? await dbx.select({ id: contactsTable.id, name: contactsTable.name, email: contactsTable.email, mobile: contactsTable.mobile, position: contactsTable.position })
+    const inCompany = coId ? await dbx.select({ id: contactsTable.id, name: contactsTable.name, email: contactsTable.email, mobile: contactsTable.mobile, phone: contactsTable.phone, officePhone: contactsTable.officePhone, position: contactsTable.position })
       .from(contactsTable).where(and(eq(contactsTable.companyId, coId), isNull(contactsTable.deletedAt))) : [];
     const byEmail = email ? inCompany.filter(c => normEmail(c.email) === email) : [];
-    const byMobile = mobile ? inCompany.filter(c => digits(c.mobile) === mobile) : [];
+    // 연락처 일치 — 일반·휴대 저장 위치가 달라도 같은 실제 번호면 일치(services/contactCompare, +82·하이픈 무시)
+    const snapPhones = [snapshot.customerContactMobile, snapshot.customerContactPhone];
+    const byMobile = phoneSet(snapPhones).size ? inCompany.filter(c => phonesIntersect(snapPhones, [c.mobile, c.phone, c.officePhone])) : [];
     const byName = name ? inCompany.filter(c => normName(c.name) === name) : [];
     const elsewhere = email ? await dbx.select({ id: contactsTable.id, name: contactsTable.name, companyId: contactsTable.companyId })
       .from(contactsTable).where(and(sql`lower(trim(${contactsTable.email})) = ${email}`, isNull(contactsTable.deletedAt))) : [];

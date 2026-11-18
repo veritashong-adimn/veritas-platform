@@ -45,7 +45,9 @@ const digits = (v: unknown) => String(v ?? "").replace(/\D/g, "");
 /** 전화번호 비교키 — 숫자만, 국제형식 국내번호(82…)는 0… 으로(형식 변환만, 값 생성 없음) */
 export function normPhone(v: unknown): string {
   const d = digits(v);
-  return /^82(1[016789]|[2-6]|70)\d{6,9}$/.test(d) ? "0" + d.slice(2) : d;
+  if (/^82(1[016789]|[2-6]|70)\d{6,9}$/.test(d)) return "0" + d.slice(2);
+  if (/^820\d{8,10}$/.test(d)) return d.slice(2);   // +82 0… 로 적은 경우
+  return d;
 }
 export type PhoneType = "mobile" | "landline" | "rep" | "unknown";
 export function phoneType(d: string): PhoneType {
