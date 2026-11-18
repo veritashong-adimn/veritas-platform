@@ -255,3 +255,31 @@ export function maskForLog(value: string | null | undefined): string | null {
   if (value.length <= 4) return "*".repeat(value.length);
   return `${value.slice(0, 2)}***${value.slice(-2)} (len:${value.length})`;
 }
+
+// PDF 전체 페이지(최대 maxPages)를 PNG 버퍼 배열로 렌더링 — 여러 페이지 표(과거 차감견적서 등) 판독용.
+//   renderPdfFirstPageAsPng 와 같은 모듈·렌더 방식(lazy load). 실패 시 예외.
+export async function renderPdfPagesAsPng(pdfBuffer: Buffer, maxPages = 8, scale = 1.6): Promise<Buffer[]> {
+  const { pdfjsLib, createCanvas } = await loadOcrModules();
+  const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(pdfBuffer), useSystemFonts: true, verbosity: 0 }).promise;
+  const out: Buffer[] = [];
+  try {
+    const n = Math.min(pdf.numPages, maxPages);
+    for (let p = 1; p <= n; p++) {
+      const page = await pdf.getPage(p);
+      const viewport = page.getViewport({ scale });
+      const canvas = createCanvas(Math.round(viewport.width), Math.round(viewport.height));
+      const canvasFactory = {
+        create(width: number, height: number) { const c = createCanvas(width, height); return { canvas: c, context: c.getContext("2d") }; },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        reset(cac: { canvas: any }, width: number, height: number) { cac.canvas.width = width; cac.canvas.height = height; },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        destroy(cac: { canvas: any }) { cac.canvas.width = 0; cac.canvas.height = 0; },
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await page.render({ canvasContext: canvas.getContext("2d") as any, viewport, canvasFactory: canvasFactory as any }).promise;
+      out.push(canvas.toBuffer("image/png"));
+      page.cleanup();
+    }
+  } finally { await pdf.destroy(); }
+  return out;
+}

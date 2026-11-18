@@ -600,7 +600,7 @@ export async function getPendingByAccount(dbh: Db, accountIds: number[]): Promis
 //  · 계정을 먼저 잠근 뒤 예약 라인을 다시 읽는다 → 동시 실행돼도 두 번 확정되지 않는다.
 //  · 같은 계정에 금액·발생일이 같은 확정 입금이 이미 있으면(수동 입금 등) 중복 의심으로 멈춘다(allowDuplicate 로만 진행).
 export async function confirmApprovedQuoteReservations(
-  tx: Db, quoteId: number, opts: { allowDuplicate?: boolean; actorId?: number | null } = {},
+  tx: Db, quoteId: number, opts: { allowDuplicate?: boolean; actorId?: number | null; legacyRestore?: boolean } = {},
 ): Promise<
   | { result: "confirmed"; accountId: number; balanceBefore: number; usageAmount: number; balanceAfter: number; inflow: number }
   | { result: "nothing" }
@@ -613,7 +613,8 @@ export async function confirmApprovedQuoteReservations(
   if (!q) return { result: "not_allowed", reason: "견적을 찾을 수 없습니다." };
   if (!isPrepaidDeductionQuoteType(q.quoteType)) return { result: "not_allowed", reason: "차감 견적서가 아닙니다." };
   if (q.deletedAt != null || q.isCurrent === false) return { result: "not_allowed", reason: "삭제되었거나 대체된 견적입니다." };
-  if (q.status !== "approved") return { result: "not_allowed", reason: "판매확정되지 않은 견적입니다 — 판매전환 시 자동으로 확정됩니다." };
+  // 과거 CRM 차감견적서 복원(legacyRestore) — 이미 끝난 과거 거래이므로 판매전환 없이 저장 시 확정한다(중복 검사는 동일 적용).
+  if (q.status !== "approved" && !opts.legacyRestore) return { result: "not_allowed", reason: "판매확정되지 않은 견적입니다 — 판매전환 시 자동으로 확정됩니다." };
 
   const first = await tx.select({ accountId: prepaidLedgerTable.accountId }).from(prepaidLedgerTable)
     .where(and(eq(prepaidLedgerTable.quoteId, quoteId), eq(prepaidLedgerTable.status, "reserved"))).limit(1);

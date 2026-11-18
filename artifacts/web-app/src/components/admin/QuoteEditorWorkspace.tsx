@@ -30,6 +30,7 @@ import {
 import AiQuoteModal, { type AiDraftRow } from './AiQuoteModal';
 import ComparisonQuoteModal from './ComparisonQuoteModal';
 import { PrepaidLinesSection, PrepaidSummarySection, prepaidLinesToApi, makeEmptyPrepaidLine, sumPrepaidLines, type PrepaidLine } from './PrepaidDeductionSection';
+import { LegacyDeductionImport, legacyDiffs, type LegacyAnalyzeResult, type LegacyRestoreInfo } from './LegacyDeductionImport';
 import { calcInterpretation, interpretationServiceDays, displayUnit, buildQuotePdfData } from '../../lib/quotePdf';
 import { QuoteRecipientRefreshBar } from './QuoteRecipientRefreshBar';
 import { generateQuoteTitle } from '../../lib/quoteTitle';
@@ -1407,8 +1408,9 @@ function ServiceFields({ it, update, products }: {
 
 // ─── 견적 항목 Row ────────────────────────────────────────────────────────────
 
-function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, parentOptions, updateItem, removeItem, addItemBelow, moveItem, duplicateItem, productCreate }: {
+function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, parentOptions, updateItem, removeItem, addItemBelow, moveItem, duplicateItem, productCreate, allowNegativePrice }: {
   it: QuoteItemForm; idx: number; total: number; vatType: VatMode; baseSupply: number; products: Product[];
+  allowNegativePrice?: boolean;   // 차감 견적서 — 과거 차감내역의 음수 단가(정정·환입) 입력 허용
   productCreate?: QuoteProductCreate;
   parentOptions: { lid: string; label: string }[];
   updateItem: (idx: number, p: Partial<QuoteItemForm>) => void;
@@ -1582,7 +1584,7 @@ function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, parentOpt
 
         {/* ⑧ 단가 — 통역은 1인 기준 단가 */}
         <div title={it.productType === 'interpretation' ? '통역사 1인 기준 단가 (공급가액 = 투입인원 × 수량 × 단가)' : undefined}>
-          <NumericInput value={it.unitPrice} onChange={v => updateItem(idx, { unitPrice: v })}
+          <NumericInput value={it.unitPrice} onChange={v => updateItem(idx, { unitPrice: v })} allowNegative={allowNegativePrice}
             placeholder="단가 미입력" suffix="원" ariaLabel={`${idx + 1}행 단가`} testId={`qe-price-${idx}`}
             style={rinp('100%', { textAlign: 'right', ...(it.productName.trim() && isPriceBlank(it.unitPrice) ? { borderColor: '#fcd34d', background: '#fffbeb' } : {}) })} />
         </div>
@@ -1675,8 +1677,9 @@ function CardSectionHeader({ badge, badgeBg, badgeColor, title, hint }: {
 // (Card·CardSectionHeader 는 포함하지 않는다 — 견적='상품정보' / 판매='판매정보' 로 각자 표기)
 /** 상품 검색의 간편등록 연결(견적 편집기만 전달 — 판매관리 수정모드 등은 기존 그대로) */
 type QuoteProductCreate = { canCreate: boolean; onCreate: (idx: number, query: string) => void };
-export function QuoteItemsEditor({ items, onItemsChange, vatType, products, productCreate }: {
+export function QuoteItemsEditor({ items, onItemsChange, vatType, products, productCreate, allowNegativePrice }: {
   items: QuoteItemForm[];
+  allowNegativePrice?: boolean;
   onItemsChange: (items: QuoteItemForm[]) => void;
   vatType: VatMode;
   products: Product[];
@@ -1727,7 +1730,7 @@ export function QuoteItemsEditor({ items, onItemsChange, vatType, products, prod
             <QuoteItemRow key={idx} it={it} idx={idx} total={items.length} vatType={vatType} baseSupply={baseSupply} products={products}
               parentOptions={parentOptions}
               updateItem={updateItem} removeItem={removeItem} addItemBelow={addItemBelow} moveItem={moveItem} duplicateItem={duplicateItem}
-              productCreate={productCreate} />
+              productCreate={productCreate} allowNegativePrice={allowNegativePrice} />
           ))}
         </div>
       </div>
@@ -1946,6 +1949,9 @@ export function QuoteEditorWorkspace({
   // ── 차감 견적서(b2c_prepaid) 전용: 선입/이월 라인 + 이전 가용잔액 ─────────────
   // 기본 1개 행 표시(사용자가 '+ 선입 항목'으로 복수 행 추가). 금액 0 행은 저장 시 무시된다.
   const [prepaidLines,   setPrepaidLines]  = useState<PrepaidLine[]>([makeEmptyPrepaidLine()]);
+  // 과거 CRM 차감견적서 AI 불러오기 — pending: 분석 후 저장 전(입력칸에만 반영) / saved: 저장·원장 반영 후 이력(재조회)
+  const [legacyPending,  setLegacyPending] = useState<LegacyAnalyzeResult | null>(null);
+  const [legacySaved,    setLegacySaved]   = useState<LegacyRestoreInfo>(null);
   const [prevAvailable,  setPrevAvailable] = useState(0);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const isPrepaidQuote = quoteType === 'b2c_prepaid';
@@ -2230,6 +2236,76 @@ export function QuoteEditorWorkspace({
 
   // 항목 행 제어(추가/삭제/이동)는 QuoteItemsEditor 내부에서 onItemsChange 기반으로 처리한다.
 
+  // 과거 견적서 복원 이력(원본 PDF·확인 항목) — 저장된 차감 견적만 조회
+  const loadLegacySaved = useCallback(async (qid: number) => {
+    try {
+      const r = await fetch(api(`/api/admin/quotes/${qid}/legacy-restore`), { headers: authH });
+      const d = r.ok ? await r.json() : null;
+      setLegacySaved(d?.restore ?? null);
+    } catch { /* 표시용 — 실패해도 편집 영향 없음 */ }
+  }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (isPrepaidQuote && savedQuoteId != null) void loadLegacySaved(savedQuoteId); else setLegacySaved(null); }, [isPrepaidQuote, savedQuoteId, loadLegacySaved]);
+
+  // AI 분석 결과 → 기존 입력칸(머리·선입금·차감 내역)에 채움. 화면 상태만 변경(저장 전 DB 미반영).
+  //  · 수량·단가·금액·부호는 PDF 그대로(부가세 환산·할인 행 변환 없음 — 음수 단가 행도 차감 내역 행으로).
+  //  · PDF에 없는 값은 비워 둔다. 수량·단가가 없는 행만 1 × 금액(확인 필요에 표시). 날짜는 PDF 값만.
+  const applyLegacyAnalysis = (r: LegacyAnalyzeResult) => {
+    const a = r.analysis;
+    const SVC: ServiceType[] = ['translation', 'interpretation', 'equipment', 'expense'];
+    // 반영안(plan) 기준 — 잔액형 PDF는 서버가 입금/사용내역으로 변환(원본 값은 비고 '원본: …'에 보존). 금액 계산은 기존 그대로.
+    const conv: QuoteItemForm[] = r.plan.items.map(it => {
+      const t: ServiceType = it.productId != null ? 'translation' : SVC.includes(it.serviceType as ServiceType) ? it.serviceType as ServiceType : 'expense';
+      const hasQP = it.quantity != null && it.unitPrice != null;
+      return { ...defaultItem(), productType: t, productName: it.service, productId: it.productId ?? null,
+        quantity: hasQP ? String(it.quantity) : '1', unit: it.unit ?? '',
+        unitPrice: String(hasQP ? it.unitPrice : it.amount), taxType: 'taxable', memo: it.memo, fileName: it.fileName ?? '' };
+    });
+    if (conv.length) setItems(conv);
+    // 입금일은 PDF에 '입금'으로 확인된 날짜만(발행일은 비고에 보존) — 없으면 비워 두고 사용자가 입력
+    setPrepaidLines(r.plan.deposits.length
+      ? r.plan.deposits.map(d => ({ type: 'deposit' as const, amount: String(d.amount), transactionDate: d.date ?? '', sourceRef: `과거 CRM 견적서 ${r.source.fileName}`, note: d.note }))
+      : [{ ...makeEmptyPrepaidLine(), transactionDate: '' }]);
+    if (a.quoteDate) setIssueDate(a.quoteDate);
+    if (r.company) { setCompanyId(r.company.id); setDivisionId(null); setContactId(r.contact?.id ?? null); }
+    vatTouchedRef.current = true; setVatType('taxable');
+    if (a.title) { setTitle(a.title); setTitleEdited(true); }
+    setLegacyPending(r);
+    onToast(`과거 견적서 분석 결과를 채웠습니다(입금 ${r.plan.deposits.length}건 · 차감 ${r.plan.items.length}행). 확인 후 저장하세요.`);
+  };
+
+  // 저장 후 원장 반영 — 중복 의심이면 '기존 기록 사용' / '신규 복원' 을 사용자가 선택. false = 반영 안 됨(견적은 저장됨).
+  const runLegacyRestore = async (qid: number): Promise<boolean> => {
+    if (!legacyPending) return true;
+    const post = async (extra: Record<string, unknown>) => {
+      const res = await fetch(api(`/api/admin/quotes/${qid}/legacy-restore`), {
+        method: 'POST', headers: { ...authH, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: legacyPending.source, analysis: legacyPending.analysis, flags: legacyPending.flags, ...extra }),
+      });
+      return { res, d: await res.json().catch(() => ({})) as any };
+    };
+    let { res, d } = await post({});
+    if (res.status === 409 && d.code === 'POSSIBLE_DUPLICATE') {
+      const list = (d.matches ?? []).map((m: any) => `· ${m.reason}`).join('\n');
+      const useExisting = await confirmDialog({ title: '기존 기록과 중복 의심', confirmLabel: '기존 기록 사용', cancelLabel: '다른 선택',
+        message: `${list}\n\n같은 입금이면 '기존 기록 사용'(이 견적의 해당 선입금은 새로 만들지 않고 차감만 반영), 다른 입금이면 '다른 선택'을 누르세요.` });
+      if (useExisting) ({ res, d } = await post({ useExisting: true }));
+      else {
+        const fresh = await confirmDialog({ title: '신규 복원 확인', confirmLabel: '신규 복원', cancelLabel: '취소',
+          message: '중복이 아닌 별도 입금으로 선입금 원장에 새로 반영합니다. 취소하면 견적만 저장되고 원장에는 예약 상태로 남습니다(다시 저장하면 재시도).' });
+        if (!fresh) return false;
+        ({ res, d } = await post({ allowDuplicate: true }));
+      }
+    }
+    if (!res.ok) {
+      await alertDialog({ title: '선입금 원장 반영 안 됨', message: `${d.error ?? `오류(${res.status})`}\n견적은 저장됐고 원장에는 예약 상태로 남아 있습니다.`, variant: 'warning' });
+      return false;
+    }
+    setLegacyPending(null);
+    void loadLegacySaved(qid);
+    onToast(d.result === 'confirmed' ? `선입금 원장에 반영했습니다(차감 ${Math.round(d.usageAmount ?? 0).toLocaleString()}원 · 잔액 ${Math.round(d.balanceAfter ?? 0).toLocaleString()}원).` : '원장 반영할 예약 내역이 없습니다.');
+    return true;
+  };
+
   // AI 초안 → QuoteItemForm 변환 후 기존 Row 아래에 추가
   const handleApplyAiRows = (draftRows: AiDraftRow[]) => {
     const defaultUnit: Record<ServiceType, string> = {
@@ -2320,7 +2396,7 @@ export function QuoteEditorWorkspace({
     const isValidItem = (it: QuoteItemForm) =>
       it.productType === 'discount'
         ? Number(String(it.discountValue ?? '').replace(/,/g, '') || 0) > 0
-        : !!it.productName.trim() && (isPriceBlank(it.unitPrice) || Number(it.unitPrice.replace?.(/,/g, '') || 0) >= 0);
+        : !!it.productName.trim() && (isPriceBlank(it.unitPrice) || isPrepaidQuote || Number(it.unitPrice.replace?.(/,/g, '') || 0) >= 0);
     const vi = items.filter(isValidItem);
     if (vi.length === 0) { onToast('품목명을 입력하세요.'); return null; }
     // 판매상세와 같은 본문 빌더 — 기존 품목 id(sourceItemId)·서비스 그룹(parentItemIndex)을 함께 보내
@@ -2475,12 +2551,21 @@ export function QuoteEditorWorkspace({
   const handleSave = useCallback(async () => {
     if (batchClosed) { onToast('마감완료된 누적 견적서는 수정할 수 없습니다.'); return; }
     const isUpdate = savedQuoteId != null;
+    // 과거 견적서 복원: 원장 반영 전 필수 확인 — 거래처, 선입금 입금일(PDF에 없으면 직접 입력. 임의 날짜 생성 금지)
+    if (legacyPending) {
+      if (companyId == null) { onToast('거래처를 선택해야 선입금 원장에 반영할 수 있습니다.'); return; }
+      if (prepaidLines.some(l => Number(String(l.amount).replace(/,/g, '')) > 0 && !l.transactionDate)) { onToast('입금일이 없는 선입금이 있습니다 — 확인된 날짜를 입력하세요.'); return; }
+      const diffs = legacyDiffs(legacyPending, { ...totals, deposit: sumPrepaidLines(prepaidLines) });
+      if (diffs.length && !(await confirmDialog({ title: '원본 PDF와 다른 값', confirmLabel: '확인 후 저장', cancelLabel: '취소', variant: 'warning',
+        message: `${diffs.map(d => `· ${d}`).join('\n')}\n\n입력값 기준으로 저장하고 선입금 원장에 반영합니다.` }))) return;
+    }
     const r = await persistQuote();
     if (!r) return;
     markClean();
+    if (legacyPending && !(await runLegacyRestore(r.quoteId))) { onSaved(r); return; }
     onToast(isUpdate ? '견적이 수정되었습니다.' : '견적서가 저장되었습니다.');
     onSaved(r);
-  }, [persistQuote, onSaved, onToast, savedQuoteId, markClean, batchClosed]);
+  }, [persistQuote, onSaved, onToast, savedQuoteId, markClean, batchClosed, legacyPending, companyId, prepaidLines, totals]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── 누적 마감(누적중 → 마감완료) ────────────────────────────────────────────
   // 판매전환과 별개. 확인 후 POST → 이후 상품/금액 수정 차단(API에서도 차단). 연결 판매건은 최종 확정 유지.
@@ -2908,6 +2993,13 @@ export function QuoteEditorWorkspace({
         </div>
       </Card>
 
+      {/* ── 과거 CRM 차감견적서 AI 불러오기(차감 견적서 전용) ───────────────── */}
+      {isPrepaidQuote && (
+        <LegacyDeductionImport token={token} savedQuoteId={savedQuoteId} pending={legacyPending} saved={legacySaved}
+          current={{ ...totals, deposit: sumPrepaidLines(prepaidLines) }}
+          disabled={batchClosed} onAnalyzed={applyLegacyAnalysis} onToast={onToast} />
+      )}
+
       {/* ── B-0. 차감 견적서 전용: 선입/이월 (차감 사용내역 위) ───────────────── */}
       {isPrepaidQuote && (
         <PrepaidLinesSection
@@ -2935,7 +3027,7 @@ export function QuoteEditorWorkspace({
         {/* 상품정보 편집 그리드 — 판매관리 수정모드와 공용(QuoteItemsEditor).
             누적 마감 시 편집 차단(pointer-events 무효화 + 흐리게). API에서도 수정 차단됨. */}
         <div style={batchClosed ? { pointerEvents: 'none', opacity: 0.6 } : undefined} aria-disabled={batchClosed}>
-          <QuoteItemsEditor items={items} onItemsChange={setItems} vatType={vatType} products={products}
+          <QuoteItemsEditor items={items} onItemsChange={setItems} vatType={vatType} products={products} allowNegativePrice={isPrepaidQuote}
             productCreate={{ canCreate: canCreateProduct, onCreate: openQuickCreate }} />
         </div>
       </Card>
