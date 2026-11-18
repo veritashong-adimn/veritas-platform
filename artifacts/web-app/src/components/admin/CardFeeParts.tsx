@@ -54,7 +54,7 @@ export function CardFeeEditPanel({ billed, paidInput, feeInput, rateInput, inp, 
   );
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', paddingLeft: 28 }} data-testid={`card-fee-panel-${idx}`}>
-      <b style={{ fontSize: 12, color: C.primaryText }}>카드결제</b>
+      <b style={{ fontSize: 12, color: C.primaryText }}>신용카드</b>
       <span style={box}><span style={lab}>청구금액</span><b style={{ fontVariantNumeric: 'tabular-nums' }}>{won(billed)}원</b></span>
       <span style={box}><span style={lab}>실제 입금액</span>{numInp(paidInput, v => onPatch({ _paidAmt: v }), `card-paid-${idx}`, '실제 입금액')}</span>
       <span style={box}><span style={lab}>카드사 수수료</span>

@@ -104,7 +104,7 @@ const PAY_TYPE_OPTS = [
 const METHOD_OPTS = [
   { value: '세금계산서', label: '세금계산서' },
   { value: METHOD_ZERO_RATED, label: '영세율 계산서' }, { value: METHOD_EXEMPT, label: '면세 계산서' },
-  { value: '카드', label: '카드' },
+  { value: '카드', label: '신용카드' },   // 저장값 '카드' 유지(표시명만 신용카드)
   { value: '외화송금', label: '외화입금' }, { value: '현금', label: '현금' },
 ];
 const CUSTOM_METHOD = '__custom__';
@@ -118,7 +118,7 @@ const METHOD_LEGACY: Record<string, string> = {
 const normMethod = (v?: string | null) => { const s = v ?? ''; return s in METHOD_LEGACY ? METHOD_LEGACY[s] : s; };
 // 표시명 매핑 — canonical 값('외화송금')·DB·매칭(isOverseas) 로직은 그대로 두고, 화면 표시만 '외화입금'(수금 관점).
 //  · 이 화면은 고객으로부터 '입금'을 받는 수금관리이므로 표시상 '외화입금'이 정확. 저장/비교값은 계속 '외화송금'.
-const METHOD_DISPLAY: Record<string, string> = { '외화송금': '외화입금' };
+const METHOD_DISPLAY: Record<string, string> = { '외화송금': '외화입금', '카드': '신용카드' };
 const displayMethod = (v?: string | null) => { const s = normMethod(v); return s ? (METHOD_DISPLAY[s] ?? s) : ''; };
 const methodText = (v?: string | null) => displayMethod(v) || '—';
 const DEPOSIT_OPTS = [
@@ -148,7 +148,7 @@ const CURRENCY_OPTS: { value: string; label: string }[] = [
 const isOverseas = (method?: string | null) => normMethod(method) === '외화송금';
 // 입금거래 결제방법(§2/§3) — 외화송금 선택 시 통화/외화입금액 UI 노출.
 const TXN_METHOD_OPTS = [
-  { value: '국내이체', label: '국내이체' }, { value: '외화송금', label: '외화입금' }, { value: '카드', label: '카드' },
+  { value: '국내이체', label: '국내이체' }, { value: '외화송금', label: '외화입금' }, { value: '카드', label: '신용카드' },
   { value: '세금계산서', label: '세금계산서' }, { value: '현금', label: '현금' }, { value: '기타', label: '기타' },
 ];
 
@@ -364,6 +364,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     // #5 일반청구 기본값 — 청구가 없으면 판매 거래처 기준 1건 자동 시드(공급가/부가세/합계 = 판매 총액).
     if (mapped.length === 0) {
       mapped.push({
+        _bank: BANK_DEFAULT, _bankOk: false,   // 신규 청구 회차: 입금은행 기본 국민은행 · 미확인
         paymentCategory: CAT_GENERAL, payer: PAYER_CUSTOMER, depositItem: ITEM_TOTAL,
         paymentMethod: defaultMethod, paymentType: 'lump_sum', depositStatus: 'scheduled',
         billingCompanyId: defaultCompany?.id ?? null, billingCompanyName: defaultCompany?.name ?? null,
@@ -380,14 +381,15 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
 
   // 수출바우처 청구행 빌더(2행 고정) — 고객사=부가세, 운영기관=공급가. 금액은 시스템 자동(사용자 편집 불가).
   const voucherRows = (): PayRow[] => ([
-    { paymentCategory: CAT_VOUCHER, payer: PAYER_CUSTOMER, depositItem: ITEM_VAT, paymentMethod: '세금계산서', paymentType: 'lump_sum', depositStatus: 'scheduled',
+    { _bank: BANK_DEFAULT, _bankOk: false, paymentCategory: CAT_VOUCHER, payer: PAYER_CUSTOMER, depositItem: ITEM_VAT, paymentMethod: '세금계산서', paymentType: 'lump_sum', depositStatus: 'scheduled',
       billingCompanyId: defaultCompany?.id ?? null, billingCompanyName: defaultCompany?.name ?? null,
       supplyAmount: '0', vatAmount: String(saleVat), amount: String(saleVat) },
-    { paymentCategory: CAT_VOUCHER, payer: PAYER_OPERATOR, depositItem: ITEM_SUPPLY, paymentMethod: '기타', paymentType: 'lump_sum', depositStatus: 'scheduled',
+    { _bank: BANK_DEFAULT, _bankOk: false, paymentCategory: CAT_VOUCHER, payer: PAYER_OPERATOR, depositItem: ITEM_SUPPLY, paymentMethod: '기타', paymentType: 'lump_sum', depositStatus: 'scheduled',
       billingCompanyId: null, billingCompanyName: PAYER_OPERATOR,
       supplyAmount: String(saleSupply), vatAmount: '0', amount: String(saleSupply) },
   ]);
   const generalRow = (): PayRow => ({
+    _bank: BANK_DEFAULT, _bankOk: false,
     paymentCategory: CAT_GENERAL, payer: PAYER_CUSTOMER, depositItem: ITEM_TOTAL, paymentMethod: defaultMethod, paymentType: 'lump_sum', depositStatus: 'scheduled',
     billingCompanyId: defaultCompany?.id ?? null, billingCompanyName: defaultCompany?.name ?? null,
     supplyAmount: String(saleSupply), vatAmount: String(saleVat), amount: String(num(saleTotal)),
@@ -828,9 +830,11 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
           {editable ? (() => {
             const hasBank = !!(r._bank ?? '').trim();
             return (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                <BankField value={r._bank ?? ''} onChange={(v) => patchRow(i, { _bank: v, _bankOk: false })} testid={`pay-bank-select-${i}`}
-                  triggerStyle={{ ...inp, ...(hasBank && !r._bankOk ? { color: C.danger, borderColor: C.danger } : { color: C.textPrimary }) }} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                <div style={{ width: 132, flexShrink: 0, display: 'flex' }}>
+                  <BankField value={r._bank ?? ''} onChange={(v) => patchRow(i, { _bank: v, _bankOk: false })} testid={`pay-bank-select-${i}`}
+                    triggerStyle={{ ...inp, ...(hasBank && !r._bankOk ? { color: C.danger, borderColor: C.danger } : { color: C.textPrimary }) }} />
+                </div>
                 <input type="checkbox" checked={!!r._bankOk} disabled={!hasBank} onChange={() => patchRow(i, { _bankOk: !r._bankOk })}
                   data-testid={`pay-bank-confirm-${i}`} aria-label="입금은행 확인" title={!hasBank ? '입금은행 선택 후 확인 가능' : (r._bankOk ? '입금은행 확인 완료' : '입금은행 미확인')}
                   style={{ cursor: hasBank ? 'pointer' : 'default', flexShrink: 0 }} />
