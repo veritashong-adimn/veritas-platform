@@ -8,7 +8,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { requireAuth, requireRole, requireStaffPermission } from "../middlewares/auth";
-import { getCompanyOverview, getCompanyLedger, getLedgerEntryDetail, getLedgerHistory, editLedgerEntry, getLedgerLinkCandidates } from "../services/prepaidLedger";
+import { getCompanyOverview, getCompanyLedger, getLedgerEntryDetail, getLedgerHistory, editLedgerEntry, getLedgerLinkCandidates, getAccountDeleteCheck, deletePrepaidAccounts } from "../services/prepaidLedger";
 import { logEvent } from "../lib/logEvent";
 
 const router = Router();
@@ -36,6 +36,27 @@ router.get("/prepaid/companies/:companyId/ledger", ...adminGuard, noStore, async
     req.log.error({ err }, "Failed to load company prepaid ledger");
     res.status(500).json({ error: "거래처 원장 조회 실패" });
   }
+});
+
+// 거래처 원장 삭제 전 확인 — 거래처명 · 선입금/차감 건수 · 연결 견적서 · 삭제 가능 여부(사유)
+router.get("/prepaid/companies/:companyId/delete-check", ...adminGuard, noStore, async (req, res) => {
+  const companyId = Number(req.params.companyId);
+  if (!Number.isInteger(companyId) || companyId <= 0) { res.status(400).json({ error: "유효하지 않은 거래처 ID" }); return; }
+  try { const r = await getAccountDeleteCheck(db, companyId); if (!r) { res.status(404).json({ error: "이 거래처의 선입금 계정이 없습니다." }); return; } res.json(r); }
+  catch (err) { req.log.error({ err }, "Failed to check prepaid account delete"); res.status(500).json({ error: "삭제 확인 실패" }); }
+});
+// 거래처 원장(선입금 계정) 삭제 — 금융거래가 없던 계정만. 거래처 마스터·견적서는 삭제하지 않음.
+router.delete("/prepaid/companies/:companyId", ...adminGuard, requireStaffPermission("prepaid.manage"), async (req, res) => {
+  const companyId = Number(req.params.companyId);
+  if (!Number.isInteger(companyId) || companyId <= 0) { res.status(400).json({ error: "유효하지 않은 거래처 ID" }); return; }
+  try {
+    const r = await deletePrepaidAccounts(db, companyId);
+    if (r.result === "not_found") { res.status(404).json({ error: "이 거래처의 선입금 계정이 없습니다." }); return; }
+    if (r.result === "blocked") { res.status(409).json({ code: "HAS_TRANSACTIONS", error: r.check.reasons.join("\n"), check: r.check }); return; }
+    await logEvent("company", companyId, "prepaid_account_deleted", req.log, (req as any).user ?? undefined,
+      JSON.stringify({ accountIds: r.check.accountIds, companyName: r.check.companyName, quotes: r.check.quotes }));
+    res.json({ ok: true, deletedAccountIds: r.check.accountIds });
+  } catch (err) { req.log.error({ err }, "Failed to delete prepaid account"); res.status(500).json({ error: "선입금 원장 삭제 실패" }); }
 });
 
 router.get("/prepaid/ledger/:id", ...adminGuard, noStore, async (req, res) => {

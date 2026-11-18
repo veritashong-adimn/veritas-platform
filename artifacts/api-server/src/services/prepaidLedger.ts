@@ -173,7 +173,7 @@ export async function getCompanyLedger(dbh: Db, companyId: number) {
   const ids: number[] = accounts.map((a: any) => a.id);
   const rows = (await dbh.execute(sql`
     SELECT l.id, l.account_id, l.type, l.amount::text AS amount, l.transaction_date::text AS tx_date, l.description, l.memo, l.quote_id, l.project_id, l.linked_payment_id,
-           q.quote_type, (SELECT qi.item_type FROM quote_items qi WHERE qi.quote_id = l.quote_id ORDER BY qi.id LIMIT 1) AS item_type
+           q.quote_type, q.quote_number, (SELECT qi.item_type FROM quote_items qi WHERE qi.quote_id = l.quote_id ORDER BY qi.id LIMIT 1) AS item_type
       FROM prepaid_ledger l LEFT JOIN quotes q ON q.id = l.quote_id
      WHERE l.account_id IN (${sql.join(ids.map(i => sql`${i}`), sql`, `)}) AND l.status IN ('reserved','confirmed')
      ORDER BY l.transaction_date NULLS LAST, l.id`)).rows as any[];
@@ -188,6 +188,7 @@ export async function getCompanyLedger(dbh: Db, companyId: number) {
       id: r.id, accountId: r.account_id, type: r.type, label: rowLabel({ type: r.type, itemType: r.item_type, quoteManaged }),
       transactionDate: r.tx_date ?? null, inflow: out ? 0 : amount, outflow: out ? amount : 0, balance: running,
       description: r.description ?? null, memo: r.memo ?? null, quoteId: r.quote_id ?? null, projectId: r.project_id ?? null, linkedPaymentId: r.linked_payment_id ?? null,
+      quoteNumber: r.quote_number ?? null,
     };
   });
   const [company] = (await dbh.execute(sql`SELECT name FROM companies WHERE id = ${companyId}`)).rows as any[];
@@ -521,3 +522,43 @@ export async function deleteLedgerEntry(dbh: Db, id: number, actor: { id?: numbe
   });
 }
 
+
+
+// ═══ 선입금관리 — 거래처 원장(계정) 삭제 ═════════════════════════════════════════════════════
+//  금융거래가 한 번도 없었던 테스트 계정만 삭제한다. 거래처 마스터·견적서·원장 행은 삭제하지 않는다.
+//  차단: 원장 행(상태 무관) · 원장 수정이력(과거 거래 흔적) · 계정 입금누계/잔액 ≠ 0.
+export async function getAccountDeleteCheck(dbh: Db, companyId: number) {
+  const accounts = (await dbh.execute(sql`SELECT id, status, initial_amount::text AS init, current_balance::text AS bal FROM prepaid_accounts WHERE company_id = ${companyId} ORDER BY id`)).rows as any[];
+  if (accounts.length === 0) return null;
+  const ids = accounts.map(a => Number(a.id));
+  const idList = sql.join(ids.map(i => sql`${i}`), sql`, `);
+  const counts = ((await dbh.execute(sql`SELECT type, status, count(*)::int AS n FROM prepaid_ledger WHERE account_id IN (${idList}) GROUP BY type, status`)).rows as any[]);
+  const [{ n: historyCount }] = (await dbh.execute(sql`SELECT count(*)::int AS n FROM prepaid_ledger_history WHERE account_id IN (${idList})`)).rows as any[];
+  const quotes = ((await dbh.execute(sql`SELECT DISTINCT q.id, q.quote_number FROM quotes q
+      WHERE q.deleted_at IS NULL AND (q.id IN (SELECT quote_id FROM prepaid_ledger WHERE account_id IN (${idList}) AND quote_id IS NOT NULL)
+         OR (q.quote_type IN ('b2c_prepaid','prepaid_deduction') AND q.project_id IN (SELECT id FROM projects WHERE company_id = ${companyId})))
+      ORDER BY q.id`)).rows as any[]).map(q => ({ id: Number(q.id), quoteNumber: q.quote_number ?? null }));
+  const [company] = (await dbh.execute(sql`SELECT name FROM companies WHERE id = ${companyId}`)).rows as any[];
+  const sum = (pred: (r: any) => boolean) => counts.filter(pred).reduce((s, r) => s + Number(r.n), 0);
+  const depositCount = sum(r => r.type !== "deduction" && r.type !== "refund");
+  const deductionCount = sum(r => r.type === "deduction" || r.type === "refund");
+  const amountNonZero = accounts.some(a => Math.abs(Number(a.init)) >= 0.005 || Math.abs(Number(a.bal)) >= 0.005);
+  const reasons: string[] = [];
+  if (depositCount + deductionCount > 0) reasons.push(`연결된 원장 기록이 있습니다(선입금·이월 ${depositCount}건 · 차감·환불 ${deductionCount}건, 예약·확정·해제 포함).`);
+  if (Number(historyCount) > 0) reasons.push(`원장 수정·삭제 이력 ${historyCount}건이 있어 과거 금융거래가 있었던 계정입니다.`);
+  if (amountNonZero) reasons.push("계정에 입금누계 또는 잔액이 남아 있습니다.");
+  return {
+    companyId, companyName: company?.name ?? `거래처 #${companyId}`, accountIds: ids,
+    depositCount, deductionCount, historyCount: Number(historyCount), quotes, deletable: reasons.length === 0, reasons,
+  };
+}
+export async function deletePrepaidAccounts(dbh: Db, companyId: number) {
+  return dbh.transaction(async (tx: any) => {
+    await tx.execute(sql`SELECT id FROM prepaid_accounts WHERE company_id = ${companyId} FOR UPDATE`);
+    const chk = await getAccountDeleteCheck(tx, companyId);   // 잠금 후 재검사(동시 거래 생성 방지)
+    if (!chk) return { result: "not_found" as const };
+    if (!chk.deletable) return { result: "blocked" as const, check: chk };
+    await tx.delete(prepaidAccountsTable).where(eq(prepaidAccountsTable.companyId, companyId));
+    return { result: "deleted" as const, check: chk };
+  });
+}

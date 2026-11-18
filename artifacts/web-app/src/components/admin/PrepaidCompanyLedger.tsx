@@ -6,6 +6,9 @@ import React, { useCallback, useEffect, useState } from "react";
 import { formatDisplayDate } from "../../lib/dateFormat";
 import { GhostBtn } from "../ui";
 import { getJson, won, type CompanyLedger } from "./prepaidLedgerShared";
+import { api } from "../../lib/constants";
+import { buildQuotePdfData, type QuoteDetail } from "../../lib/quotePdf";
+import QuotePdfPreviewModal from "./QuotePdfPreviewModal";
 
 /** 원장 → 견적서 열기(AdminDashboard 가 받아 견적관리 편집 화면으로 이동) */
 export const openQuoteFromLedger = (quoteId: number) => window.dispatchEvent(new CustomEvent("veritas:open-quote", { detail: { quoteId } }));
@@ -17,6 +20,18 @@ export function PrepaidCompanyLedger({ companyId, authHeaders, onOpenQuote }: {
 }) {
   const [data, setData] = useState<CompanyLedger | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // 연결 견적서 미리보기(기존 견적서 미리보기·인쇄/PDF 저장 재사용) — 조회 전용, 데이터 변경 없음
+  const [pdf, setPdf] = useState<{ data: ReturnType<typeof buildQuotePdfData>; title: string } | null>(null);
+  const [pdfErr, setPdfErr] = useState<string | null>(null);
+  const preview = async (quoteId: number, quoteNumber?: string | null) => {
+    setPdfErr(null);
+    try {
+      const res = await fetch(api(`/api/admin/quotes/${quoteId}`), { headers: authHeaders, cache: "no-store" });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { setPdfErr(`견적서 ${quoteNumber ?? `#${quoteId}`} 미리보기 실패: ${(d as any)?.error ?? res.status}`); return; }
+      setPdf({ data: buildQuotePdfData(d as QuoteDetail), title: (d as any).title ?? quoteNumber ?? `견적서 #${quoteId}` });
+    } catch { setPdfErr("견적서 미리보기 중 오류가 발생했습니다."); }
+  };
 
   const load = useCallback(async () => {
     setError(null);
@@ -33,9 +48,23 @@ export function PrepaidCompanyLedger({ companyId, authHeaders, onOpenQuote }: {
   const num: React.CSSProperties = { ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" };
   const dash = <span style={{ color: "#cbd5e1" }}>-</span>;
   const open = (quoteId: number) => { openQuoteFromLedger(quoteId); onOpenQuote?.(quoteId); };
+  // 이 거래처 원장에 연결된 견적서(중복 제거, 등장 순)
+  const linkedQuotes = [...new Map(data.ledger.filter(r => r.quoteId != null).map(r => [r.quoteId!, r.quoteNumber ?? null])).entries()];
+  const quoteBtn = (id: number, no: string | null) => (
+    <button key={id} type="button" onClick={e => { e.stopPropagation(); void preview(id, no); }}
+      data-testid={`ledger-quote-preview-${id}`} aria-label={`견적서 ${no ?? `#${id}`} 미리보기`} title="견적서 미리보기 · 인쇄/PDF 저장"
+      style={{ border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1e40af", borderRadius: 4, padding: "1px 7px", fontSize: 11.5, cursor: "pointer", fontVariantNumeric: "tabular-nums" }}>
+      {no ?? `#${id}`}
+    </button>
+  );
 
   return (
-    <div data-testid={`company-ledger-${companyId}`} style={{ maxWidth: 680 }}>
+    <div data-testid={`company-ledger-${companyId}`} style={{ maxWidth: 820 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 6, fontSize: 12 }} data-testid={`ledger-quotes-${companyId}`}>
+        <span style={{ color: "#475569", fontWeight: 700 }}>연결 견적서</span>
+        {linkedQuotes.length ? linkedQuotes.map(([id, no]) => quoteBtn(id, no)) : <span style={{ color: "#94a3b8" }}>연결된 견적서 없음</span>}
+      </div>
+      {pdfErr && <div role="alert" style={{ color: "#b91c1c", fontSize: 12, marginBottom: 6 }}>{pdfErr}</div>}
       <div style={{ border: "1px solid #e2e8f0", borderRadius: 6, background: "#fff", overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
@@ -45,6 +74,7 @@ export function PrepaidCompanyLedger({ companyId, authHeaders, onOpenQuote }: {
               <th style={{ ...th, textAlign: "right" }}>입금액</th>
               <th style={{ ...th, textAlign: "right" }}>차감액</th>
               <th style={{ ...th, textAlign: "right" }}>잔액</th>
+              <th style={{ ...th, textAlign: "left" }}>견적서</th>
             </tr>
           </thead>
           <tbody>
@@ -54,9 +84,10 @@ export function PrepaidCompanyLedger({ companyId, authHeaders, onOpenQuote }: {
                 <td style={num}>{data.openingBalance > 0 ? won(data.openingBalance) : dash}</td>
                 <td style={num}>{data.openingBalance < 0 ? won(-data.openingBalance) : dash}</td>
                 <td style={num}>{won(data.openingBalance)}</td>
+                <td style={{ ...td, color: "#94a3b8" }}>연결된 견적서 없음</td>
               </tr>
             )}
-            {data.ledger.length === 0 && data.openingBalance === 0 && <tr><td colSpan={5} style={{ ...td, textAlign: "center", color: "#94a3b8" }}>거래가 없습니다.</td></tr>}
+            {data.ledger.length === 0 && data.openingBalance === 0 && <tr><td colSpan={6} style={{ ...td, textAlign: "center", color: "#94a3b8" }}>거래가 없습니다.</td></tr>}
             {data.ledger.map(r => {
               const linked = r.quoteId != null;
               return (
@@ -72,6 +103,7 @@ export function PrepaidCompanyLedger({ companyId, authHeaders, onOpenQuote }: {
                   <td style={num}>{r.inflow ? won(r.inflow) : dash}</td>
                   <td style={num}>{r.outflow ? won(r.outflow) : dash}</td>
                   <td style={{ ...num, color: r.balance < 0 ? "#b91c1c" : undefined }}>{won(r.balance)}</td>
+                  <td style={td}>{linked ? quoteBtn(r.quoteId!, r.quoteNumber ?? null) : <span style={{ color: "#94a3b8" }}>연결된 견적서 없음</span>}</td>
                 </tr>
               );
             })}
@@ -81,6 +113,7 @@ export function PrepaidCompanyLedger({ companyId, authHeaders, onOpenQuote }: {
       <div style={{ textAlign: "right", marginTop: 6, fontSize: 13 }}>
         현재 잔액: <b data-testid={`ledger-balance-${companyId}`}>{won(data.totals.balance)}원</b>
       </div>
+      {pdf && <QuotePdfPreviewModal data={pdf.data} quoteTitle={pdf.title} onClose={() => setPdf(null)} />}
     </div>
   );
 }

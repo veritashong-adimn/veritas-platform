@@ -6,6 +6,7 @@ export type LedgerRow = {
   id: number; accountId: number; type: string; label: string; transactionDate: string | null;
   inflow: number; outflow: number; balance: number;
   description: string | null; memo: string | null; quoteId: number | null; projectId: number | null; linkedPaymentId: number | null;
+  quoteNumber?: string | null;
 };
 export type CompanyLedger = {
   companyId: number; companyName: string; accounts: Array<{ id: number; status: string }>;

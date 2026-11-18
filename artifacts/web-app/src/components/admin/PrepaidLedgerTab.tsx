@@ -2,7 +2,8 @@
 //  거래처 행 클릭 → 그 아래에 원장 펼침, 다시 클릭하면 접힘. 잔액 = 누적 입금 − 누적 차감.
 //  값은 매번 서버에서 다시 받는다(캐시 미사용) — 수정 후 펼침/메뉴 이동/새로고침 어디서 봐도 같은 최신값.
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { GhostBtn } from "../ui";
+import { GhostBtn, confirmDialog, alertDialog } from "../ui";
+import { api } from "../../lib/constants";
 import { DateField } from "./DatePickerShared";
 import { PrepaidCompanyLedger } from "./PrepaidCompanyLedger";
 import { exportPrepaidOverview } from "../../lib/prepaidExcel";
@@ -45,6 +46,32 @@ export function PrepaidLedgerTab({ authHeaders, reloadKey, onToast }: {
     });
   }, [rows, q, sort]);
 
+  // 거래처 원장 삭제 — 금융거래가 없던 테스트 계정만(서버가 다시 검사). 거래처 마스터·견적서는 삭제하지 않음.
+  const [deleting, setDeleting] = useState<number | null>(null);
+  const removeAccount = async (r: OverviewRow) => {
+    setDeleting(r.companyId);
+    try {
+      const chk = await getJson<{ companyName: string; depositCount: number; deductionCount: number; quotes: Array<{ id: number; quoteNumber: string | null }>; deletable: boolean; reasons: string[] }>(
+        `/api/prepaid/companies/${r.companyId}/delete-check`, authHeaders);
+      const quotes = chk.quotes.length ? chk.quotes.map(q => q.quoteNumber ?? `#${q.id}`).join(", ") : "없음";
+      const info = `거래처: ${chk.companyName}\n선입금·이월 ${chk.depositCount}건 · 차감·환불 ${chk.deductionCount}건\n연결 견적서: ${quotes}`;
+      if (!chk.deletable) {
+        await alertDialog({ title: "삭제할 수 없습니다", variant: "warning", message: `${info}\n\n${chk.reasons.map(x => `· ${x}`).join("\n")}\n\n금융거래가 있는 원장은 삭제하지 않습니다.` });
+        return;
+      }
+      const ok = await confirmDialog({ title: "선입금 원장 삭제", variant: "danger", confirmLabel: "삭제", cancelLabel: "취소",
+        message: `${info}\n\n금융거래가 없는 선입금 원장(계정)만 삭제합니다. 거래처 마스터와 견적서는 삭제되지 않습니다.` });
+      if (!ok) return;
+      const res = await fetch(api(`/api/prepaid/companies/${r.companyId}`), { method: "DELETE", headers: authHeaders });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { await alertDialog({ title: "삭제하지 못했습니다", variant: "warning", message: (d as any)?.error ?? `오류 (${res.status})` }); return; }
+      setOpen(prev => { const n = new Set(prev); n.delete(r.companyId); return n; });
+      onToast?.(`${chk.companyName} 선입금 원장을 삭제했습니다.`);
+      await load();
+    } catch (e: any) { onToast?.(e?.message ?? "삭제 확인 실패"); }
+    finally { setDeleting(null); }
+  };
+
   const toggle = (id: number) => setOpen(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const sortBy = (key: SortKey) => setSort(s => ({ key, dir: s.key === key ? (s.dir === 1 ? -1 : 1) : key === "companyName" ? 1 : -1 }));
   const exportExcel = () => {
@@ -84,11 +111,12 @@ export function PrepaidLedgerTab({ authHeaders, reloadKey, onToast }: {
               {th("총 입금액", "totalDeposit", "right")}
               {th("총 차감액", "totalDeduction", "right")}
               {th("현재 잔액", "balance", "right")}
+              <th style={{ padding: "7px 10px", textAlign: "center", fontSize: 12, fontWeight: 700, color: "#475569", borderBottom: "1px solid #e2e8f0", whiteSpace: "nowrap", background: "#f8fafc", position: "sticky", top: 0, zIndex: 1, width: 70 }}>관리</th>
             </tr>
           </thead>
           <tbody>
-            {loading && rows.length === 0 && <tr><td colSpan={5} style={{ padding: 20, textAlign: "center", color: "#94a3b8" }}>불러오는 중…</td></tr>}
-            {!loading && view.length === 0 && <tr><td colSpan={5} style={{ padding: 20, textAlign: "center", color: "#94a3b8" }}>조건에 맞는 거래처가 없습니다.</td></tr>}
+            {loading && rows.length === 0 && <tr><td colSpan={6} style={{ padding: 20, textAlign: "center", color: "#94a3b8" }}>불러오는 중…</td></tr>}
+            {!loading && view.length === 0 && <tr><td colSpan={6} style={{ padding: 20, textAlign: "center", color: "#94a3b8" }}>조건에 맞는 거래처가 없습니다.</td></tr>}
             {view.map(r => {
               const isOpen = open.has(r.companyId);
               return (
@@ -103,10 +131,15 @@ export function PrepaidLedgerTab({ authHeaders, reloadKey, onToast }: {
                     <td style={num}>{won(r.totalDeposit)}</td>
                     <td style={num}>{won(r.totalDeduction)}</td>
                     <td style={{ ...num, fontWeight: 700, color: r.balance < 0 ? "#b91c1c" : "#0f172a" }}>{won(r.balance)}</td>
+                    <td style={{ padding: "5px 8px", textAlign: "center" }}>
+                      <GhostBtn onClick={e => { e?.stopPropagation?.(); void removeAccount(r); }} disabled={deleting === r.companyId}
+                        data-testid={`prepaid-delete-${r.companyId}`} aria-label={`${r.companyName} 선입금 원장 삭제`}
+                        color="#b91c1c" style={{ fontSize: 11, padding: "2px 9px", borderColor: "#fecaca" }}>{deleting === r.companyId ? "확인 중…" : "삭제"}</GhostBtn>
+                    </td>
                   </tr>
                   {isOpen && (
                     <tr data-testid={`prepaid-ledger-${r.companyId}`}>
-                      <td colSpan={5} style={{ padding: "6px 10px 12px 38px", background: "#f8fafc", borderBottom: "1px solid #e2e8f0" }}>
+                      <td colSpan={6} style={{ padding: "6px 10px 12px 38px", background: "#f8fafc", borderBottom: "1px solid #e2e8f0" }}>
                         <PrepaidCompanyLedger key={`${r.companyId}-${reloadKey}`} companyId={r.companyId} authHeaders={authHeaders} />
                       </td>
                     </tr>
