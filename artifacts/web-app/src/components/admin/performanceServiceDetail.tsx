@@ -9,7 +9,7 @@ import React from 'react';
 import { createPortal } from 'react-dom';
 import { C, TYPO, dsInputStd } from '../../lib/ds';
 import { ClickSelect } from '../ui';
-import { Row, UNIT_OPTS, dateVal, num, isTranslationKind, isInterpretationKind } from './performanceShared';
+import { Row, UNIT_OPTS, dateVal, num, isTranslationKind, isInterpretationKind, countQtyPatch, unitChangePatch } from './performanceShared';
 import { formatScheduleRange } from '../../lib/dateFormat';
 import { DateField } from './DatePickerShared';
 
@@ -199,9 +199,20 @@ export default function ServiceDetailCell({ r, editable, patch, onEndDateChange 
       <input type="number" min={0} inputMode="numeric" style={{ ...mini, width: 72, textAlign: 'right' }}
         value={r.quantityFromSale || r.quantity == null || r.quantity === '' ? '' : String(r.quantity)} onChange={e => patch({ quantity: e.target.value, quantityFromSale: false })} aria-label="수량"
         placeholder={r.quantityFromSale ? '미상' : '수량'} title={r.quantityFromSale ? `판매수량(${r.quantity}) 복사값 — 개별 수행 수량 미상` : undefined} />
-      <div style={{ width: 76 }}><ClickSelect value={r.unit ?? ''} onChange={(v: string) => patch({ unit: v })} triggerStyle={mini} menuStyle={{ fontSize: 12 }} options={UNIT_OPTS} /></div>
+      <div style={{ width: 76 }}><ClickSelect value={r.unit ?? ''} onChange={(v: string) => patch(unitChangePatch(r, v))} triggerStyle={mini} menuStyle={{ fontSize: 12 }} options={UNIT_OPTS} /></div>
     </>
   );
+
+  // 작업량(단어·글자·페이지) 입력 — 스냅샷에 저장하고 수량·단위에 반영(countQtyPatch: 선택 산정단위 우선·지급완료 행 보호).
+  const COUNT_FIELDS: { key: 'wordCount' | 'charCount' | 'pageCount'; unit: string; label: string }[] = [
+    { key: 'wordCount', unit: '단어', label: '단어수' }, { key: 'charCount', unit: '글자', label: '글자수' }, { key: 'pageCount', unit: '페이지', label: '페이지수' },
+  ];
+  const countInputs = COUNT_FIELDS.map(f => (
+    <input key={f.key} type="number" min={0} inputMode="numeric" style={{ ...mini, width: 70, textAlign: 'right' }}
+      value={snap[f.key] == null || snap[f.key] === '' ? '' : String(snap[f.key])} placeholder={f.label} aria-label={f.label} title={f.label}
+      data-testid={`perf-${f.key}`}
+      onChange={e => { const next = { ...snap, [f.key]: e.target.value === '' ? null : e.target.value }; patch({ serviceDetailSnapshot: next, ...countQtyPatch(r, next, f.unit) }); }} />
+  ));
 
   // ── 조회모드: 컴팩트 텍스트(§17) ──
   if (!editable) {
@@ -303,7 +314,8 @@ export default function ServiceDetailCell({ r, editable, patch, onEndDateChange 
     return (
       <div style={wrap}>
         <DateRangeField start={r.performanceStartDate} end={r.performanceEndDate} onChange={onTransRange} label="작업기간" />
-        {renderTranslationSummary(r, snap) ?? <span style={{ ...ref, color: C.textMuted }}>작업량 정보 없음</span>}
+        {countInputs}
+        {snap.fileName ? <FileNameChip name={snap.fileName} /> : null}
       </div>
     );
   }
@@ -319,6 +331,7 @@ export default function ServiceDetailCell({ r, editable, patch, onEndDateChange 
     <div style={wrap}>
       <DateRangeField start={r.performanceStartDate} end={r.performanceEndDate} onChange={onRangeChange} label="수행기간" />
       {qtyUnit}
+      {countInputs}
     </div>
   );
 }

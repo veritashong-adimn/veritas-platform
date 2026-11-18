@@ -505,6 +505,23 @@ export function translationWorkAmount(snap: any): { amount: number; basis: 'word
   return null;
 }
 
+// 서비스별 상세정보 작업량(단어·글자·페이지) ↔ 수량·단위 연동 — 사용자 입력 시에만 호출(불러오기·조회 시 자동 변경 없음).
+//   지급완료·지급회차 배정 행은 수량을 바꾸지 않는다(기존 지급금액 보호).
+const COUNT_KEY: Record<string, 'wordCount' | 'charCount' | 'pageCount'> = { '단어': 'wordCount', '글자': 'charCount', '자': 'charCount', '페이지': 'pageCount' };
+export const isPayLocked = (r: Row) => (r.paymentStatus ?? '') === 'paid' || r.payoutRoundId != null;
+export const countForUnit = (snap: any, unit?: string | null): number => (unit && COUNT_KEY[unit] ? num(snap?.[COUNT_KEY[unit]]) : 0);
+// 작업량 입력 후 수량·단위 패치 — 현재 단위가 작업량 단위이고 값이 있으면 그 단위(사용자 선택 산정단위) 우선, 아니면 방금 입력한 단위.
+export function countQtyPatch(r: Row, snap: any, editedUnit: string): Partial<Row> {
+  if (isPayLocked(r)) return {};
+  const u = countForUnit(snap, r.unit) > 0 ? r.unit! : (countForUnit(snap, editedUnit) > 0 ? editedUnit : null);
+  return u ? { quantity: String(countForUnit(snap, u)), unit: u, quantityFromSale: false } : {};
+}
+// 단위 변경 — 작업량 단위로 바꾸면 해당 작업량을 수량에 반영(값 있을 때만). 이후 수량 직접수정 가능.
+export function unitChangePatch(r: Row, unit: string): Partial<Row> {
+  const c = countForUnit(r.serviceDetailSnapshot, unit);
+  return c > 0 && !isPayLocked(r) ? { unit, quantity: String(c), quantityFromSale: false } : { unit };
+}
+
 // 번역 자동매칭 dirty 보호(§11·§12) ─────────────────────────────────────────────
 // 자동입력 서명 — 수량/단위/단가 3필드의 정규화 문자열. 사용자 직접수정 감지에 사용한다.
 export function autoRateSig(r: Row): string {
