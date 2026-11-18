@@ -138,6 +138,8 @@ const labelOf = (opts: { value: string; label: string }[], v?: string | null) =>
 const BANK_OPTS = ['국민은행', '기업은행', '우리은행', '기업은행외화'];
 const BANK_DEFAULT = '국민은행';
 const BANK_CUSTOM = '__bank_custom__';
+// 저장된 입금은행이 없을 때의 기본 표시값(미확인 상태) — 외화입금 회차는 기업은행외화, 그 외 국민은행. 저장값이 있으면 항상 저장값 유지.
+const defaultBankFor = (method?: string | null) => (isOverseas(method) ? '기업은행외화' : BANK_DEFAULT);
 // 통화(§5) — ISO 4217 코드 저장, 화면은 코드+한글명. 외화송금에서만 사용.
 const CURRENCY_OPTS: { value: string; label: string }[] = [
   { value: 'USD', label: 'USD (미국 달러)' }, { value: 'EUR', label: 'EUR (유로)' }, { value: 'JPY', label: 'JPY (일본 엔)' },
@@ -216,7 +218,7 @@ function BankField({ value, onChange, triggerStyle, testid }: {
   }
   return (
     <div style={{ flex: 1, minWidth: 0 }} data-testid={testid}>
-      <ClickSelect value={v} triggerStyle={triggerStyle} aria-label="입금은행 선택"
+      <ClickSelect value={v} style={{ display: 'block', width: '100%' }} triggerStyle={triggerStyle} aria-label="입금은행 선택"
         options={[...BANK_OPTS.map(b => ({ value: b, label: b })), { value: BANK_CUSTOM, label: '기타(직접입력)' }]}
         onChange={(nv: string) => { if (nv === BANK_CUSTOM) { setManualCustom(true); onChange(''); } else onChange(nv); }} />
     </div>
@@ -333,8 +335,9 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   return {
     id: r.id, transactions: r.transactions ?? [],   // 수금거래는 하위행/기본행에서 관리 — 편집 중에도 계산 일관성 위해 보존
     _txnId: only?.id,
-    // 입금은행 — 청구 회차에 저장된 값 우선, 없으면(기존 행) 첫 입금 거래 은행. 확인 여부는 저장값.
-    _bank: r.depositBank ?? only?.bankAccount ?? '', _bankOk: !!r.depositBankConfirmed && !!(r.depositBank ?? only?.bankAccount), _paidAmt: only && num(only.customerPaidAmount) > 0 ? String(num(only.customerPaidAmount)) : '',
+    // 입금은행 — 청구 회차에 저장된 값 우선, 없으면(기존 행) 첫 입금 거래 은행, 그것도 없으면 기본 은행(국민은행·미확인). 확인 여부는 저장값.
+    _bank: (r.depositBank ?? '').trim() || (only?.bankAccount ?? '').trim() || defaultBankFor(r.paymentMethod),
+    _bankOk: !!r.depositBankConfirmed && !!((r.depositBank ?? '').trim() || (only?.bankAccount ?? '').trim()), _paidAmt: only && num(only.customerPaidAmount) > 0 ? String(num(only.customerPaidAmount)) : '',
     _curr: seedCurr, _foreign: only && num(only.foreignAmount) > 0 ? String(num(only.foreignAmount)) : '',
     // 발행일(세금계산서) — 수정 화면에서도 저장값 그대로(누락 시 저장하면 발행일이 지워짐)
     issueDate: r.issueDate ? String(r.issueDate).slice(0, 10) : null,
@@ -565,7 +568,8 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   const lastTxn = (r: PayRow): PayTxn | null => { const ts = r.transactions ?? []; return ts.length ? ts[ts.length - 1] : null; };  // 최근(마지막) 입금거래
   const dispPaidDate = (r: PayRow): string => { const t = lastTxn(r); return (t?.paidDate ? formatDisplayDate(t.paidDate) : (formatDisplayDate(r.paidDate) || '—')); };  // §11 입금일: 최종 입금일
   // 입금은행 — 청구 회차 저장값 우선, 없으면(기존 행) 최근 입금거래 은행
-  const dispBank = (r: PayRow): string => { const t = lastTxn(r); return (r.depositBank ?? '').trim() || t?.bankAccount || '—'; };
+  //  둘 다 없으면 기본 은행(국민은행, 외화입금 회차는 기업은행외화)을 미확인(붉은색)으로 표시 — 저장값은 바꾸지 않는다.
+  const dispBank = (r: PayRow): string => { const t = lastTxn(r); return (r.depositBank ?? '').trim() || (t?.bankAccount ?? '').trim() || defaultBankFor(r.paymentMethod); };
   // §7/§12 조회 compact 외화 표시 — 최근 거래가 외화송금이면 "USD 4,000" 처럼 결제방법 셀 아래 한 줄로. 없으면 빈 문자열.
   const dispForeign = (r: PayRow): string => { const t = lastTxn(r); return (t && isOverseas(t.method) && num(t.foreignAmount) > 0) ? fmtForeign(t.currency || 'FX', t.foreignAmount) : ''; };   // 통화 소수 자릿수 유지(반올림 금지)
   // 입금상태(§F) — 거래 존재 시 결제액 vs 청구액으로 파생. 없으면 기존 depositStatus.

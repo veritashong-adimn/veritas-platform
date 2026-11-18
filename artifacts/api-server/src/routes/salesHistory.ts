@@ -233,7 +233,12 @@ export function summarizeBillingForList(saleTotal: number | null, pays: any[], t
       }
       continue;
     }
-    if (ts.length) for (const t of ts) deposits.push({ date: toDateStr(t.paid_date), bank: (t.bank_account ?? "").trim() || null, amount: Number(t.customer_paid_amount ?? 0) });
+    // 카드결제(카드사 수수료 별도 저장) — 입금내역은 실제 은행 입금액(settled_amount) + 수수료 표기. 입금상태 합계(amount)는 기존대로 고객결제액(입금+수수료).
+    if (ts.length) for (const t of ts) {
+      const fee = Number(t.fee_amount ?? 0), card = ["카드", "신용카드", "card"].includes(String(t.method ?? "").trim());
+      deposits.push({ date: toDateStr(t.paid_date), bank: (t.bank_account ?? "").trim() || null, amount: Number(t.customer_paid_amount ?? 0),
+        ...(card && fee > 0 && t.settled_amount != null ? { label: `${won(Number(t.settled_amount))} (카드수수료 ${won(fee)})` } : {}) });
+    }
     else if (p.deposit_status === "completed" && p.deposit_confirmed === true && p.paid_date) deposits.push({ date: toDateStr(p.paid_date), bank: null, amount: Number(p.amount ?? 0) });
   }
   const paid = deposits.filter(d => d.amount > 0 || d.label).sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
@@ -252,7 +257,7 @@ async function fillBillingInfo(dbx: any, list: SalesHistoryRow[]) {
   const pays = (await dbx.execute(sql`SELECT id, project_id, sequence, issue_date::text, amount, paid_date::text, deposit_status, deposit_confirmed
     FROM project_payments WHERE project_id IN (${ids}) ORDER BY project_id, sequence, id`)).rows as any[];
   const fxMap = await loadFxSummaries(dbx, pays.map(p => Number(p.id)));
-  const txns = pays.length ? (await dbx.execute(sql`SELECT t.project_payment_id, t.paid_date::text, t.bank_account, t.customer_paid_amount, t.txn_type, t.currency, t.foreign_amount, t.fx_rate, t.krw_amount
+  const txns = pays.length ? (await dbx.execute(sql`SELECT t.project_payment_id, t.paid_date::text, t.bank_account, t.customer_paid_amount, t.settled_amount, t.fee_amount, t.method, t.txn_type, t.currency, t.foreign_amount, t.fx_rate, t.krw_amount
     FROM payment_transactions t WHERE t.project_payment_id IN (${sql.join(pays.map(p => sql`${Number(p.id)}`), sql`, `)}) ORDER BY t.paid_date, t.id`)).rows as any[] : [];
   // 과거 CRM 전환 판매 — 원본 sales_list 값(플랫폼 청구정보가 없을 때만 사용)
   const conv = list.filter(r => r.origin === "legacy_crm" && r.saleNumber);
