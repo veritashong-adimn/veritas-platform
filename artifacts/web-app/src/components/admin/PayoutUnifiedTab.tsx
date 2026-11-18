@@ -71,7 +71,7 @@ function pickPhone(rows: DetailRow[]): string | null {
 export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (m: string) => void }) {
   const authH = { Authorization: `Bearer ${token}` };
   const [rounds, setRounds] = useState<RoundRow[]>([]);
-  const [pg, setPg] = useState({ page: 1, pageSize: 20, total: 0, totalPages: 1 }); // 기본 20행(옵션 20/30/50)
+  const [pg, setPg] = useState({ page: 1, pageSize: 20, total: 0, totalPages: 1 }); // 기본 20행(옵션 5/10/20/50/100)
   const [basis, setBasis] = useState<DateBasis>('delivery'); // 기본값 = 납품일(§5)
   const [dateFrom, setDateFrom] = useState(''); const [dateTo, setDateTo] = useState('');
   const [translator, setTranslator] = useState(''); const [client, setClient] = useState('');
@@ -217,7 +217,7 @@ export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (
           </tbody>
         </table>
       </div>
-      {pg.total > 0 && <Pagination idPrefix="pu-rounds" page={pg.page} pageSize={pg.pageSize} total={pg.total} unit="회차" disabled={loading} pageSizeOptions={[20, 30, 50]} onPageChange={(p) => loadRounds(p)} onPageSizeChange={(s) => { setPg(v => ({ ...v, pageSize: s, page: 1 })); loadRounds(1, s); }} />}
+      {pg.total > 0 && <Pagination idPrefix="pu-rounds" page={pg.page} pageSize={pg.pageSize} total={pg.total} unit="회차" disabled={loading} pageSizeOptions={[5, 10, 20, 50, 100]} onPageChange={(p) => loadRounds(p)} onPageSizeChange={(s) => { setPg(v => ({ ...v, pageSize: s, page: 1 })); loadRounds(1, s); }} />}
 
       {/* 선택 회차 영역 */}
       {sel && (
