@@ -52,6 +52,8 @@ const DEFAULT_COLLECTION_BASIS = "delivery_date" as const;
 const eligibleConds = () => [
   isNull(performanceAssignmentsTable.deletedAt),
   eq(performanceAssignmentsTable.paymentStatus, "unpaid"),          // 지급완료·지급보류 제외(§7-6·§8·§10)
+  // 판매 취소건의 수행정보 제외 — 취소 후 재등록된 판매와 같은 수행이 이중 수집·이중 지급되지 않도록(취소보상비 등은 유효 판매건에서 관리).
+  sql`NOT EXISTS (SELECT 1 FROM projects xp WHERE xp.id = ${performanceAssignmentsTable.projectId} AND xp.status = 'cancelled')`,
   sql`${performanceAssignmentsTable.deliveryDate} IS NOT NULL`,     // 납품일 입력(§7-2)
   eq(performanceAssignmentsTable.deliveryConfirmed, true),          // 납품확인(§7-3)
   sql`${performanceAssignmentsTable.costTotal} > 0`,                // 지급액 확정·0원 초과(§7-4·5)

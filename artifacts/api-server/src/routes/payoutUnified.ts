@@ -30,6 +30,11 @@ import { conversionsByRow } from "../services/legacyPayoutConversion";
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
 const REFERENCE_TREATMENT = "domestic_3_3" as const;
+// 운영 지급으로 관리되는 과거 전환 수행정보의 계보 상태 — 운영 수행정보(cur)로만 집계하고 과거 원본 행(prog)은 제외(중복 방지).
+//   · payout_review_unpaid: '과거 지급 확인 → 미지급' 처리(지급 전환 승인 포함)
+//   · unpaid: 전환 당시 CRM 지급일·지급액이 없어 처음부터 운영 미지급으로 만들어진 건(이후 운영에서 지급액·지급예정일 관리)
+//   (과거에는 payout_review_unpaid 만 인정해, unpaid 계보 건이 지급액 0원·지급일 미확인인 원본 행으로 표시되고 운영 지급액이 회차에서 누락됨)
+const OPERATIONAL_LINEAGE = sql`('payout_review_unpaid', 'unpaid')`;
 
 // ── 과거 CRM 지급완료 판정 기준 — lib/legacyPayoutRule.ts(SSOT) 참조 ───────────────
 //   · 지급완료 = 납품일 ≤ 2026-09-15(대표 확인) 또는 지급일 < 오늘(KST) — 과거 CRM 은 별도 지급파일로 송금(대표 확정).
@@ -73,7 +78,8 @@ const PROG = sql`
       'legacy:' || id AS source_key,
       nullif(btrim(source_raw->>'통번역사명'), '') AS translator,
       nullif(btrim(source_raw->>'거래처명'), '') AS client,
-      substring(source_raw->>'통번역사지급일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') AS payout_date,
+      -- 지급일(회차) = CRM 지급일. CRM 지급일이 없고 운영 판매로 전환된 행은 전환 수행정보의 지급예정일(운영 회차) — 지급완료 정리 후 '지급일 미확인'으로 남지 않게.
+      coalesce(substring(source_raw->>'통번역사지급일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}'), act.expected_payment_date) AS payout_date,
       substring(source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') AS delivery_date,
       nullif(btrim(source_raw->>'상품명'), '') AS product_name,
       nullif(btrim(source_raw->>'언어'), '') AS language,
@@ -97,22 +103,49 @@ const PROG = sql`
       to_char(act.actual_payment_date, 'YYYY-MM-DD') AS actual_payment_date,
       coalesce(substring(source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') <= ${LEGACY_PAID_DELIVERY_CUTOFF}, false) AS legacy_paid_cutoff,
       -- 지급예정: 지급일이 오늘(KST) 당일 또는 이후. 지급일 미상은 지급확인 필요(지급일 경과는 위 legacy_paid).
-      coalesce(substring(source_raw->>'통번역사지급일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') >= to_char((now() AT TIME ZONE 'Asia/Seoul')::date, 'YYYY-MM-DD'), false) AS payout_future,
+      coalesce(coalesce(substring(source_raw->>'통번역사지급일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}'), act.expected_payment_date) >= to_char((now() AT TIME ZONE 'Asia/Seoul')::date, 'YYYY-MM-DD'), false) AS payout_future,
       coalesce(nullif(regexp_replace(coalesce(source_raw->>'지급액(세전)',''), '[^0-9.-]', '', 'g'), '')::numeric, 0) AS pretax,
       coalesce(nullif(regexp_replace(coalesce(source_raw->>'지금액(세후)',''), '[^0-9.-]', '', 'g'), '')::numeric, 0) AS posttax
     FROM legacy_archive_rows
-    -- 운영 판매 전환 수행정보(확인 대기·확인 완료·과거 지급완료) — 지급상태 판정에만 사용(원본 불변)
-    --   (원본 행마다 재조회하지 않도록 전환 이력을 한 번만 모아 해시 조인 — 원본 행 id 기준 최신 1건)
-    LEFT JOIN (SELECT DISTINCT ON (s.row_key) s.row_key, xpa.payment_status::text AS payment_status, xpa.actual_payment_date
-      FROM import_row_sources s JOIN performance_assignments xpa ON xpa.id = s.entity_id AND xpa.deleted_at IS NULL
-      WHERE s.module = 'legacy_sale_activation' AND s.row_key LIKE 'progress:%' AND s.status <> 'payout_review_unpaid'
-      ORDER BY s.row_key, s.id DESC) act ON act.row_key = 'progress:' || legacy_archive_rows.id
+    -- 운영 판매 전환 계보(원본 불변) — 원본 행 기준으로 한 번만 모아 해시 조인.
+    --   · CRM 재업로드로 원본 행이 새 버전으로 바뀌어도(superseded_by_id) 이전 버전의 전환 계보를 이어받는다(재조회 시 '확인 필요' 원본으로 되돌아가지 않게).
+    --   · live = 전환 수행정보가 삭제되지 않았고 판매가 취소되지 않음. act = 최신 live 계보 중 운영 지급 관리 전(확인 대기·확인 완료·과거 지급완료) 건 → 지급상태·지급예정일 판정에만 사용.
+    LEFT JOIN (
+      WITH RECURSIVE ch(src, cur) AS (
+        SELECT r.id, r.id FROM legacy_archive_rows r WHERE r.source_type = 'progress'
+          AND EXISTS (SELECT 1 FROM import_row_sources s0 WHERE s0.module = 'legacy_sale_activation' AND s0.row_key = 'progress:' || r.id)
+        UNION ALL
+        SELECT ch.src, r.superseded_by_id FROM ch JOIN legacy_archive_rows r ON r.id = ch.cur WHERE r.superseded_by_id IS NOT NULL
+      ), l AS (
+        SELECT ch.cur AS row_id, s.id AS sid, s.status IN ${OPERATIONAL_LINEAGE} AS op,
+          (xpa.id IS NOT NULL AND xpa.deleted_at IS NULL AND coalesce(xp.status::text, '') <> 'cancelled') AS live,
+          EXISTS (SELECT 1 FROM legacy_master_mappings m WHERE m.source_system = 'old_crm' AND m.entity_type = 'sale' AND m.entity_id = xpa.project_id AND m.status = 'active') AS active_sale,
+          xpa.payment_status::text AS payment_status, xpa.actual_payment_date,
+          to_char(coalesce(xpa.expected_payment_date, xpa.expected_payment_date_auto), 'YYYY-MM-DD') AS expected_payment_date
+        FROM ch JOIN import_row_sources s ON s.module = 'legacy_sale_activation' AND s.row_key = 'progress:' || ch.src
+        LEFT JOIN performance_assignments xpa ON xpa.id = s.entity_id LEFT JOIN projects xp ON xp.id = xpa.project_id
+      )
+      SELECT row_id,
+        bool_or(live AND op) AS has_op, bool_or(live) AS has_live, bool_or(active_sale) AS any_active_sale,
+        (array_agg(payment_status ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS payment_status,
+        (array_agg(actual_payment_date ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS actual_payment_date,
+        (array_agg(expected_payment_date ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS expected_payment_date
+      FROM l GROUP BY row_id
+    ) act ON act.row_id = legacy_archive_rows.id
     WHERE source_type = 'progress' AND is_effective = true
-      -- 운영 지급으로 넘어간 과거 수행행 제외(중복 집계 방지): 과거 판매 운영 전환 후 '과거 지급 확인 → 미지급'으로 처리된 건
-      --   (과거 CRM 지급 전환 승인 포함)은 운영 수행정보(cur)로만 집계한다. 원본 행은 그대로 보존.
-      AND NOT EXISTS (SELECT 1 FROM import_row_sources s JOIN performance_assignments xpa ON xpa.id = s.entity_id AND xpa.deleted_at IS NULL
-        WHERE s.module = 'legacy_sale_activation' AND s.row_key = 'progress:' || legacy_archive_rows.id AND s.status = 'payout_review_unpaid')
+      -- 운영 지급으로 넘어간 과거 수행행 제외(중복 집계 방지): '과거 지급 확인 → 미지급'·운영 미지급 계보는 운영 수행정보(cur)로만 집계한다.
+      AND NOT coalesce(act.has_op, false)
+      -- 운영 판매(매핑 유효)에서 전환 수행정보가 삭제되었거나 판매가 취소된 행 제외 — 운영에서 정리된 수행이 원본 행으로 다시 나타나 이중 집계되지 않게.
+      --   (과거 CRM 으로 원복된 판매(매핑 rolled_back)는 원본 행 기준 규칙으로 계속 표시)
+      AND NOT (act.row_id IS NOT NULL AND NOT act.has_live AND act.any_active_sale)
   )`;
+
+// 공식 지급회차 세금 계산(calcPayoutWithholding)의 SQL 미러 — 개인: 세율별 원천세(세율 미확정 0) / 외주: 공제 0, 세금계산서면 VAT 10%.
+const CUR_DEDUCTION = sql`(CASE WHEN pa.performer_category = 'individual' THEN round(coalesce(pa.cost_total, 0) * (CASE pa.withholding_treatment
+    WHEN 'domestic_3_3' THEN 3.3 WHEN 'domestic_2_2' THEN 2.2
+    WHEN 'nonresident_custom' THEN coalesce(pa.withholding_rate, 0) WHEN 'treaty_reduction_or_exemption' THEN coalesce(pa.withholding_rate, 0)
+    ELSE 0 END) / 100, 2) ELSE 0 END)`;
+const CUR_VAT = sql`(CASE WHEN pa.performer_category = 'vendor' AND pa.purchase_evidence_type = 'tax_invoice' THEN round(coalesce(pa.cost_total, 0) * 0.1, 2) ELSE 0 END)`;
 
 // 신규 수행정보(performance_assignments) 정규화 — 지급일 = 지급예정일(자동/수동). 거래처 = 프로젝트 거래처 스냅샷.
 const CUR = sql`
@@ -136,9 +169,12 @@ const CUR = sql`
       cu.email AS master_email, tp.phone AS master_phone, tp.language_pairs AS master_langpairs,
       pa.payment_status::text AS payment_status,
       pa.payout_round_id,
+      to_char(pa.actual_payment_date, 'YYYY-MM-DD') AS actual_payment_date,
       coalesce(pa.cost_total, 0) AS pretax,
-      coalesce(pa.net_payment, pa.cost_total - pa.withholding_tax, 0) AS posttax,
-      pa.withholding_tax AS withholding_tax   -- 저장된 원천세(세전−세후 중 원천세 부분, 나머지는 기타 공제)
+      -- 세후·원천세 = 공식 지급회차(payoutRounds)와 같은 계산 — 세전(cost_total)에 calcPayoutWithholding 규칙 적용(SQL 미러).
+      --   (저장된 net_payment 는 구 개별항목(기본료 등) 기준이라 원가 방식 입력 건은 0으로 남아 세후 0원으로 표시되던 오류 수정)
+      coalesce(pa.cost_total, 0) - ${CUR_DEDUCTION} + ${CUR_VAT} AS posttax,
+      ${CUR_DEDUCTION} AS withholding_tax
     FROM performance_assignments pa
     LEFT JOIN projects p ON p.id = pa.project_id
     LEFT JOIN companies pco ON pco.id = p.company_id
@@ -149,7 +185,9 @@ const CUR = sql`
       -- 과거 판매 운영 전환으로 만들어진 수행정보 중 운영 지급으로 넘어오지 않은 건(과거 지급완료·지급 확인 필요 등)은 제외 —
       --   같은 거래가 과거 CRM 행(prog)으로 이미 집계되므로 중복 집계 방지. '미지급' 확인된 건(지급 전환 승인 포함)만 운영 건으로 집계.
       AND NOT EXISTS (SELECT 1 FROM import_row_sources s WHERE s.module = 'legacy_sale_activation' AND s.entity_id = pa.id
-        AND s.row_key LIKE 'progress:%' AND s.status <> 'payout_review_unpaid')
+        AND s.row_key LIKE 'progress:%' AND s.status NOT IN ${OPERATIONAL_LINEAGE})
+      -- 판매 취소건의 수행정보는 지급 대상이 아니다(취소 판매가 재등록된 경우 같은 수행이 이중 집계·이중 지급되는 것 방지).
+      AND coalesce(p.status::text, '') <> 'cancelled'
   )`;
 
 // 지급상태 코드 — 실제 '지급' 여부만 나타낸다(검증상태와 분리).
@@ -390,7 +428,9 @@ export async function collectUnifiedItems(opts: {
         confirmed, isPayroll: false, content, filename: null,
         pretax, posttax, withholdingImplied: Math.round((pretax - posttax) * 100) / 100,
         withholdingTax: r.withholding_tax == null ? null : num(r.withholding_tax),   // 저장 원천세(기타 공제 = 세전−세후−원천세)
-        status, statusLabel: STATUS_LABEL[status], hasDeposit: ps === "paid", paidBasis: ps === "paid" ? "지급회차 지급완료 처리" : null,
+        status, statusLabel: STATUS_LABEL[status], hasDeposit: ps === "paid",
+        // 지급완료 근거 — 실제 지급일 기록 / VERITAS OS 지급회차 / 대표 지급 확인(실제 지급일 미기록, 송금 증빙 없음)
+        paidBasis: ps !== "paid" ? null : r.actual_payment_date ? `실제 지급일 ${r.actual_payment_date}` : r.payout_round_id != null ? "지급회차 지급완료 처리" : "대표 지급 확인(실제 지급일 미기록)",
       };
     }),
   ];
