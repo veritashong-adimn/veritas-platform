@@ -33,6 +33,12 @@ export type GenerateTransfersResult = {
   totalAmount: number;          // 총 실지급액
   byStatus: Record<TransferStatus, number>;
   byVerification: Record<Verification, number>;
+  // 확정취소 → 수정 → 재확정 후 재동기화(2026-11): 미송금·송금파일 미생성 송금건의 금액·건수를 새 확정 스냅샷으로 갱신한 수.
+  refreshed?: number;
+  // 금액이 달라졌지만 송금파일이 이미 생성됐거나 지급완료/실패 상태라 자동 갱신하지 않은 송금건(수동 확인 필요).
+  staleLocked?: { payeeKey: string; payeeName: string | null; amount: number; expected: number; status: string }[];
+  // 새 확정 스냅샷에 더 이상 없는 지급대상의 미송금 송금건(수동 확인 필요 — 자동 삭제·취소하지 않음).
+  orphaned?: { payeeKey: string; payeeName: string | null; amount: number; status: string }[];
 };
 
 // payout_round_items 를 payeeKey 기준으로 합산한 중간 집계 단위.
@@ -105,6 +111,19 @@ export function verifyAccount(
     return { verificationStatus: "invalid", status: "pending", failureReason: "계좌번호 형식 오류(숫자 10~16자리 아님)" };
   }
   return { verificationStatus: "verified", status: "ready", failureReason: null };
+}
+
+/**
+ * 송금건이 이미 있는 회차만 재동기화(2026-11) — 재확정·지급완료 직전 호출.
+ *  · 송금건이 하나도 없으면 아무 것도 하지 않는다(null) — 송금건 없이 운영하는 기존 회차 흐름 불변.
+ *  · 있으면 generatePayoutTransfers 로 미송금·파일 미생성 건 금액을 확정 스냅샷에 맞추고, 바꿀 수 없는 불일치는 staleLocked 로 보고.
+ */
+export async function resyncTransfersIfAny(round: PayoutRound, log?: Logger): Promise<GenerateTransfersResult | null> {
+  if (round.status !== "confirmed") return null;
+  const [one] = await db.select({ id: payoutTransfersTable.id }).from(payoutTransfersTable)
+    .where(eq(payoutTransfersTable.payoutRoundId, round.id)).limit(1);
+  if (!one) return null;
+  return generatePayoutTransfers(round, log);
 }
 
 /**
@@ -187,6 +206,37 @@ export async function generatePayoutTransfers(
     created = inserted.length;
   }
 
+  // 4-1) 기존 송금건 재동기화(2026-11) — 확정취소 후 금액이 정정되어 재확정된 경우, 기존 송금건이 옛 금액으로 남지 않도록 한다.
+  //   · 갱신 대상: 지급완료(paid)·실패(failed)·취소(cancelled)가 아니고, 송금파일 미생성·paidAt 없음(실제 송금 전).
+  //   · 그 외 금액 불일치는 덮어쓰지 않고 staleLocked 로 보고(실제 지급기록·송금파일 보존).
+  //   · 스냅샷에 없는 지급대상의 미송금 건은 orphaned 로 보고만 한다(삭제·취소 없음).
+  let refreshed = 0;
+  const staleLocked: NonNullable<GenerateTransfersResult["staleLocked"]> = [];
+  const orphaned: NonNullable<GenerateTransfersResult["orphaned"]> = [];
+  {
+    const existing = await db.select().from(payoutTransfersTable).where(eq(payoutTransfersTable.payoutRoundId, round.id));
+    const aggByKey = new Map(aggs.map((a) => [a.payeeKey, a]));
+    for (const t of existing) {
+      const a = aggByKey.get(t.payeeKey);
+      if (!a) {
+        if (t.status !== "paid" && t.status !== "cancelled" && num(t.amount) !== 0) orphaned.push({ payeeKey: t.payeeKey, payeeName: t.payeeName, amount: num(t.amount), status: t.status });
+        continue;
+      }
+      const expected = Math.round(a.amount * 100) / 100;
+      if (Math.abs(num(t.amount) - expected) < 0.005 && t.assignmentCount === a.assignmentCount) continue;
+      const mutable = t.status !== "paid" && t.status !== "failed" && t.status !== "cancelled" && !t.ibkFileGenerated && t.paidAt == null;
+      if (mutable) {
+        await db.update(payoutTransfersTable)
+          .set({ amount: expected.toFixed(2), assignmentCount: a.assignmentCount, updatedAt: new Date() })
+          .where(eq(payoutTransfersTable.id, t.id));
+        refreshed++;
+        log?.info({ payoutRoundId: round.id, transferId: t.id, before: num(t.amount), after: expected }, "payout_transfer amount re-synced to confirmed snapshot");
+      } else {
+        staleLocked.push({ payeeKey: t.payeeKey, payeeName: t.payeeName, amount: num(t.amount), expected, status: t.status });
+      }
+    }
+  }
+
   // 5) 결과 집계(현재 회차 전체 송금건 기준).
   const all = await db.select().from(payoutTransfersTable)
     .where(eq(payoutTransfersTable.payoutRoundId, round.id));
@@ -208,6 +258,9 @@ export async function generatePayoutTransfers(
     totalAmount: Math.round(totalAmount * 100) / 100,
     byStatus,
     byVerification,
+    refreshed,
+    ...(staleLocked.length ? { staleLocked } : {}),
+    ...(orphaned.length ? { orphaned } : {}),
   };
   // 계좌번호 평문·암호문은 로그에 남기지 않는다(§9) — 집계 카운트만 기록.
   log?.info({ payoutRoundId: round.id, ...result, byStatus: undefined, byVerification: undefined }, "payout_transfers generated/synced");

@@ -1,7 +1,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // 서비스 유형별 상세정보 셀(§3~§9·§14·§17) — 연결된 판매상품 유형에 맞는 필드만 한 줄에 표시.
 //  · 통역: 기간·시간·인원·장소 / 장비: 사용기간·설치일시·사용일수·장소 / 번역: 파일명·작업량(수량+단위).
-//  · 편집 가능 필드는 실제 수행 컬럼(performanceStartDate/EndDate·quantity·unit)에 바인딩.
+//  · 편집 가능 필드는 실제 수행 컬럼(performanceStartDate/EndDate)·번역 작업량 스냅샷에 바인딩.
+//  · 계산 수량·단위(quantity·unit)는 우측 수량·단위 칸 한 곳에서만 입력한다(2026-11 입력 위치 통합).
+//    상세정보는 기간·장소·시간·작업량 등 업무 정보 중심. 경비 행만 우측 칸이 없어 여기서 수량·단위를 입력한다.
 //  · 판매 참조값(saleUnitPrice 등)은 읽기전용 표시 — 계약단가로 복사하지 않음(§10).
 //  · 존재하지 않는 값(단어수 등)은 만들지 않고, 실제 스냅샷에 있는 값만 표시.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -9,21 +11,13 @@ import React from 'react';
 import { createPortal } from 'react-dom';
 import { C, TYPO, dsInputStd } from '../../lib/ds';
 import { ClickSelect } from '../ui';
-import { Row, UNIT_OPTS, dateVal, num, isTranslationKind, isInterpretationKind, countQtyPatch, unitChangePatch } from './performanceShared';
+import { Row, UNIT_OPTS, dateVal, num, isTranslationKind, isInterpretationKind, countQtyPatch, unitChangePatch, periodDays, qtyFollowsPeriod } from './performanceShared';
 import { formatScheduleRange } from '../../lib/dateFormat';
 import { DateField } from './DatePickerShared';
 
 const mini: React.CSSProperties = { ...dsInputStd(), minHeight: 28, padding: '3px 6px', fontSize: 12 };
 const ref: React.CSSProperties = { ...TYPO.helper, color: C.textMuted, whiteSpace: 'nowrap' };
 const wrap: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' };
-
-// 수행일수 자동계산(§3) — 시작~종료 포함 일수(2026-07-20~2026-07-22 = 3일). 유효하지 않거나 종료<시작이면 null.
-function dayCount(start: string, end: string): number | null {
-  const sd = new Date(`${start}T00:00:00Z`).getTime();
-  const ed = new Date(`${end}T00:00:00Z`).getTime();
-  if (Number.isNaN(sd) || Number.isNaN(ed) || ed < sd) return null;
-  return Math.round((ed - sd) / 86400000) + 1;
-}
 
 // ── 기간(Date Range) 단일 필드(§1) — 클릭 시 시작·종료를 한 번에 선택하는 포털 팝오버. ──
 //  · 표에 가로 오버플로우가 있어 절대배치는 잘리므로 ClickSelect와 동일하게 body 포털 + fixed 배치.
@@ -173,6 +167,25 @@ function renderTranslationSummary(r: Row, snap: any): React.ReactElement | null 
   );
 }
 
+// 임대기간 표시 — 저장된 수행 임대기간 날짜 수 우선, 없으면 판매 사용일수(usagePeriod). 재계산·저장 없음(표시 전용).
+function equipPeriodLabel(r: Row, snap: any, period: string): string {
+  const pd = periodDays(r.performanceStartDate, r.performanceEndDate);
+  const days = pd ?? (snap.usagePeriod ? num(snap.usagePeriod) : null);
+  return [period, days ? `(${days.toLocaleString()}일간)` : ''].filter(Boolean).join(' ');
+}
+// 판매 당시 수량 참고값 — 수행 수량과 다르거나(수정됨) 장비 사용일수가 판매수량에 합산된 경우에만 '판매 …'로 구분 표시.
+//   현재값처럼 보이지 않도록 '판매' 접두어를 붙인다. 판매정보 자체는 읽기만 한다.
+function saleRefLabel(r: Row, snap: any): string {
+  if (snap.saleQuantity == null || snap.saleQuantity === '') return '';
+  const sq = num(snap.saleQuantity), unit = snap.saleUnit ?? '';
+  const usage = num(snap.usagePeriod);
+  const isEquip = svcKind(r) === 'equipment';
+  if (isEquip && usage > 1) return `판매 ${(sq / usage).toLocaleString()}${unit} × ${usage.toLocaleString()}일`;
+  const q = r.quantity == null || r.quantity === '' ? null : num(r.quantity);
+  if (r.quantityFromSale || q == null || q === sq) return '';
+  return `판매 ${sq.toLocaleString()}${unit}`;
+}
+
 interface Props { r: Row; editable: boolean; patch: (p: Partial<Row>) => void; onEndDateChange?: (v: string) => void; }
 
 export default function ServiceDetailCell({ r, editable, patch, onEndDateChange }: Props) {
@@ -180,19 +193,20 @@ export default function ServiceDetailCell({ r, editable, patch, onEndDateChange 
   const kind = svcKind(r);
   // 종료일 변경은 납품일 자동연동 처리(§8)를 거친다 — onEndDateChange 우선.
   const endOn = (v: string) => (onEndDateChange ? onEndDateChange(v) : patch({ performanceEndDate: v }));
-  // 기간 변경 처리(§1·§3·§4) — 시작/종료는 각 필드로 저장(종료는 납품일 연동 endOn 경유), 기간 변경 시 수행일수 1회 자동계산.
-  //   수행일수(quantity)와 기간은 독립 저장: 여기서만 자동계산하고, 이후 수량 직접수정은 이 경로를 타지 않아 날짜를 건드리지 않음(§4).
-  //   장비는 수량이 세트수 의미이므로 자동계산 대상에서 제외(§5 기존 장비 입력 구조 유지).
+  // 기간 변경 처리(§1·§3·§4) — 시작/종료는 각 필드로 저장(종료는 납품일 연동 endOn 경유).
+  //   수행일수 자동 제안(2026-11)은 통역만, 그리고 현재 수량이 기존 기간 일수를 그대로 따를 때만(qtyFollowsPeriod).
+  //   사용자가 확정한 수량(0.5일·시간 단위 등)은 기간을 바꿔도 유지. 장비(수량=세트·대수)·유형 미판별 행은 자동 계산하지 않는다.
   const onRangeChange = (start: string, end: string) => {
     const p: Partial<Row> = {};
     if (start !== dateVal(r.performanceStartDate)) p.performanceStartDate = start;
-    if (start && end && kind !== 'equipment') {
-      const d = dayCount(start, end);
-      if (d != null) p.quantity = d;
+    if (kind === 'interpretation' && start && qtyFollowsPeriod(r)) {
+      const d = periodDays(start, end);
+      if (d != null) { p.quantity = d; if (!r.unit) p.unit = '일'; }
     }
     if (Object.keys(p).length) patch(p);
     if (end !== dateVal(r.performanceEndDate)) endOn(end);
   };
+  // 경비 행 전용 수량·단위 입력(경비는 우측 수량·단위 칸이 없음 — 중복 아님)
   const qtyUnit = (
     <>
       {/* 판매수량 복사값(과거 CRM 전환)은 개별 수행 수량이 아니므로 비워 보여준다 — 입력하기 전까지 저장값은 그대로 */}
@@ -255,27 +269,22 @@ export default function ServiceDetailCell({ r, editable, patch, onEndDateChange 
     const period = formatScheduleRange(r.performanceStartDate, r.performanceEndDate);
     let text = '';
     if (kind === 'interpretation') {
-      // 수행기간(N일간)은 날짜 바로 뒤에 묶어 표시 — 저장된 수량·단위 그대로 사용, 재계산 안 함(예: 3일 → (3일간)).
-      const saleQU = snap.saleQuantity != null ? `${num(snap.saleQuantity).toLocaleString()}${snap.saleUnit ?? ''}` : '';
-      const periodWithDays = [period, saleQU ? `(${saleQU}간)` : ''].filter(Boolean).join(' ');
+      // 수행기간(N일간)은 저장된 수행기간의 날짜 수(기간 정보). 계산 수량은 우측 수량 칸(저장된 수행 수량)에 표시(2026-11).
+      //   판매 당시 수량은 수행 수량과 다를 때만 '판매 …' 참고값으로 구분 표시.
+      const pd = periodDays(r.performanceStartDate, r.performanceEndDate);
+      const periodWithDays = [period, pd ? `(${pd}일간)` : ''].filter(Boolean).join(' ');
       // 인원수(interpreterCount)는 판매상품 전체 인원이므로 개별 수행정보(통역사 1명 단위)에는 표시하지 않는다.
       //   원본 스냅샷 데이터는 보존 — 표시에서만 제외(§10-2).
-      text = joinRef([periodWithDays, snap.operationHours, snap.interpretDuration, snap.interpretPlace]);
+      text = joinRef([periodWithDays, snap.operationHours, snap.interpretDuration, snap.interpretPlace, saleRefLabel(r, snap)]);
     } else if (kind === 'equipment') {
-      // 장비 저장 quantity = 사용일수 × 세트수(quoteItemForm 규약) → 사용일수로 나눠 순수 세트수 복원(판매정보 표시와 동일).
-      //   사용일수(usagePeriod)를 수량으로 오용하지 않는다.
-      const usageDays = Math.max(1, num(snap.usagePeriod) || 1);
-      const rawQ = snap.saleQuantity != null ? num(snap.saleQuantity) : (r.quantity != null && r.quantity !== '' ? num(r.quantity) : null);
-      const setQty = rawQ != null ? `${(rawQ / usageDays).toLocaleString()}${snap.saleUnit ?? r.unit ?? ''}` : '';
-      // 사용기간(N일간)은 날짜 바로 뒤에 묶어 표시 — 저장된 사용일수(usagePeriod) 그대로 사용, 재계산 안 함.
-      const daysLabel = snap.usagePeriod ? `(${num(snap.usagePeriod).toLocaleString()}일간)` : '';
-      const periodWithDays = [period, daysLabel].filter(Boolean).join(' ');
-      // 표시 순서: 날짜(기간) → 수량 → 장소 → 설치일시 (통역과 동일한 정보 구성 원칙).
-      text = joinRef([periodWithDays, setQty, snap.itemLocation, snap.operationHours ? `설치 ${snap.operationHours}` : '']);
+      // 임대기간(N일간) = 저장된 수행 임대기간의 날짜 수(없으면 판매 사용일수). 장비 수량은 우측 수량 칸(저장값)에만 표시 —
+      //   상세정보에 수량을 중복 표시하지 않는다(2026-11). 판매 당시 수량은 다를 때·사용일수 합산 시에만 참고값으로 표시.
+      text = joinRef([equipPeriodLabel(r, snap, period), snap.itemLocation, snap.operationHours ? `설치 ${snap.operationHours}` : '', saleRefLabel(r, snap)]);
     } else if (kind === 'expense') {
       text = joinRef([r.productNameSnapshot, r.quantity != null && r.quantity !== '' ? `${num(r.quantity).toLocaleString()}${r.unit ?? ''}` : '']);
     } else {
-      text = joinRef([period, r.quantity != null && r.quantity !== '' ? `${num(r.quantity).toLocaleString()}${r.unit ?? ''}` : '']);
+      // 유형 미판별·기타 — 기간만. 계산 수량·단위는 우측 칸(저장된 수행 수량)에 표시(중복 표시 제거, 2026-11).
+      text = period;
     }
     return <span style={{ ...ref, color: C.textSecondary }} title={text}>{text || '—'}</span>;
   }
@@ -285,7 +294,7 @@ export default function ServiceDetailCell({ r, editable, patch, onEndDateChange 
     return (
       <div style={wrap}>
         <DateRangeField start={r.performanceStartDate} end={r.performanceEndDate} onChange={onRangeChange} label="수행기간" />
-        {qtyUnit}
+        {(() => { const pd = periodDays(r.performanceStartDate, r.performanceEndDate); return pd ? <span style={ref} data-testid="perf-period-days">({pd}일간)</span> : null; })()}
         {/* 인원수는 개별 수행정보(통역사 1명 단위)에 표시하지 않음 — 스냅샷 데이터는 보존, 표시만 제외. */}
         <span style={ref}>{joinRef([snap.operationHours, snap.interpretDuration, snap.interpretPlace])}</span>
       </div>
@@ -294,10 +303,9 @@ export default function ServiceDetailCell({ r, editable, patch, onEndDateChange 
   if (kind === 'equipment') {
     return (
       <div style={wrap}>
-        <DateRangeField start={r.performanceStartDate} end={r.performanceEndDate} onChange={onRangeChange} label="사용기간" />
-        {qtyUnit}
-        {/* 표시 순서: (날짜=기간필드) → (수량=qtyUnit) → 장소 → 설치일시. 통역 미리보기와 동일 원칙. */}
-        <span style={ref}>{joinRef([snap.itemLocation, snap.operationHours ? `설치 ${snap.operationHours}` : ''])}</span>
+        <DateRangeField start={r.performanceStartDate} end={r.performanceEndDate} onChange={onRangeChange} label="임대기간" />
+        {/* 임대기간과 장비 수량은 독립 — 기간을 바꿔도 우측 수량(세트·대수)은 바뀌지 않는다. 수량은 우측 칸에서만 입력. */}
+        <span style={ref}>{joinRef([equipPeriodLabel(r, snap, ''), snap.itemLocation, snap.operationHours ? `설치 ${snap.operationHours}` : '', saleRefLabel(r, snap)])}</span>
       </div>
     );
   }
@@ -330,7 +338,6 @@ export default function ServiceDetailCell({ r, editable, patch, onEndDateChange 
   return (
     <div style={wrap}>
       <DateRangeField start={r.performanceStartDate} end={r.performanceEndDate} onChange={onRangeChange} label="수행기간" />
-      {qtyUnit}
       {countInputs}
     </div>
   );

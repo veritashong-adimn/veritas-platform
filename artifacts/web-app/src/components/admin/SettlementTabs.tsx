@@ -10,6 +10,7 @@
 import React, { useState } from 'react';
 import { BackToListButton } from './BackToListButton';
 import PayoutRoundsTab, { type PayoutPerms } from './PayoutRoundsTab';
+import PayoutAdjustmentBanner from './PayoutAdjustmentBanner';
 import PayoutStatementTab from './PayoutStatementTab';
 import TaxReportTab from './TaxReportTab';
 import { PayoutUnifiedTab } from './PayoutUnifiedTab';
@@ -28,6 +29,7 @@ interface Props {
 export function SettlementTabs({ view, token, onToast, canOps = true, payoutPerms }: Props) {
   // 지급회차 관리 화면: 통합 조회(기본) ↔ 운영 지급확정·이체(보조). 다른 view(명세서·세무)는 영향 없음.
   const [mode, setMode] = useState<'unified' | 'operational'>('unified');
+  const [adjFocus, setAdjFocus] = useState<'requested' | 'pending' | null>(null);   // 정정 요청 바로가기(2026-11)
   // 지급명세서: 통합 검색(기본 — 지급회차 관리와 같은 통합 지급자료) ↔ 운영 지급회차 확정 스냅샷 명세서(기존 화면, 보조).
   const [stmtMode, setStmtMode] = useState<'search' | 'operational'>('search');
 
@@ -57,13 +59,17 @@ export function SettlementTabs({ view, token, onToast, canOps = true, payoutPerm
         {/* 페이지 이동 버튼 — 통번역사 상세 '뒤로가기'(BackToListButton subtle)와 같은 디자인. 앞으로 = 오른쪽 화살표, 돌아가기 = 왼쪽 화살표. */}
         {!canOps ? null : mode === 'unified'
           ? <BackToListButton variant="subtle" direction="forward" label="운영 지급확정·은행이체" ariaLabel="운영 지급확정·은행이체 화면 열기"
-              testId="settlement-mode-toggle" onClick={() => setMode('operational')} />
+              testId="settlement-mode-toggle" onClick={() => { setAdjFocus(null); setMode('operational'); }} />
           : <BackToListButton variant="subtle" label="통합 지급회차관리" ariaLabel="통합 지급회차관리로 돌아가기"
               testId="settlement-mode-toggle" onClick={() => setMode('unified')} />}
       </div>
+      {/* 정정 요청·승인 대기 현황(2026-11) — 기본(통합 조회) 화면에서 승인·반려 목록으로 바로 이동. 통합 조회 기능은 그대로. */}
+      {(mode === 'unified' || !canOps) && (
+        <PayoutAdjustmentBanner token={token} canOpen={canOps} onOpen={(f) => { setAdjFocus(f); setMode('operational'); }} />
+      )}
       {mode === 'unified' || !canOps
         ? <PayoutUnifiedTab token={token} onToast={onToast} />
-        : <PayoutRoundsTab token={token} onToast={onToast} perms={payoutPerms} />}
+        : <PayoutRoundsTab token={token} onToast={onToast} perms={payoutPerms} adjFocus={adjFocus} />}
     </div>
   );
 }

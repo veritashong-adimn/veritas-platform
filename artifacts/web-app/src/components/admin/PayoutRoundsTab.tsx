@@ -6,13 +6,14 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { formatDisplayDate, formatScheduleRange, formatLabelDates } from '../../lib/dateFormat';
 import { api, formatLanguageLabel } from '../../lib/constants';
-import { Card, GhostBtn, PrimaryBtn, ClickSelect, confirmDialog } from '../ui';
+import { Card, GhostBtn, PrimaryBtn, ClickSelect, confirmDialog, promptDialog } from '../ui';
 import { Pagination } from '../ui/Paginator';
 import { useClientPagination } from './bulkListShared';
 import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
 import './readTableView.css';
 import { downloadTableExcel, todayStamp, type ExcelColumn } from '../../lib/payoutExcel';
 import PayoutExecutionModal from './PayoutExecutionModal';
+import { PayoutAdjustmentList } from './PayoutAdjustmentsPanel';
 import RemittancePopup, { RemitStatusBadge, fmtFx } from './RemittancePopup';
 import { DateField } from './DatePickerShared';
 
@@ -91,9 +92,9 @@ function suggestPeriod(paymentDate: string): { start: string; end: string } {
 
 /** 실행권한 — 서버(requireStaffPermission)와 동일 키. 미전달 시 기존 동작(전체 표시) 유지. */
 export type PayoutPerms = { manage: boolean; confirm: boolean; transfer: boolean; superAdmin: boolean };
-interface Props { token: string; onToast: (m: string) => void; perms?: PayoutPerms; }
+interface Props { token: string; onToast: (m: string) => void; perms?: PayoutPerms; adjFocus?: 'requested' | 'pending' | null; }
 
-export default function PayoutRoundsTab({ token, onToast, perms = { manage: true, confirm: true, transfer: true, superAdmin: true } }: Props) {
+export default function PayoutRoundsTab({ token, onToast, perms = { manage: true, confirm: true, transfer: true, superAdmin: true }, adjFocus = null }: Props) {
   const authH = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
   const [rounds, setRounds] = useState<any[]>([]);
   // 선택값(§6): 'all'(전체 지급대상·기본) | 'unassigned'(미배정) | 회차 id 문자열.
@@ -352,10 +353,13 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
   // 확정취소 — 지급완료 전 확정 회차를 작성중으로 되돌림. 확정 스냅샷 해제 + 같은 지급일 미배정 재편입 + 재계산.
   const unconfirmRound = async () => {
     if (!selId || busy) return;
-    if (!(await confirmDialog({ title: '지급확정 취소', message: '이 회차의 지급확정을 취소하고 「작성중」으로 되돌릴까요?\n확정 스냅샷이 해제되고, 같은 지급일의 미배정 건이 다시 편입되며 금액이 재계산됩니다.\n(지급완료된 회차는 취소할 수 없습니다)', confirmLabel: '확정취소', variant: 'warning' }))) return;
+    // 확정취소 사유(2026-11) — 기존 확정값(스냅샷)과 함께 감사로그에 기록된다.
+    const reason = await promptDialog({ title: '지급확정 취소', message: '이 회차의 지급확정을 취소하고 「작성중」으로 되돌릴까요?\n확정 스냅샷이 해제되고(기존 확정값은 감사로그에 보존), 같은 지급일의 미배정 건이 다시 편입되며 금액이 재계산됩니다.\n(지급완료된 회차는 취소할 수 없습니다)',
+      label: '확정취소 사유', placeholder: '예: 수행일수 정정에 따른 금액 수정', confirmLabel: '확정취소', multiline: true, validate: (v) => (v.trim() ? null : '확정취소 사유를 입력해 주세요.') });
+    if (!reason || !reason.trim()) return;
     setBusy(true);
     try {
-      const res = await fetch(api(`/api/admin/payout-rounds/${selId}/unconfirm`), { method: 'PATCH', headers: authH });
+      const res = await fetch(api(`/api/admin/payout-rounds/${selId}/unconfirm`), { method: 'PATCH', headers: authH, body: JSON.stringify({ reason: reason.trim() }) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { onToast(data.error ?? '확정취소 실패'); return; }
       setDetail(data); await loadRounds();
@@ -509,6 +513,8 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP[4] }}>
+      {/* 수정·정정 요청 / 승인 / 차액 정산 현황(2026-11) — 별도 컴포넌트(PayoutAdjustmentsPanel) */}
+      <PayoutAdjustmentList mode="admin" token={token} onToast={onToast} initialFilter={adjFocus ?? undefined} focus={!!adjFocus} onChanged={() => { void loadRounds(); if (selId) void loadDetail(String(selId)); }} />
       {/* ── 상단: 회차 선택 + 생성 + 확정 ── */}
       <Card>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SP[3], flexWrap: 'wrap' }}>
@@ -638,7 +644,7 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
               </div>
             </div>
             <div style={{ display: 'flex', gap: SP[5], flexWrap: 'wrap', padding: `${SP[3]}px ${SP[4]}px`, background: C.primaryBg, borderRadius: 8, ...TYPO.inputValue, fontVariantNumeric: 'tabular-nums' }}>
-              <span>대상 건수 <b>{totals.assignments ?? 0}건</b></span>
+              <span>대상 건수 <b>{totals.assignments ?? 0}건</b>{(totals as any).adjustmentCount ? <span style={{ color: C.textSecondary }}> (정정 차액 {(totals as any).adjustmentCount}건 포함)</span> : null}</span>
               <span>지급대상 <b>{totals.payees ?? 0}</b> (개인 {totals.individualCount ?? 0} · 외주 {totals.vendorCount ?? 0})</span>
               <span>총 세전 <b>{won(totals.grossTotal)}원</b></span>
               <span>총 공제 <b style={{ color: C.danger }}>{won(totals.withholdingTotal)}원</b></span>

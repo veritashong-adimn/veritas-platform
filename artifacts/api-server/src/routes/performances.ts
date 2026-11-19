@@ -11,7 +11,7 @@ import {
   db, performanceAssignmentsTable, performanceExpensesTable, performanceDeductionsTable, performanceRemittancesTable,
   quotesTable, quoteItemsTable, quoteItemFilesTable, productsTable, holidaysTable, projectsTable,
   translatorSensitiveTable, translatorProfilesTable, translatorRatesTable, usersTable, companiesTable,
-  translatorEmailsTable,
+  translatorEmailsTable, payoutRoundsTable,
   calcIndividualPayout, calcVendorPurchase, calcVendorSettlement, DEFAULT_DOMESTIC_WITHHOLDING_TREATMENT,
   calcBasePerformanceFee, calcCostTotal, calcPaymentDate,
 } from "@workspace/db";
@@ -24,7 +24,7 @@ import { logEvent } from "../lib/logEvent";
 import { isPendingPayoutReview, activatedSaleExists, legacySaleSupplyByAssignment } from "../services/legacyActivationLineage";
 import { getPermissionsForRole } from "../lib/rbac";
 import { decrypt, maskResidentNumber } from "../lib/encrypt";
-import { autoAssignByPaymentDate } from "./payoutRounds";
+import { autoAssignByPaymentDate, refreshOpenRoundTotals } from "./payoutRounds";
 import { isLegacyPlaceholderEmail } from "../lib/mailer";
 import { activateTranslatorOnAssignment } from "../services/translatorActivation";
 
@@ -580,10 +580,15 @@ export async function loadPerformanceRows(projectId: number) {
   // 과거 CRM 전환 행: 스냅샷에 판매 공급가액이 없으면 원본 공급가액(판매 총액과 검증된 경우만)을 조회 응답에만 채운다(수익률 계산용, DB 미변경).
   const needSupply = rows.filter(r => { const s = r.serviceDetailSnapshot as any; return !(s && s.saleSupplyAmount != null && s.saleSupplyAmount !== ""); }).map(r => r.id);
   const legacySupply = needSupply.length ? await legacySaleSupplyByAssignment(db, needSupply).catch(() => new Map<number, number>()) : new Map<number, number>();
+  // 지급 단계 표시용(가산 필드) — 배정된 지급회차의 상태(draft·reviewing·confirmed·paid·cancelled). 화면 잠금·안내에만 사용.
+  const roundIds = [...new Set(rows.map(r => r.payoutRoundId).filter((v): v is number => v != null))];
+  const roundStatus = new Map<number, string>();
+  if (roundIds.length) for (const rd of await db.select({ id: payoutRoundsTable.id, status: payoutRoundsTable.status }).from(payoutRoundsTable).where(inArray(payoutRoundsTable.id, roundIds))) roundStatus.set(rd.id, rd.status);
   return rows.map(r => {
     const sup = legacySupply.get(r.id);
     const snap = sup != null ? { ...((r.serviceDetailSnapshot as any) ?? {}), saleSupplyAmount: String(sup), saleSupplySource: "legacy_crm" } : r.serviceDetailSnapshot;
-    return { ...stripEnc(r), serviceDetailSnapshot: snap, expenses: expByRow.get(r.id) ?? [], deductions: dedByRow.get(r.id) ?? [] };
+    return { ...stripEnc(r), serviceDetailSnapshot: snap, expenses: expByRow.get(r.id) ?? [], deductions: dedByRow.get(r.id) ?? [],
+      payoutRoundStatus: r.payoutRoundId != null ? (roundStatus.get(r.payoutRoundId) ?? null) : null };
   });
 }
 
@@ -747,8 +752,9 @@ router.post("/admin/projects/:id/performances/import-from-sale", ...adminGuard, 
         // per-person 정규화 행(§2)은 인원=1로 고정해 원가 1인분 유지(이중계산 방지). 그 외/보호구조 존중 행은 스냅샷 그대로.
         serviceDetailSnapshot: c.perPerson ? { ...correctSnap, interpreterCount: 1 } : correctSnap,
         ...initRest,                            // 기간·수량·단위는 재동기화
-        // 번역은 수량/단위를 재동기화하지 않고 기존값 보존(단어/글자 행 유지). 비번역은 위 initRest 그대로.
-        ...(isTransCorrect ? { quantity: c.prior.quantity, unit: c.prior.unit } : {}),
+        // 번역은 수량/단위를 재동기화하지 않고 기존값 보존(단어/글자 행 유지).
+        //   비번역도 이미 저장된 수행 수량이 있으면 보존(2026-11) — 판매 수량은 초기값일 뿐, 수행 수량(직접 확정값)을 덮어쓰지 않는다.
+        ...((isTransCorrect || c.prior.quantity != null) ? { quantity: c.prior.quantity, unit: c.prior.unit } : {}),
         // 납품일·확인상태: 미입력 행만 자동 채움(§15). 확인/수동 행은 보존.
         ...(keepDelivery ? {} : { deliveryDate, deliveryDateAuto }),
         // 지급일은 "최종 납품일"(유지값 or 신규값) 기준으로 즉시 재계산(§10) — 파생값이므로 항상 갱신.
@@ -848,6 +854,10 @@ export type ApplyRowCtx = {
   userId: number | null;
   isHoliday: (d: string) => boolean;
   mayConfirm: boolean;                                               // 납품확인 전환 권한(§9)
+  changeReason?: string | null;                                      // 지급회차 배정 행 금액 변경 사유(2026-11)
+  // 승인된 정정 반영(2026-11) — payout_adjustments 승인 처리에서만 true. 지급확정·지급완료·해외송금 잠금을 건너뛰고
+  //   같은 저장 경로(계산 SSOT)로 수행정보를 정정한다. 지급상태·회차·실지급 필드는 호출측에서 원래 값으로 복원한다.
+  approvedAdjustment?: boolean;
   priorById: Map<number, typeof performanceAssignmentsTable.$inferSelect>;
 };
 
@@ -864,6 +874,67 @@ async function paidRowChanged(tx: any, prior: typeof performanceAssignmentsTable
   return Math.abs(Number(totals.costTotal) - Number(prior.costTotal ?? 0)) >= 0.005;
 }
 
+// 지급 관련 변경 감지(2026-11) — 지급완료 판정(paidRowChanged: 지급대상·원가합계)에 더해
+//   세후·부가세·외화 지급액을 바꾸는 세금처리·세율·매입증빙·정산유형·계약통화·외화 계약금액 변경도 포함한다.
+//   (지급완료 행의 기존 보호 규칙은 paidRowChanged 그대로 — 여기는 지급회차 배정 행 전용)
+export async function payoutRowChanged(tx: any, prior: typeof performanceAssignmentsTable.$inferSelect, r: RowInput, computed: ReturnType<typeof computeRowValues>): Promise<boolean> {
+  if (await paidRowChanged(tx, prior, r, computed)) return true;
+  const c: any = computed;
+  const same = (a: unknown, b: unknown) => (a == null || a === "" ? null : String(a)) === (b == null || b === "" ? null : String(b));
+  const sameNum = (a: unknown, b: unknown) => (a == null || a === "") ? (b == null || b === "") : (b != null && b !== "" && Math.abs(Number(a) - Number(b)) < 0.005);
+  if (c.withholdingTreatment !== undefined && !same(c.withholdingTreatment, prior.withholdingTreatment)) return true;
+  if (r.withholdingRate !== undefined && !sameNum(r.withholdingRate, prior.withholdingRate)) return true;
+  if (c.purchaseEvidenceType !== undefined && !same(c.purchaseEvidenceType, prior.purchaseEvidenceType)) return true;
+  if (c.vendorSettlementType !== undefined && !same(c.vendorSettlementType, prior.vendorSettlementType)) return true;
+  if (c.contractCurrency !== undefined && !same(c.contractCurrency, prior.contractCurrency)) return true;
+  if (c.contractAmountForeign !== undefined && !sameNum(c.contractAmountForeign, prior.contractAmountForeign)) return true;
+  return false;
+}
+// 지급회차 상태 조회(배정 행 단계 판정용)
+export async function roundStatusOf(tx: any, roundId: number | null | undefined): Promise<string | null> {
+  if (roundId == null) return null;
+  const [rd] = await tx.select({ status: payoutRoundsTable.status }).from(payoutRoundsTable).where(eq(payoutRoundsTable.id, roundId));
+  return rd?.status ?? null;
+}
+
+// ── 관리자 승인이 필요한 지급 단계(2026-11) ─────────────────────────────────────
+//   paid              : 지급완료 행 → 정정 요청(paid_correction)
+//   confirmed         : 지급확정 회차 소속·미지급 행 → 수정 요청(confirmed_change)
+//   overseas_remitted : 해외(외화) 외주 행에 실제 송금완료 내역이 있음 → 정정 요청(paid_correction, 외화)
+//   null              : 승인 불필요(배정 전·작성중·검토중 — 기존 수정 흐름)
+export type ApprovalStage = "paid" | "confirmed" | "overseas_remitted" | null;
+export async function approvalStageOf(tx: any, prior: typeof performanceAssignmentsTable.$inferSelect): Promise<ApprovalStage> {
+  if (prior.paymentStatus === "paid") return "paid";
+  if (prior.payoutRoundId != null) {
+    const st = await roundStatusOf(tx, prior.payoutRoundId);
+    if (st === "confirmed" || st === "paid") return "confirmed";
+  }
+  if (prior.performerCategory === "vendor" && prior.vendorSettlementType === "overseas") {
+    const [done] = await tx.select({ id: performanceRemittancesTable.id }).from(performanceRemittancesTable)
+      .where(and(eq(performanceRemittancesTable.assignmentId, prior.id), isNull(performanceRemittancesTable.deletedAt), eq(performanceRemittancesTable.status, "completed"))).limit(1);
+    if (done) return "overseas_remitted";
+  }
+  return null;
+}
+// 해외 외주 계약 변경(통화·외화 계약금액·정산유형) 감지 — 송금완료 이력 행의 승인 판정용.
+function overseasContractChanged(prior: typeof performanceAssignmentsTable.$inferSelect, computed: any): boolean {
+  const sameNum = (a: unknown, b: unknown) => (a == null || a === "") ? (b == null || b === "") : (b != null && b !== "" && Math.abs(Number(a) - Number(b)) < 0.005);
+  if (computed.vendorSettlementType !== undefined && (computed.vendorSettlementType ?? null) !== (prior.vendorSettlementType ?? null)) return true;
+  if (computed.contractCurrency !== undefined && String(computed.contractCurrency ?? "").toUpperCase() !== String(prior.contractCurrency ?? "").toUpperCase()) return true;
+  if (computed.contractAmountForeign !== undefined && !sameNum(computed.contractAmountForeign, prior.contractAmountForeign)) return true;
+  return false;
+}
+// 이 행 입력이 관리자 승인 대상 변경인가(단계 + 지급 관련 변경). 승인 불필요면 null.
+export async function approvalRequiredFor(tx: any, prior: typeof performanceAssignmentsTable.$inferSelect, r: RowInput): Promise<ApprovalStage> {
+  const stage = await approvalStageOf(tx, prior);
+  if (!stage) return null;
+  const computed = computeRowValues(r);
+  if (stage === "overseas_remitted") return overseasContractChanged(prior, computed) || await paidRowChanged(tx, prior, r, computed) ? stage : null;
+  if (stage === "paid") return await paidRowChanged(tx, prior, r, computed) || await payoutRowChanged(tx, prior, r, computed) ? stage : null;
+  return await payoutRowChanged(tx, prior, r, computed) ? stage : null;
+}
+const approvalError = (msg: string) => Object.assign(new Error(msg), { code: "APPROVAL_REQUIRED" });
+
 export async function applyPerformanceRow(
   tx: any,
   projectId: number,
@@ -874,16 +945,34 @@ export async function applyPerformanceRow(
   const category = r.performerCategory ?? "individual";
   const computed = computeRowValues(r);
   const lockedPrior = r.id ? priorById.get(r.id) : undefined;
-  if (lockedPrior?.paymentStatus === "paid") {
+  // 해외 외주 송금완료 이력 행(2026-11) — 계약통화·외화 계약금액 변경은 정정 요청·관리자 승인으로만(기존 송금기록 보존).
+  if (lockedPrior && !ctx.approvedAdjustment && lockedPrior.paymentStatus !== "paid"
+      && await approvalStageOf(tx, lockedPrior) === "overseas_remitted" && overseasContractChanged(lockedPrior, computed)) {
+    throw approvalError(`해외송금 완료 내역이 있는 수행정보(id ${r.id})의 계약통화·계약금액은 정정 요청 후 관리자 승인으로만 변경할 수 있습니다.`);
+  }
+  if (lockedPrior?.paymentStatus === "paid" && !ctx.approvedAdjustment) {
     // 지급완료 수행정보는 일반 수정으로 지급대상·금액을 바꿀 수 없다(정정은 정산관리 추가지급·환수·차감 절차). 비고·행 순서만 갱신.
     //   행 순서(sequence)는 화면 표시 순번일 뿐 금액·지급과 무관 — 저장하지 않으면 다른 행을 이 행 위로 옮겼을 때
     //   같은 순번이 2개가 되어 (sequence, id) 정렬로 원래 위치로 되돌아간다.
     if (await paidRowChanged(tx, lockedPrior, r, computed)) {
-      throw new Error(`지급완료된 수행정보(id ${r.id})는 지급대상·금액을 수정할 수 없습니다. 정산관리의 추가지급·환수·차감 절차를 이용하세요.`);
+      throw approvalError(`지급완료된 수행정보(id ${r.id})는 지급대상·금액을 직접 수정할 수 없습니다. [정정 요청] 후 관리자 승인으로 처리되며, 차액은 추가지급·환수·상계로 정산됩니다.`);
     }
     await tx.update(performanceAssignmentsTable).set({ remark: r.remark ?? lockedPrior.remark ?? null, sequence: r.sequence ?? lockedPrior.sequence, updatedBy: userId, updatedAt: new Date() })
       .where(and(eq(performanceAssignmentsTable.id, r.id!), eq(performanceAssignmentsTable.projectId, projectId)));
     return r.id!;
+  }
+  // 지급회차 배정 행(2026-11) — 단계별 수정 정책.
+  //   · 지급확정(confirmed)·지급완료(paid) 회차: 금액·지급대상·세금 관련 변경 차단(확정 스냅샷·송금건과 불일치 방지).
+  //     정정은 관리자 확정취소 → 수정 → 재확정 절차로만. 그 외 비금액 항목(비고·납품확인 등)은 기존대로 저장.
+  //   · 작성중(draft)·검토중(reviewing) 회차: 수정 허용(회차 상세는 수행정보 실시간 기준이라 즉시 반영). 단 금액이 바뀌면 변경 사유 필수.
+  if (lockedPrior?.payoutRoundId != null && !ctx.approvedAdjustment) {
+    const st = await roundStatusOf(tx, lockedPrior.payoutRoundId);
+    if ((st === "confirmed" || st === "paid") && await payoutRowChanged(tx, lockedPrior, r, computed)) {
+      throw approvalError(`지급확정된 지급회차(#${lockedPrior.payoutRoundId})의 수행정보(id ${r.id})는 금액·지급대상·세금처리를 직접 수정할 수 없습니다. [수정 요청] 후 관리자 승인으로 반영됩니다.`);
+    }
+    if ((st === "draft" || st === "reviewing") && !(ctx.changeReason && ctx.changeReason.trim()) && await payoutRowChanged(tx, lockedPrior, r, computed)) {
+      throw Object.assign(new Error(`지급회차(#${lockedPrior.payoutRoundId})에 배정된 수행정보(id ${r.id})의 지급금액이 바뀝니다. 변경 사유를 입력해 주세요.`), { code: "CHANGE_REASON_REQUIRED" });
+    }
   }
   if (lockedPrior?.paymentStatus === "payment_hold" && r.paymentStatus && r.paymentStatus !== "payment_hold"
       && await isPendingPayoutReview(tx, r.id!)) {
@@ -1071,6 +1160,7 @@ export async function applyPerformanceRow(
 const batchSchema = z.object({
   rows: z.array(rowSchema).default([]),
   deletedIds: z.array(z.number().int().positive()).default([]),
+  changeReason: z.string().trim().max(500).optional().nullable(),   // 지급회차 배정 행 금액 변경 사유(2026-11, 감사로그 기록)
 });
 
 router.put("/admin/projects/:id/performances", ...adminGuard, requireRolePermission("project.update"), async (req, res) => {
@@ -1079,6 +1169,7 @@ router.put("/admin/projects/:id/performances", ...adminGuard, requireRolePermiss
   const parsed = batchSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: "유효성 검증 실패", detail: parsed.error.flatten() }); return; }
   const { rows, deletedIds } = parsed.data;
+  const changeReason = parsed.data.changeReason?.trim() || null;
   const userId = req.user?.id ?? null;
   // 해외송금 내역이 있는 수행행은 해외 외주 정산유형을 벗어나거나 삭제할 수 없다 — 외화 송금 후 원화로 재지급되는 이중지급 방지.
   {
@@ -1092,12 +1183,35 @@ router.put("/admin/projects/:id/performances", ...adminGuard, requireRolePermiss
       }
     }
   }
+  // 관리자 승인 대상 사전 판정(2026-11) — 지급확정·지급완료·해외송금완료 행의 지급 관련 변경이 섞여 있으면 저장 전체를 보류하고
+  //   해당 행 목록을 돌려준다(APPROVAL_REQUIRED). 화면은 이 행들을 정정·수정 요청으로 제출하고 나머지는 원래 값으로 다시 저장한다.
+  {
+    const ids = rows.map(r => r.id).filter((v): v is number => v != null);
+    if (ids.length) {
+      const priors = await db.select().from(performanceAssignmentsTable)
+        .where(and(eq(performanceAssignmentsTable.projectId, projectId), inArray(performanceAssignmentsTable.id, ids), isNull(performanceAssignmentsTable.deletedAt)));
+      const pmap = new Map(priors.map(p => [p.id, p]));
+      const need: { id: number; stage: string }[] = [];
+      for (const r of rows) {
+        const prior = r.id != null ? pmap.get(r.id) : undefined;
+        if (!prior) continue;
+        const stage = await approvalRequiredFor(db, prior, r);
+        if (stage) need.push({ id: prior.id, stage });
+      }
+      if (need.length) {
+        res.status(400).json({ code: "APPROVAL_REQUIRED", rows: need,
+          error: `지급확정·지급완료(또는 해외송금 완료)된 수행정보 ${need.length}건의 금액 변경은 관리자 승인이 필요합니다. 수정·정정 요청으로 제출해 주세요.` });
+        return;
+      }
+    }
+  }
   const activatedTranslatorIds: number[] = [];   // 이번 저장으로 자동 활성화된 통번역사(가산 응답 필드)
 
   try {
     const auditBefore = await db.select({ id: performanceAssignmentsTable.id, individualUserId: performanceAssignmentsTable.individualUserId,
       vendorCompanyId: performanceAssignmentsTable.vendorCompanyId, costTotal: performanceAssignmentsTable.costTotal, paymentStatus: performanceAssignmentsTable.paymentStatus,
-      expectedPaymentDate: performanceAssignmentsTable.expectedPaymentDate, deliveryDate: performanceAssignmentsTable.deliveryDate })
+      expectedPaymentDate: performanceAssignmentsTable.expectedPaymentDate, deliveryDate: performanceAssignmentsTable.deliveryDate,
+      payoutRoundId: performanceAssignmentsTable.payoutRoundId })
       .from(performanceAssignmentsTable).where(and(eq(performanceAssignmentsTable.projectId, projectId), isNull(performanceAssignmentsTable.deletedAt)));
     await db.transaction(async (tx) => {
       // 1) 삭제 — 지급완료(paid) 행은 차단(§29). 소유 프로젝트 검증.
@@ -1106,6 +1220,12 @@ router.put("/admin/projects/:id/performances", ...adminGuard, requireRolePermiss
           .where(and(eq(performanceAssignmentsTable.projectId, projectId), inArray(performanceAssignmentsTable.id, deletedIds)));
         const paid = targets.filter(t => t.status === "paid" || t.paymentStatus === "paid");
         if (paid.length) throw new Error(`지급완료된 수행정보는 삭제할 수 없습니다 (id: ${paid.map(p => p.id).join(", ")}).`);
+        // 지급회차 배정 행 삭제(2026-11) — 확정·완료 회차 소속은 차단, 작성중·검토중 회차 소속은 변경 사유 필수.
+        for (const t of targets.filter(t => t.payoutRoundId != null)) {
+          const st = await roundStatusOf(tx, t.payoutRoundId);
+          if (st === "confirmed" || st === "paid") throw new Error(`지급확정된 지급회차(#${t.payoutRoundId})의 수행정보(id ${t.id})는 삭제할 수 없습니다. 관리자 확정취소 후 처리해 주세요.`);
+          if ((st === "draft" || st === "reviewing") && !changeReason) throw Object.assign(new Error(`지급회차(#${t.payoutRoundId})에 배정된 수행정보(id ${t.id})를 삭제하려면 변경 사유를 입력해 주세요.`), { code: "CHANGE_REASON_REQUIRED" });
+        }
         await tx.update(performanceAssignmentsTable)
           .set({ deletedAt: new Date(), deletedBy: userId, updatedBy: userId, updatedAt: new Date() })
           .where(and(eq(performanceAssignmentsTable.projectId, projectId), inArray(performanceAssignmentsTable.id, deletedIds)));
@@ -1120,7 +1240,7 @@ router.put("/admin/projects/:id/performances", ...adminGuard, requireRolePermiss
       const priorRows = await tx.select().from(performanceAssignmentsTable)
         .where(and(eq(performanceAssignmentsTable.projectId, projectId), isNull(performanceAssignmentsTable.deletedAt)));
       const priorById = new Map(priorRows.map(p => [p.id, p]));
-      const ctx: ApplyRowCtx = { userId, isHoliday, mayConfirm, priorById };
+      const ctx: ApplyRowCtx = { userId, isHoliday, mayConfirm, priorById, changeReason };
       for (const r of rows) {
         const assignmentId = await applyPerformanceRow(tx, projectId, r, ctx);   // 저장 SSOT(§33) — Import와 동일 경로
         // 배정 확정 시 자동 활성화 — 이 행에 새로 배정된(신규 행 또는 수행자 변경) 비활성 통번역사만, 같은 트랜잭션에서 처리.
@@ -1140,25 +1260,41 @@ router.put("/admin/projects/:id/performances", ...adminGuard, requireRolePermiss
     //   best-effort: 자동배정 실패가 수행정보 저장 자체를 막지 않도록 예외를 분리 처리.
     try { await autoAssignByPaymentDate(projectId); }
     catch (e) { req.log.error({ e, projectId }, "지급회차 자동배정 실패(저장은 정상)"); }
+    // 작성중·검토중 회차 목록 총계 동기화(2026-11) — 회차 상세는 수행정보 실시간 기준이라 이미 반영되며,
+    //   목록용 집계(payout_rounds.gross/deduction/net)만 갱신한다. 확정·완료 회차는 건드리지 않는다(함수 내부 필터).
+    try {
+      const touched = new Set<number>();
+      for (const b of auditBefore) if (b.payoutRoundId != null) touched.add(b.payoutRoundId);
+      const nowRows = await db.select({ rid: performanceAssignmentsTable.payoutRoundId }).from(performanceAssignmentsTable).where(eq(performanceAssignmentsTable.projectId, projectId));
+      for (const x of nowRows) if (x.rid != null) touched.add(x.rid);
+      if (touched.size) await refreshOpenRoundTotals([...touched]);
+    } catch (e) { req.log.error({ e, projectId }, "지급회차 총계 동기화 실패(저장은 정상)"); }
 
     const rowsOut = await loadPerformanceRows(projectId);
     // 감사로그 — 변경된 행만 전후 값 기록(지급대상·원가합계·지급상태·지급예정일·납품일), 삭제 id.
     try {
       const pick = (r: any) => ({ individualUserId: r.individualUserId ?? null, vendorCompanyId: r.vendorCompanyId ?? null, costTotal: r.costTotal != null ? String(Number(r.costTotal)) : null,
-        paymentStatus: r.paymentStatus ?? null, expectedPaymentDate: r.expectedPaymentDate ? String(r.expectedPaymentDate).slice(0, 10) : null, deliveryDate: r.deliveryDate ? String(r.deliveryDate).slice(0, 10) : null });
+        paymentStatus: r.paymentStatus ?? null, expectedPaymentDate: r.expectedPaymentDate ? String(r.expectedPaymentDate).slice(0, 10) : null, deliveryDate: r.deliveryDate ? String(r.deliveryDate).slice(0, 10) : null,
+        payoutRoundId: r.payoutRoundId ?? null });
       const after = await db.select().from(performanceAssignmentsTable).where(and(eq(performanceAssignmentsTable.projectId, projectId), isNull(performanceAssignmentsTable.deletedAt)));
       const beforeById = new Map(auditBefore.map(b => [b.id, pick(b)]));
       const changes = after.map(a => ({ id: a.id, before: beforeById.get(a.id) ?? null, after: pick(a) }))
-        .filter(c => JSON.stringify(c.before) !== JSON.stringify(c.after));
+        .filter(c => JSON.stringify(c.before) !== JSON.stringify(c.after))
+        // 지급금액(원가합계) 변경 차액(2026-11) — 수정 전후 금액과 함께 차액을 명시(예: 500,000 → 550,000 = +50,000).
+        .map(c => {
+          const b = c.before?.costTotal, af = c.after.costTotal;
+          const delta = b != null && af != null ? Math.round((Number(af) - Number(b)) * 100) / 100 : null;
+          return delta ? { ...c, costTotalDelta: delta } : c;
+        });
       if (changes.length || deletedIds.length) {
         await logEvent("project", projectId, "performances_saved", req.log, req.user ? { id: req.user.id, email: req.user.email } : undefined,
-          JSON.stringify({ changes, deletedIds }));
+          JSON.stringify({ changes, deletedIds, ...(changeReason ? { changeReason } : {}) }));
       }
     } catch (e) { req.log.error({ e, projectId }, "수행정보 감사로그 기록 실패(저장은 정상)"); }
     res.json({ ok: true, rows: rowsOut, activatedTranslatorIds });
   } catch (err: any) {
     req.log.error({ err }, "수행정보 저장 실패");
-    res.status(400).json({ error: err?.message ?? "수행정보 저장에 실패했습니다." });
+    res.status(400).json({ error: err?.message ?? "수행정보 저장에 실패했습니다.", ...(err?.code === "CHANGE_REASON_REQUIRED" || err?.code === "APPROVAL_REQUIRED" ? { code: err.code } : {}) });
   }
 });
 

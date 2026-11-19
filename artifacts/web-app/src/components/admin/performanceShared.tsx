@@ -290,6 +290,9 @@ export interface Row {
   // 번역 자동매칭 dirty 마커(§11·§12) — 직전 자동입력된 수량/단위/단가 서명. 클라이언트 전용(저장 payload 미포함).
   //   현재값이 이 서명과 같으면 "사용자 미수정"으로 보고 재매칭을 허용, 다르면 사용자 수정으로 보고 보존한다.
   _autoRateSig?: string;
+  // 계산 수량 직접수정 마커(2026-11) — 이번 편집 세션에서 사용자가 우측 수량을 직접 입력했으면 true. 클라이언트 전용(저장 payload 미포함).
+  //   저장·재조회 후에는 qtyFollowsPeriod / qtyFollowsCount 의 값 비교로 같은 보호를 이어간다(DB 컬럼 추가 없음).
+  _qtyManual?: boolean;
   isDirectAmount?: boolean;
   directAmount?: string | number | null;
   // 원가 합계 (서버 계산값, 표시)
@@ -301,6 +304,7 @@ export interface Row {
   paymentStatus?: string | null;
   actualPaymentAmount?: string | number | null;
   payoutRoundId?: number | null;      // 지급회차(삭제 차단 판정)
+  payoutRoundStatus?: string | null;  // 배정 지급회차 상태(조회 가산 필드, 2026-11) — draft·reviewing·confirmed·paid·cancelled
   payStatementId?: number | null;     // 지급명세서 ID(향후 지급관리 모듈) — 수행정보에서 편집하지 않음
   // 개인 통번역사
   individualUserId?: number | null;
@@ -372,7 +376,7 @@ export const toRow = (p: any): Row => ({
   deductionTotal: p.deductionTotal, costTotal: p.costTotal,
   paymentStatus: p.paymentStatus ?? 'unpaid',
   actualPaymentAmount: p.actualPaymentAmount,
-  payoutRoundId: p.payoutRoundId, payStatementId: p.payStatementId,
+  payoutRoundId: p.payoutRoundId, payoutRoundStatus: p.payoutRoundStatus ?? null, payStatementId: p.payStatementId,
   individualUserId: p.individualUserId, performerNameSnapshot: p.performerNameSnapshot,
   identifierSnapshotMasked: p.identifierSnapshotMasked, residenceCountrySnapshot: p.residenceCountrySnapshot,
   residencyType: p.residencyType, serviceCountry: p.serviceCountry,
@@ -514,14 +518,54 @@ export function translationWorkAmount(snap: any): { amount: number; basis: 'word
 // 서비스별 상세정보 작업량(단어·글자·페이지) ↔ 수량·단위 연동 — 사용자 입력 시에만 호출(불러오기·조회 시 자동 변경 없음).
 //   지급완료·지급회차 배정 행은 수량을 바꾸지 않는다(기존 지급금액 보호).
 const COUNT_KEY: Record<string, 'wordCount' | 'charCount' | 'pageCount'> = { '단어': 'wordCount', '글자': 'charCount', '자': 'charCount', '페이지': 'pageCount' };
+// 지급 단계(2026-11) — 수행정보 수정 정책 판정. 서버 applyPerformanceRow 와 같은 기준.
+//   open: 회차 미배정 / 배정·작성중(draft)·검토중(reviewing) → 수정 가능(배정 행은 금액 변경 시 사유 필수)
+//   confirmed: 지급확정 회차 소속·미지급 → 금액·지급대상·세금 직접수정 불가(관리자 확정취소 필요)
+//   paid: 지급완료 → 금액 수정 불가(정정은 별도 절차)
+export type PayStage = 'unassigned' | 'open' | 'confirmed' | 'paid';
+export function payStage(r: Row): PayStage {
+  if ((r.paymentStatus ?? '') === 'paid') return 'paid';
+  if (r.payoutRoundId == null) return 'unassigned';
+  return r.payoutRoundStatus === 'confirmed' || r.payoutRoundStatus === 'paid' ? 'confirmed' : 'open';
+}
 export const isPayLocked = (r: Row) => (r.paymentStatus ?? '') === 'paid' || r.payoutRoundId != null;
 export const countForUnit = (snap: any, unit?: string | null): number => (unit && COUNT_KEY[unit] ? num(snap?.[COUNT_KEY[unit]]) : 0);
 // 작업량 입력 후 수량·단위 패치 — 현재 단위가 작업량 단위이고 값이 있으면 그 단위(사용자 선택 산정단위) 우선, 아니면 방금 입력한 단위.
 export function countQtyPatch(r: Row, snap: any, editedUnit: string): Partial<Row> {
-  if (isPayLocked(r)) return {};
+  // r = 작업량 입력 직전 행(기존 스냅샷). 사용자가 확정한 수량(직전 작업량과 다름·직접수정)은 덮어쓰지 않는다.
+  if (!qtyFollowsCount(r)) return {};
   const u = countForUnit(snap, r.unit) > 0 ? r.unit! : (countForUnit(snap, editedUnit) > 0 ? editedUnit : null);
   return u ? { quantity: String(countForUnit(snap, u)), unit: u, quantityFromSale: false } : {};
 }
+// ── 계산 수량 자동 제안 보호(2026-11) ─────────────────────────────────────────
+//   계산 수량(quantity)은 저장값이 최우선이다. 자동 제안(기간→수행일수, 작업량→수량)은 현재 수량이
+//   '직전 자동값을 그대로 따르는 상태'일 때만 허용한다. 따르는지 여부는 DB 플래그 없이 값 비교로 판정하므로
+//   저장·재조회 후에도 사용자가 직접 확정한 값(예: 1일 기간에 0.5일)은 자동 계산으로 덮어써지지 않는다.
+// 기간 포함 일수(2026-07-20~2026-07-22 = 3일). 시작만 있으면 1일. 유효하지 않거나 종료<시작이면 null.
+export function periodDays(start?: string | null, end?: string | null): number | null {
+  const s = dateVal(start), e = dateVal(end) || s;
+  if (!s) return null;
+  const sd = new Date(`${s}T00:00:00Z`).getTime(), ed = new Date(`${e}T00:00:00Z`).getTime();
+  if (Number.isNaN(sd) || Number.isNaN(ed) || ed < sd) return null;
+  return Math.round((ed - sd) / 86400000) + 1;
+}
+// 통역: 수량이 기존 기간의 수행일수를 따르는가 — 공란이거나, 단위가 '일'(또는 미지정)이고 값 = 기존 기간 일수
+//   (기간 미입력 신규 행은 기본값 1). 직접수정·시간 단위·과거 CRM 판매수량 복사값은 false(보호).
+export function qtyFollowsPeriod(r: Row): boolean {
+  if (r._qtyManual || r.quantityFromSale || isPayLocked(r)) return false;
+  if (r.quantity == null || r.quantity === '') return true;
+  if (r.unit && r.unit !== '일') return false;
+  const d = periodDays(r.performanceStartDate, r.performanceEndDate);
+  return num(r.quantity) === (d ?? 1);
+}
+// 번역: 수량이 기존 작업량(현재 단위의 단어·글자·페이지 수)을 따르는가 — 공란·단위 미지정 신규 기본값이면 true.
+export function qtyFollowsCount(r: Row): boolean {
+  if (r._qtyManual || isPayLocked(r)) return false;
+  if (r.quantity == null || r.quantity === '' || !r.unit) return true;
+  if (!COUNT_KEY[r.unit]) return false;
+  return num(r.quantity) === countForUnit(r.serviceDetailSnapshot, r.unit);
+}
+
 // 단위 변경 — 작업량 단위로 바꾸면 해당 작업량을 수량에 반영(값 있을 때만). 이후 수량 직접수정 가능.
 export function unitChangePatch(r: Row, unit: string): Partial<Row> {
   const c = countForUnit(r.serviceDetailSnapshot, unit);

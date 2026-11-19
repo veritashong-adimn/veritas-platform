@@ -1,6 +1,7 @@
 import {
-  pgTable, serial, integer, numeric, text, date, timestamp, boolean, jsonb,
+  pgTable, serial, integer, numeric, text, date, timestamp, boolean, jsonb, uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { payoutRoundsTable } from "./payout_rounds";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -66,10 +67,17 @@ export const payoutRoundItemsTable = pgTable("payout_round_items", {
   deductions: jsonb("deductions"),         // [{ type, amount, reason }]
   remark: text("remark"),
 
+  // ── 정정 차액 항목(2026-11 승인) ──
+  //   NULL = 일반 수행건 확정 스냅샷(기존 행 전부). 값이 있으면 payout_adjustments.id 의 차액(추가지급 + / 상계 −) 항목이며,
+  //   performance_assignment_id 는 정정 대상 원 수행건을 가리킨다. 같은 차액이 두 회차에 동시에 존재하지 않도록 부분 UNIQUE.
+  adjustmentId: integer("adjustment_id"),
+
   // ── 메타 ──
   confirmedAt: timestamp("confirmed_at"),  // 지급확정 시각
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (t) => ({
+  uqAdjustment: uniqueIndex("uq_payout_round_items_adjustment").on(t.adjustmentId).where(sql`adjustment_id IS NOT NULL`),
+}));
 
 export type PayoutRoundItem = typeof payoutRoundItemsTable.$inferSelect;
 export type InsertPayoutRoundItem = typeof payoutRoundItemsTable.$inferInsert;

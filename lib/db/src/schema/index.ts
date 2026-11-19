@@ -21,6 +21,7 @@ export * from "./performance_deductions";
 export * from "./payout_rounds";
 export * from "./payout_round_items";
 export * from "./payout_transfers";
+export * from "./payout_adjustments";
 export * from "./holidays";
 export * from "./logs";
 export * from "./notes";

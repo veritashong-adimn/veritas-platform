@@ -29,11 +29,13 @@ import {
   CATEGORY_OPTS, TREATMENT_OPTS, normalizeTreatment, effectiveTreatment,
   PERFORMER_TYPE_OPTS, resolvePerformerType, performerTypeLabel, canonicalLineCategory,
   PAYMENT_STATUS_OPTS, PAYMENT_STATUS_SELECTABLE_OPTS,
-  PaymentBadge, LegacyPayoutBadge, unitChangePatch,
+  PaymentBadge, LegacyPayoutBadge, unitChangePatch, UNIT_OPTS, payStage,
 } from './performanceShared';
 import { DateField } from './DatePickerShared';
 import { exportPerformances, type PerformanceExportMeta } from '../../lib/performanceExcel';
 import { PerformanceBulkImportPage } from './PerformanceBulkImportPage';
+import PayoutAdjustmentStatus from './PayoutAdjustmentStatus';
+import PayoutCorrectionModal, { type CorrectionMode } from './PayoutCorrectionModal';
 
 interface Props {
   projectId: number;
@@ -99,6 +101,22 @@ export default function PerformanceSection({ projectId, token, performances, onC
   const searchTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const [prefillQ, setPrefillQ] = useState('');   // 조회모드 필터어 → Master 검색 이어받기(새 행 검색칸 초기값)
   const [summaryKey, setSummaryKey] = useState(0);
+  const [adjKey, setAdjKey] = useState(0);   // 수정·정정 요청 현황 재조회 키(2026-11)
+  // [수정 요청]·[정정 요청] 화면(2026-11) — 일반 저장과 분리된 요청 전용 모달
+  const [corrModal, setCorrModal] = useState<{ row: Row; mode: CorrectionMode } | null>(null);
+  // 수행정보별 최신 정정 요청 상태(배지 표시용) — 지급상태(지급완료 등)와 별도로 표시한다.
+  const [adjByAssign, setAdjByAssign] = useState<Map<number, any>>(new Map());
+  useEffect(() => {
+    let alive = true;
+    fetch(api(`/api/admin/projects/${projectId}/payout-adjustments`), { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => (r.ok ? r.json() : { rows: [] })).then((d: any) => {
+        if (!alive) return;
+        const m = new Map<number, any>();
+        for (const a of (d.rows ?? []) as any[]) { const cur = m.get(a.assignmentId); if (!cur || a.id > cur.id) m.set(a.assignmentId, a); }
+        setAdjByAssign(m);
+      }).catch(() => {});
+    return () => { alive = false; };
+  }, [projectId, token, adjKey, performances]);
   // 소형 팝업(§금액상세 / §조정항목) — 행 인덱스 기준
   const [amountPopup, setAmountPopup] = useState<number | null>(null);
   const [adjustPopup, setAdjustPopup] = useState<number | null>(null);
@@ -607,15 +625,56 @@ export default function PerformanceSection({ projectId, token, performances, onC
     deductions: (r.deductions ?? []).map(d => ({ id: d.id, deductionType: d.deductionType, amount: num(d.amount), reason: d.reason ?? null })),
   });
 
-  const save = async () => {
+  // 지급회차 배정 행 금액 변경 사유(2026-11) — 서버가 CHANGE_REASON_REQUIRED 를 돌려주면 사유를 받아 같은 내용으로 1회 재전송.
+  const askChangeReason = (message: string) => promptDialog({
+    title: '지급회차 금액 변경 사유', message, label: '변경 사유', placeholder: '예: 수행일수 정정(1일→2일), 단가 오기입 수정',
+    confirmLabel: '사유 입력 후 저장', multiline: true, validate: (v) => (v.trim() ? null : '변경 사유를 입력해 주세요.'),
+  });
+  // 관리자 승인 대상(지급확정 → [수정 요청] / 지급완료·해외송금 완료 → [정정 요청]) 행 제출(2026-11).
+  //   승인 전까지 기존 금액이 그대로 유지된다. 반환: 요청을 제출한 행 id 집합(실패·취소 시 null).
+  const submitApprovalRequests = async (need: { id: number; stage: string }[], message: string, src: Row[]): Promise<Set<number> | null> => {
+    const label = (st: string) => (st === 'confirmed' ? '수정 요청(지급확정)' : st === 'paid' ? '정정 요청(지급완료)' : '정정 요청(해외송금 완료)');
+    const reason = await promptDialog({
+      title: '수정·정정 요청', label: '요청 사유', placeholder: '예: 통역 수행일수 정정(2일→3일)', confirmLabel: '요청 제출', multiline: true,
+      message: `${message}\n\n${need.map(n => `· 수행정보 #${n.id} — ${label(n.stage)}`).join('\n')}\n\n승인 전까지 기존 금액이 그대로 유지되며, 요청자가 아닌 관리자가 승인하면 반영됩니다. 지급완료 건의 차액은 추가지급·환수·상계로 별도 정산됩니다.`,
+      validate: (v) => (v.trim() ? null : '요청 사유를 입력해 주세요.'),
+    });
+    if (!reason || !reason.trim()) { onToast('요청을 취소했습니다. (사유 미입력)'); return null; }
+    const ids = new Set(need.map(n => n.id));
+    const reqRows = src.map((r, i) => ({ r, i })).filter(x => x.r.id != null && ids.has(x.r.id)).map(x => buildRowPayload(x.r, x.i));
+    const res = await fetch(api(`/api/admin/projects/${projectId}/payout-adjustments`), { method: 'POST', headers: authH, body: JSON.stringify({ rows: reqRows, reason: reason.trim() }) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { onToast(`오류: ${data.error ?? '수정·정정 요청 접수 실패'}`); return null; }
+    if (data.errors?.length) onToast(`오류: 요청 ${data.created?.length ?? 0}건 접수 · 실패 ${data.errors.length}건 — ${data.errors.map((e: any) => e.error).join(' / ')}`);
+    setAdjKey(k => k + 1);
+    return ids;
+  };
+  const save = async (changeReason?: string, rowsOverride?: Row[], doneMsg?: string) => {
     if (busy) return;
     setBusy(true);
     try {
-      const payload = { rows: rows.map(buildRowPayload), deletedIds };
+      const src = rowsOverride ?? rows;
+      const payload = { rows: src.map(buildRowPayload), deletedIds, ...(changeReason ? { changeReason } : {}) };
       const res = await fetch(api(`/api/admin/projects/${projectId}/performances`), { method: 'PUT', headers: authH, body: JSON.stringify(payload) });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) { onToast(data.error ?? '수행정보 저장 실패'); return; }
-      onToast('수행정보가 저장되었습니다.');
+      if (!res.ok && data.code === 'CHANGE_REASON_REQUIRED' && !changeReason) {
+        setBusy(false);
+        const reason = await askChangeReason(data.error);
+        if (reason && reason.trim()) await save(reason.trim(), rowsOverride, doneMsg); else onToast('저장을 취소했습니다. (변경 사유 미입력)');
+        return;
+      }
+      if (!res.ok && data.code === 'APPROVAL_REQUIRED' && Array.isArray(data.rows) && !rowsOverride) {
+        setBusy(false);
+        const done = await submitApprovalRequests(data.rows, data.error, src);
+        if (!done) return;
+        // 요청을 제출한 행은 원래 값으로 되돌리고 나머지 변경만 저장(승인 전 기존 금액 유지).
+        const origById = new Map((performances as any[]).map((p: any) => [p.id, p]));
+        await save(changeReason, src.map(r => (r.id != null && done.has(r.id) && origById.has(r.id) ? toRow(origById.get(r.id)) : r)),
+          '정정 요청이 접수되었습니다. (요청 건은 승인 전까지 기존 금액 유지 · 그 외 변경은 저장됨)');
+        return;
+      }
+      if (!res.ok) { onToast(`오류: ${data.error ?? '수행정보 저장 실패'}`); return; }
+      onToast(doneMsg ?? '수행정보가 저장되었습니다.');
       setEditMode(false); setRows([]); setDeletedIds([]); setAmountPopup(null); setAdjustPopup(null);
       setSummaryKey(k => k + 1);
       await onChanged();
@@ -625,7 +684,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
   // ── 조회화면 조정항목 즉시 저장(§1·§6) — 편집 없이 해당 1행만 전체 페이로드로 PUT. ──
   //   다른 필드는 현재 조회값 그대로 전송 → 서버가 동일 입력으로 재계산하므로 지급일·정산상태 등 불변(§7).
   //   서버가 원가합계를 재계산하고, onChanged() 재조회로 조회화면 금액·원가합계가 즉시 갱신됨.
-  const saveViewAdjustment = async (viewIdx: number, p: Partial<Row>) => {
+  const saveViewAdjustment = async (viewIdx: number, p: Partial<Row>, changeReason?: string) => {
     if (busy) return;
     const target = viewRows[viewIdx];
     if (!target) return;
@@ -633,9 +692,20 @@ export default function PerformanceSection({ projectId, token, performances, onC
     try {
       const merged = { ...target, ...p };
       const seqIdx = list.findIndex(x => x.id === target.id);   // sequence 보존(정렬/필터 무관하게 원본 순서 유지)
-      const payload = { rows: [buildRowPayload(merged, seqIdx >= 0 ? seqIdx : viewIdx)], deletedIds: [] as number[] };
+      const payload = { rows: [buildRowPayload(merged, seqIdx >= 0 ? seqIdx : viewIdx)], deletedIds: [] as number[], ...(changeReason ? { changeReason } : {}) };
       const res = await fetch(api(`/api/admin/projects/${projectId}/performances`), { method: 'PUT', headers: authH, body: JSON.stringify(payload) });
       const data = await res.json().catch(() => ({}));
+      if (!res.ok && data.code === 'CHANGE_REASON_REQUIRED' && !changeReason) {
+        setBusy(false);
+        const reason = await askChangeReason(data.error);
+        if (reason && reason.trim()) await saveViewAdjustment(viewIdx, p, reason.trim()); else onToast('저장을 취소했습니다. (변경 사유 미입력)');
+        return;
+      }
+      if (!res.ok && data.code === 'APPROVAL_REQUIRED' && Array.isArray(data.rows)) {
+        setBusy(false);
+        await submitApprovalRequests(data.rows, data.error, [merged]);
+        return;
+      }
       if (!res.ok) { onToast(data.error ?? '추가비용 저장 실패'); return; }
       onToast('추가비용이 저장되었습니다.');
       setSummaryKey(k => k + 1);
@@ -820,7 +890,37 @@ export default function PerformanceSection({ projectId, token, performances, onC
       ? { vendorSettlementType: 'domestic', purchaseEvidenceType: r.purchaseEvidenceType === 'zero_rate_tax_invoice' || r.purchaseEvidenceType === 'invoice' ? r.purchaseEvidenceType : 'tax_invoice' }
       : {};
     const qtyCols = isTrans || isEquip || (editable && isIndiv) || settleVendor;
+    // 계산 수량·단위 표시(2026-11) — 수량 입력 위치를 우측으로 통합했으므로 조회모드에서도 개인 행(통역 등)의 저장 수량·단위를 우측에 표시.
+    //   단가 칸은 기존 조건(qtyCols) 그대로 — 통역 조회모드의 요금(100%) 중복 표시를 만들지 않는다.
+    const qtyShown = qtyCols || isIndiv;
+    // 개인(번역 외) 단위 선택지 — 번역 단위 + 기존 공통 단위(일·시간·건·세트 등) + 현재 저장값(목록 밖 값 보존).
+    const indivUnitOpts = (() => {
+      const vals = [...TRANS_UNIT_OPTS.map(o => o.value), ...UNIT_OPTS.map(o => o.value)];
+      if (r.unit && !vals.includes(r.unit)) vals.push(r.unit);
+      return [...new Set(vals)].map(v => ({ value: v, label: v }));
+    })();
     const locked = isDateLocked(r);
+    // 지급 단계(2026-11) — 지급확정·지급완료 행은 금액 입력(수량·단가·요금)을 잠근다. 서버도 동일 기준으로 차단.
+    const stage = payStage(r);
+    //   (2026-11) 일반 저장과 요청을 분리 — 지급확정·지급완료·해외송금 완료 행은 수정모드에서 금액 입력을 잠그고,
+    //   조회화면의 [수정 요청]·[정정 요청] 버튼(요청 전용 화면)으로만 금액 변경을 요청한다.
+    const overseasRemitted = r.performerCategory === 'vendor' && r.vendorSettlementType === 'overseas' && Number(r.remittanceSummary?.completedCount ?? 0) > 0;
+    const corrMode: CorrectionMode | null = stage === 'confirmed' ? 'confirmed' : stage === 'paid' ? 'paid' : overseasRemitted ? 'overseas' : null;
+    const amtLocked = editable && corrMode != null;
+    const lastAdj = r.id != null ? adjByAssign.get(r.id) : undefined;
+    const adjPending = lastAdj?.status === 'requested';
+    const adjBadge = !lastAdj ? null
+      : lastAdj.status === 'requested' ? { label: lastAdj.kind === 'confirmed_change' ? '수정 요청 대기' : '정정 요청 대기', color: C.warningTextDeep, bg: C.warningBg }
+      : lastAdj.status === 'rejected' ? { label: '요청 반려', color: C.dangerText, bg: C.dangerBg }
+      : lastAdj.status === 'cancelled' ? null
+      : lastAdj.kind === 'confirmed_change' ? { label: '수정 반영', color: C.successText, bg: C.successBg }
+      : lastAdj.settlementStatus === 'settled' ? { label: '정산 완료', color: C.successText, bg: C.successBg }
+      : { label: lastAdj.settlementStatus === 'scheduled' ? '정정 · 회차 편입' : '정정 · 정산 대기', color: C.primaryText, bg: C.primaryBg };
+    const stageInfo = stage === 'paid'
+      ? null   // 지급완료는 지급상태 배지(지급완료)로 표시 — 중복 배지 없음
+      : stage === 'confirmed'
+        ? { label: '지급확정', color: C.danger, title: '지급확정 회차 소속 — 금액 변경은 [수정 요청] 후 관리자 승인으로만 반영됩니다.' }
+        : { label: `회차 ${r.payoutRoundStatus === 'reviewing' ? '검토중' : '작성중'}`, color: C.primaryText, title: '지급회차 배정(확정 전) — 수정 가능. 금액이 바뀌면 저장 시 변경 사유를 입력합니다(회차 금액 즉시 반영).' };
     const deletable = canDelete(r);
     const dateTitle = locked ? '지급 진행 행은 수정 불가' : '';
     const payShown = dateVal(r.expectedPaymentDate) || (r.payDateManual ? '' : (calcPaymentDate(r.deliveryDate, isHoliday) ?? ''));
@@ -886,16 +986,16 @@ export default function PerformanceSection({ projectId, token, performances, onC
         {/* ⑧ 요금(100%) — 통역: 독립 입력(통역료 자동계산 없음). 번역: 협의 총액(§3·§4A, base=directAmount). 외주·경비·일반개인: 금액상세 팝업. 장비: '-'. */}
         <td style={tdR}>
           {interpCols
-            ? (editable ? priceCell(r.contractUnitPrice, v => setInterpFee100(i, v), `perf-fee100-${i}`, '요금(100%)') : (r.contractUnitPrice != null && r.contractUnitPrice !== '' ? `${won(r.contractUnitPrice)}원` : muted))
+            ? (editable ? priceCell(r.contractUnitPrice, v => setInterpFee100(i, v), `perf-fee100-${i}`, '요금(100%)', amtLocked) : (r.contractUnitPrice != null && r.contractUnitPrice !== '' ? `${won(r.contractUnitPrice)}원` : muted))
             : isTrans
-              ? (editable ? priceCell(r.directAmount, v => setTransFee100(i, v), `perf-fee100-${i}`, '요금(100%)') : (r.isDirectAmount && r.directAmount != null && r.directAmount !== '' ? `${won(r.directAmount)}원` : muted))
+              ? (editable ? priceCell(r.directAmount, v => setTransFee100(i, v), `perf-fee100-${i}`, '요금(100%)', amtLocked) : (r.isDirectAmount && r.directAmount != null && r.directAmount !== '' ? `${won(r.directAmount)}원` : muted))
               : isOtherAmt
                 ? (editable ? amtBtn(`${won(cost.base)}원`, () => setAmountPopup(i), `perf-amount-${i}`) : `${won(cost.base)}원`)
                 : muted}
         </td>
         {/* ⑨ 통역료(85%) — 독립 입력(자동계산 없음, 요금과 역산 안 함). 셀은 입력한 '기준금액' 그대로 표시(§8). 지급액 세전은 이 값×0.85(cost.base). 통역 전용. */}
         <td style={tdR}>
-          {interpCols ? (editable ? priceCell(r.directAmount, v => patchRow(i, { directAmount: v, isDirectAmount: true, ...interpMark(r) }), `perf-fee85-${i}`, '통역료(85%)') : (r.directAmount != null && r.directAmount !== '' ? `${won(r.directAmount)}원` : muted)) : muted}
+          {interpCols ? (editable ? priceCell(r.directAmount, v => patchRow(i, { directAmount: v, isDirectAmount: true, ...interpMark(r) }), `perf-fee85-${i}`, '통역료(85%)', amtLocked) : (r.directAmount != null && r.directAmount !== '' ? `${won(r.directAmount)}원` : muted)) : muted}
         </td>
         {/* ⑩ 추가통역료 — expenses['수가통역료']. 셀 클릭→지급률 팝업(기본 85%). 실제 지급액 표시. 통역 전용. */}
         <td style={tdR}>{isIndiv ? costCell(r, i, INTERP_ADD_FEE_TYPE, '추가통역료', editable) : muted}</td>
@@ -937,15 +1037,15 @@ export default function PerformanceSection({ projectId, token, performances, onC
                 ? (adjTotal === 0 ? muted : (editable ? amtBtn(`${won(adjTotal)}원`, () => setAdjustPopup(i), `perf-adj-${i}`) : amtBtn(`${won(adjTotal)}원`, () => setAdjustViewPopup(i), `perf-adj-view-${i}`)))
                 : muted}
         </td>
-        {/* ⑭ 수량 — 번역/장비 전용. */}
+        {/* ⑭ 계산 수량 — 지급금액 계산 기준 수량의 유일한 입력 위치(2026-11 통합). 직접 입력 시 _qtyManual → 기간·작업량 자동 제안이 덮어쓰지 않음. */}
         <td style={tdR}>
-          {qtyCols
+          {(editable ? qtyCols : qtyShown)
             ? (editable
-                ? <input type="number" min={0} inputMode="numeric" data-testid={`perf-qty-${i}`} aria-label="수량"
+                ? <input type="number" min={0} inputMode="numeric" data-testid={`perf-qty-${i}`} aria-label="수량" disabled={amtLocked} title={amtLocked ? "금액 변경은 조회화면의 [수정 요청]·[정정 요청]으로 요청하세요(승인 후 반영)" : undefined}
                     style={{ ...inp, textAlign: 'right' }}
-                    value={r.quantity == null || r.quantity === '' ? '' : String(r.quantity)} onChange={e => patchRow(i, { quantity: e.target.value, quantityFromSale: false, ...promoteVendor() })} />
+                    value={r.quantity == null || r.quantity === '' ? '' : String(r.quantity)} onChange={e => patchRow(i, { quantity: e.target.value, quantityFromSale: false, _qtyManual: true, ...promoteVendor() })} />
                 : (r.quantityFromSale ? <span title={`판매수량(${r.quantity}) 복사값 — 개별 수행 수량 미상(지급액 계산 미사용)`} data-testid={`perf-qty-from-sale-${i}`}>—</span>
-                  : <span>{r.quantity != null && r.quantity !== '' ? won(r.quantity) : muted}</span>))
+                  : <span>{r.quantity != null && r.quantity !== '' ? num(r.quantity).toLocaleString('ko-KR', { maximumFractionDigits: 2 }) : muted}</span>))
             : muted}
         </td>
         {/* ⑮ 단위 — 번역: 글자/단어 선택. 장비: 저장 단위 표시(읽기전용). */}
@@ -954,16 +1054,16 @@ export default function PerformanceSection({ projectId, token, performances, onC
             ? (editable
                 ? <input data-testid={`perf-unit-${i}`} aria-label="단위" style={{ ...inp, textAlign: 'center' }} value={r.unit ?? ''} placeholder="set·대" onChange={e => patchRow(i, { unit: e.target.value })} />
                 : <span>{r.unit || muted}</span>)
-            : (isTrans || (editable && isIndiv))
+            : (isTrans || isIndiv)
             ? (editable
-                ? <ClickSelect value={TRANS_UNIT_OPTS.some(o => o.value === r.unit) ? (r.unit as string) : ''} onChange={(v: string) => patchRow(i, unitChangePatch(r, v))} triggerStyle={{ ...inp, minWidth: 64 }} options={TRANS_UNIT_OPTS} />
+                ? <span data-testid={`perf-unit-select-${i}`}><ClickSelect value={(isTrans ? TRANS_UNIT_OPTS : indivUnitOpts).some(o => o.value === r.unit) ? (r.unit as string) : ''} onChange={(v: string) => patchRow(i, unitChangePatch(r, v))} triggerStyle={{ ...inp, minWidth: 64 }} options={isTrans ? TRANS_UNIT_OPTS : indivUnitOpts} /></span>
                 : <span>{r.unit || muted}</span>)
             : isEquip ? <span>{r.unit || muted}</span> : muted}
         </td>
         {/* ⑯ 단가 — 번역/장비 전용(계약단가). */}
         <td style={tdR}>
           {qtyCols
-            ? (editable ? priceCell(r.contractUnitPrice, v => patchRow(i, { contractUnitPrice: v, ...promoteVendor() }), `perf-unitprice-${i}`, '단가') : (r.contractUnitPrice != null && r.contractUnitPrice !== '' ? `${won(r.contractUnitPrice)}원` : muted))
+            ? (editable ? priceCell(r.contractUnitPrice, v => patchRow(i, { contractUnitPrice: v, ...promoteVendor() }), `perf-unitprice-${i}`, '단가', amtLocked) : (r.contractUnitPrice != null && r.contractUnitPrice !== '' ? `${won(r.contractUnitPrice)}원` : muted))
             : muted}
         </td>
         {/* 지급액(세전) — 수행원가(정산·수익률 기준 §3·§6). 기존 지급액값 그대로. */}
@@ -1036,6 +1136,26 @@ export default function PerformanceSection({ projectId, token, performances, onC
               : editable && (r.paymentStatus ?? 'unpaid') !== 'paid'
               ? <ClickSelect value={r.paymentStatus ?? 'unpaid'} onChange={(v: string) => patchRow(i, { paymentStatus: v })} triggerStyle={inp} options={PAYMENT_STATUS_SELECTABLE_OPTS} />
               : <PaymentBadge value={r.paymentStatus} />}
+            {/* 지급 단계 안내(2026-11) — 회차 배정 행: 작성중=수정 가능(금액 변경 시 사유) / 지급확정=관리자 확정취소 필요 / 지급완료=정정 별도 */}
+            {stageInfo && stage !== 'unassigned' && !r.legacyPayout?.display && (
+              <span data-testid={`perf-stage-${i}`} aria-label={stageInfo.title} title={stageInfo.title}
+                style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 999, border: `1px solid ${stageInfo.color}`, color: stageInfo.color, whiteSpace: 'nowrap' }}>
+                {stageInfo.label}
+              </span>
+            )}
+            {/* 정정 요청 상태(지급상태와 별도 배지) */}
+            {adjBadge && (
+              <span data-testid={`perf-adj-status-${i}`} aria-label={`정정 요청 상태: ${adjBadge.label}`} title={`정정 #${lastAdj.id} · ${lastAdj.reason ?? ''}`}
+                style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4, color: adjBadge.color, background: adjBadge.bg, whiteSpace: 'nowrap' }}>{adjBadge.label}</span>
+            )}
+            {/* [수정 요청]·[정정 요청] — 요청 전용 화면(일반 저장과 분리). 승인 대기 중이면 중복 요청 불가. */}
+            {!editable && corrMode && r.id != null && !r.legacyPayout?.display && (
+              <GhostBtn onClick={() => setCorrModal({ row: r, mode: corrMode })} disabled={busy || adjPending}
+                title={adjPending ? '승인 대기 중인 요청이 있습니다(처리·취소 후 다시 요청)' : undefined}
+                style={{ fontSize: 11, padding: '2px 7px' }} data-testid={`btn-perf-correction-${i}`} aria-label={corrMode === 'confirmed' ? '수정 요청' : '정정 요청'}>
+                {corrMode === 'confirmed' ? '수정 요청' : '정정 요청'}
+              </GhostBtn>
+            )}
             {/* 지급완료 확인 — 저장된 일반 행 중 미지급·회차 미배정 건(회차 밖에서 이미 지급한 건 기록). 기본값: 지급예정일(오늘 이전)·세후 지급액 */}
             {!editable && r.id != null && !r.legacyPayout?.display && (r.paymentStatus ?? 'unpaid') === 'unpaid' && r.payoutRoundId == null && (
               <GhostBtn onClick={() => {
@@ -1115,7 +1235,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
             <GhostBtn onClick={() => addRow('vendor', '외주업체')} disabled={busy} style={{ fontSize: 12, padding: '6px 10px' }} data-testid="btn-perf-add-vendor" aria-label="외주업체 추가">+ 외주업체</GhostBtn>
             <GhostBtn onClick={() => addRow('expense', '경비')} disabled={busy} style={{ fontSize: 12, padding: '6px 10px' }} data-testid="btn-perf-add-expense" aria-label="원가항목 추가">+ 원가항목</GhostBtn>
             <GhostBtn onClick={cancelEdit} disabled={busy} style={{ fontSize: 12, padding: '6px 12px' }} data-testid="btn-perf-cancel" aria-label="취소">취소</GhostBtn>
-            <PrimaryBtn onClick={save} disabled={busy} style={{ fontSize: 12, padding: '6px 12px' }} data-testid="btn-perf-save" aria-label="수행정보 저장">{busy ? '저장 중…' : '저장'}</PrimaryBtn>
+            <PrimaryBtn onClick={() => save()} disabled={busy} style={{ fontSize: 12, padding: '6px 12px' }} data-testid="btn-perf-save" aria-label="수행정보 저장">{busy ? '저장 중…' : '저장'}</PrimaryBtn>
           </>
         ) : (
           <>
@@ -1218,6 +1338,13 @@ export default function PerformanceSection({ projectId, token, performances, onC
       })()}
       {/* 조정항목(조회화면 즉시 수정, §1·§2·§6) — 수정화면과 동일한 공통 AdjustmentPopup. 확인 시 해당 1행만 즉시 저장 */}
       {/* 해외 외주 송금내역 — 저장 즉시 반영, 변경 시 판매 상세 재조회로 요약(누적·미송금·상태) 갱신 */}
+      {corrModal && (
+        <PayoutCorrectionModal row={corrModal.row} mode={corrModal.mode} projectId={projectId} token={token} onToast={onToast}
+          buildPayload={(r: Row) => buildRowPayload(r, Math.max(0, list.findIndex(x => x.id === r.id)))}
+          onClose={() => setCorrModal(null)} onSubmitted={() => { setCorrModal(null); setAdjKey(k => k + 1); }} />
+      )}
+      {/* 수정·정정 요청·승인·차액 정산 현황(2026-11) — 이 판매건의 요청이 있을 때만 표시 */}
+      <PayoutAdjustmentStatus projectId={projectId} token={token} refreshKey={`${adjKey}:${summaryKey}:${performances.length}`} onToast={onToast} onChanged={() => { void onChanged(); }} />
       {remitPopup != null && <RemittancePopup assignmentId={remitPopup} token={token} onClose={() => setRemitPopup(null)} onChanged={() => { void onChanged(); }} />}
       {!editMode && adjustViewPopup != null && viewRows[adjustViewPopup] && (() => {
         const vr = viewRows[adjustViewPopup];
