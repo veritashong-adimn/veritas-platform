@@ -235,9 +235,9 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
     return { assignments: itemRows.length, payees: filteredSummary.length, individualCount: ind, vendorCount: ven,
       baseTotal: base, expenseTotal: exp, deductionTotal: ded, grossTotal: gross, withholdingTotal: wh, netTotal: net };
   }, [filteredSummary, itemRows]);
-  // 클라이언트 페이지네이션(기본 20 · 20/50/100) — 요약/건별 각각. 회차·필터 변경 시 1페이지로.
-  const sumPg = useClientPagination(filteredSummary, 20);
-  const itemPg = useClientPagination(itemRows, 20);
+  // 클라이언트 페이지네이션(기본 5 · 5/10/20/50/100) — 요약/건별 각각. 회차·필터 변경 시 1페이지로.
+  const sumPg = useClientPagination(filteredSummary, 5);
+  const itemPg = useClientPagination(itemRows, 5);
   const totals = detail?.totals ?? {};
   const warnings = detail?.warnings ?? { total: 0, holdAmount: 0, byReason: [] };
   const collectable: any[] = detail?.collectable ?? [];
@@ -713,7 +713,7 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
               {sumPg.total > 0 && (
                 <Pagination page={sumPg.page} pageSize={sumPg.pageSize} total={sumPg.total}
                   onPageChange={sumPg.setPage} onPageSizeChange={sumPg.setPageSize}
-                  pageSizeOptions={[20, 50, 100]} unit="명" idPrefix="payout-summary" />
+                  pageSizeOptions={[5, 10, 20, 50, 100]} unit="명" idPrefix="payout-summary" />
               )}
             </Card>
           )}
@@ -821,7 +821,7 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
               {itemPg.total > 0 && (
                 <Pagination page={itemPg.page} pageSize={itemPg.pageSize} total={itemPg.total}
                   onPageChange={itemPg.setPage} onPageSizeChange={itemPg.setPageSize}
-                  pageSizeOptions={[20, 50, 100]} unit="건" idPrefix="payout-items" />
+                  pageSizeOptions={[5, 10, 20, 50, 100]} unit="건" idPrefix="payout-items" />
               )}
             </Card>
           )}
