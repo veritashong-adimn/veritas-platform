@@ -376,6 +376,10 @@ export async function getSalesHistory(dbx: any, q: Record<string, string | undef
   // Current (기존 로직 재사용 — 전체 matching 반환)
   if (effRange === "all" || effRange === "current") {
     try {
+      // 판매관리 = 판매전환 완료건만. [현재] 탭과 같은 salesOnly 기준으로 견적 단계(created/quoted) project 제외
+      //  (변경견적 보관용 project·삭제된 견적의 project 가 판매번호·금액 없는 행으로 섞이던 문제 방지).
+      //  status 필터를 명시한 경우는 기존과 동일하게 그 필터를 따른다(buildFilteredSalesProjectList 규칙).
+      q = { ...q, salesOnly: "true" };
       const list = await buildFilteredSalesProjectList(q);
       currentRows = (list as any[]).map(mapCurrentRow);
       // 판매번호 검색 — 기존 검색(판매명=프로젝트명·거래처·담당자 등) 결과에 판매번호/견적번호/원본 판매번호 일치 판매를 더한다(전체 대상, 페이지 분할 전).
