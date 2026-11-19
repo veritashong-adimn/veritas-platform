@@ -139,7 +139,9 @@ router.get("/admin/companies", ...adminGuard, async (req, res) => {
       //  · role=vendor → is_vendor=true (외주 역할 보유 회사. 수행등록 외주 검색이 이 값을 사용)
       //  · role=customer → is_customer=true
       const role = req.query.role as string | undefined;
-      if (role === "vendor") filterConds.push(eq(companiesTable.isVendor, true));
+      //    단, 외주업체로 등록된 회사(company_type='vendor')는 is_vendor 플래그가 비어 있어도 외주로 본다
+      //    (예: 코리아미디어 — 플래그 누락으로 수행정보 업체 검색에서 빠지던 문제). Master 값은 변경하지 않는다.
+      if (role === "vendor") filterConds.push(or(eq(companiesTable.isVendor, true), eq(companiesTable.companyType, "vendor"))!);
       else if (role === "customer") filterConds.push(eq(companiesTable.isCustomer, true));
       if (vendorType) filterConds.push(eq(companiesTable.vendorType, vendorType));
       if (customerType === "CORPORATE" || customerType === "PUBLIC" || customerType === "INDIVIDUAL") {

@@ -107,6 +107,10 @@ function classifyPerformer(o: {
   itemType?: string | null; canonicalKey?: string | null; productType?: string | null;
   subCategory?: string | null; productName?: string | null;
 }): PerfClass {
+  // 장비 상품(상품유형/품목유형 equipment)은 이름·식별키에 '통역'이 들어 있어도 장비업체(예: 통역장비 1 set·통역부스).
+  //   식별키 'EQ:::통역장비1set' 이 아래 '통역' 규칙에 먼저 걸려 통번역사 행으로 생성되던 문제 방지.
+  if (String(o.productType ?? "").toLowerCase() === "equipment" || String(o.itemType ?? "").toLowerCase() === "equipment")
+    return { category: "vendor", lineCategory: "장비업체", costType: "vendor" };
   return classifyToken(o.canonicalKey)   // 상품 유형값·식별키 우선
     ?? classifyToken(o.productType)
     ?? classifyToken(o.subCategory)
