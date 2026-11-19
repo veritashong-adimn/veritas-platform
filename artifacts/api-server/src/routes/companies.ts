@@ -192,6 +192,7 @@ router.get("/admin/companies", ...adminGuard, async (req, res) => {
           companyType: companiesTable.companyType,
           vendorType: companiesTable.vendorType,
           customerType: companiesTable.customerType,
+          vendorCountry: sql<string | null>`(SELECT country FROM company_vendor_profiles vp WHERE vp.company_id = ${companiesTable.id} AND vp.deleted_at IS NULL)`,   // 외주 정산유형 기본값용(가산)
           contactCount: sql<number>`COUNT(DISTINCT ${contactsTable.id})::int`,
           projectCount: activeProjectCountSql(),
           totalPayment: sql<number>`COALESCE(SUM(${paymentsTable.amount}) FILTER (WHERE ${paymentsTable.status} = 'paid'), 0)::int`,
@@ -243,6 +244,7 @@ router.get("/admin/companies", ...adminGuard, async (req, res) => {
         companyType: companiesTable.companyType,
         vendorType: companiesTable.vendorType,
         customerType: companiesTable.customerType,
+        vendorCountry: sql<string | null>`(SELECT country FROM company_vendor_profiles vp WHERE vp.company_id = ${companiesTable.id} AND vp.deleted_at IS NULL)`,   // 외주 정산유형 기본값용(가산)
         contactCount: sql<number>`COUNT(DISTINCT ${contactsTable.id})::int`,
         projectCount: activeProjectCountSql(),
         totalPayment: sql<number>`COALESCE(SUM(${paymentsTable.amount}) FILTER (WHERE ${paymentsTable.status} = 'paid'), 0)::int`,
@@ -684,8 +686,9 @@ router.get("/admin/companies/:id/vendor-profile", ...adminGuard, async (req, res
 router.put("/admin/companies/:id/vendor-profile", ...adminGuard, requirePermission("company.update"), async (req, res) => {
   const companyId = Number(req.params.id);
   if (isNaN(companyId) || companyId <= 0) { res.status(400).json({ error: "유효하지 않은 company id." }); return; }
-  const { outsourcingField, mainWork, issuesTaxInvoice, memo, status } = req.body as {
+  const { outsourcingField, mainWork, issuesTaxInvoice, memo, status, country } = req.body as {
     outsourcingField?: string | null; mainWork?: string | null; issuesTaxInvoice?: boolean; memo?: string | null; status?: string;
+    country?: string | null;   // 국가(수행정보 외주 정산유형 국내/해외 기본값). 생략 시 기존 값 유지.
   };
   if (outsourcingField != null && outsourcingField !== "" && !isOutsourcingField(outsourcingField)) {
     res.status(400).json({ error: "허용되지 않은 외주분야입니다.", allowed: OUTSOURCING_FIELDS }); return;
@@ -717,6 +720,7 @@ router.put("/admin/companies/:id/vendor-profile", ...adminGuard, requirePermissi
           issuesTaxInvoice: !!issuesTaxInvoice,
           memo: memo ?? null,
           status: resolvedStatus,
+          ...(country !== undefined ? { country: country?.trim() || null } : {}),
           deletedAt: null, deletedBy: null, deletionReason: null,
           updatedAt: new Date(),
         })
@@ -732,6 +736,7 @@ router.put("/admin/companies/:id/vendor-profile", ...adminGuard, requirePermissi
           issuesTaxInvoice: !!issuesTaxInvoice,
           memo: memo ?? null,
           status: resolvedStatus,
+          country: country?.trim() || null,
         })
         .returning();
     }

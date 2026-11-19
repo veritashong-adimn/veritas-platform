@@ -18,6 +18,7 @@ type VendorProfile = {
   issuesTaxInvoice: boolean;
   memo: string | null;
   status: string;
+  country?: string | null;   // 국가 — 수행정보 외주 정산유형(국내/해외) 기본값. 비우면 국내.
 };
 
 const sH: React.CSSProperties = {
@@ -39,7 +40,7 @@ export function CompanyVendorProfileSection({ companyId, token, onToast, onChang
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ outsourcingField: "", mainWork: "", memo: "", issuesTaxInvoice: false, status: "active" });
+  const [form, setForm] = useState({ outsourcingField: "", mainWork: "", memo: "", issuesTaxInvoice: false, status: "active", country: "" });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -61,6 +62,7 @@ export function CompanyVendorProfileSection({ companyId, token, onToast, onChang
       memo: profile?.memo ?? "",
       issuesTaxInvoice: !!profile?.issuesTaxInvoice,
       status: profile?.status === "inactive" ? "inactive" : "active",
+      country: profile?.country ?? "",
     });
     setEditing(true);
   };
@@ -76,6 +78,7 @@ export function CompanyVendorProfileSection({ companyId, token, onToast, onChang
           memo: form.memo.trim() || null,
           issuesTaxInvoice: form.issuesTaxInvoice,
           status: form.status,
+          country: form.country.trim() || null,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -127,6 +130,12 @@ export function CompanyVendorProfileSection({ companyId, token, onToast, onChang
             </div>
           </div>
           <div>
+            <label style={labelStyle} htmlFor="cvp-country">국가</label>
+            <input id="cvp-country" style={inputStyle} value={form.country}
+              onChange={e => setForm(f => ({ ...f, country: e.target.value }))}
+              placeholder="예: KR · US · JP — 비우면 국내(수행정보 국내/해외 정산 기본값)" data-testid="company-vendor-country" aria-label="외주업체 국가" />
+          </div>
+          <div>
             <label style={labelStyle} htmlFor="cvp-mainwork">주요업무</label>
             <input id="cvp-mainwork" style={inputStyle} value={form.mainWork}
               onChange={e => setForm(f => ({ ...f, mainWork: e.target.value }))}
@@ -160,6 +169,7 @@ export function CompanyVendorProfileSection({ companyId, token, onToast, onChang
             { label: "외주분야", value: fieldLabel(profile.outsourcingField) },
             { label: "세금계산서", value: profile.issuesTaxInvoice ? "발행" : "미발행" },
             { label: "상태", value: profile.status === "inactive" ? "비활성" : "활성" },
+            { label: "국가", value: profile.country || "국내(미입력)" },
             { label: "주요업무", value: profile.mainWork || "미입력" },
           ].map(({ label, value }) => (
             <div key={label} style={{ display: "flex", alignItems: "center", gap: 8, background: "#faf5ff", border: "1px solid #e9d5ff", borderRadius: 8, padding: "8px 12px", minWidth: 150 }}>

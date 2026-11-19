@@ -15,12 +15,14 @@ import RowControls from './RowControls';
 import InlinePerformerPicker from './InlinePerformerPicker';
 import type { TranslatorContactResult } from './TranslatorPreviewPopover';
 import { AmountDetailPopup, AdjustmentPopup, RatePopup } from './performancePopups';
+import RemittancePopup, { RemitStatusBadge, fmtFx } from './RemittancePopup';
 import ServiceDetailCell from './performanceServiceDetail';
 import { PayoutPaidConfirmDialog, type PaidConfirmLine } from './PayoutPaidConfirmDialog';
 import './readTableView.css';
 import {
   Row, ExpenseRow, toRow, won, num, round2, commafy, dateVal, calcRowCostPreview, calcPaymentDate, isEquipmentKind, isInterpretationKind, isTranslationKind, perPersonSnapshot,
   autoRateSig, isAutoRateOverwritable, afterTaxPayout, profitRatePct,
+  VENDOR_SETTLE_OPTS, CONTRACT_CURRENCY_OPTS, vendorSettleKey, isDomesticCountry, vendorSettlementPreview, fmtForeignAmt,
   INTERP_ADD_FEE_TYPE, INTERP_BIZTRIP_TYPE, INTERP_TRANSPORT_TYPE, INTERP_DEDICATED_EXPENSE_TYPES, INTERP_ETC_DEFAULT_TYPE,
   ETC_SELECTABLE_TYPES, computeEtcCols, etcColLabel, etcColIsEmpty, CUSTOM_EXPENSE_VALUE,
   defaultPayoutRate, effectivePayoutRate, expenseBase, actualPayout, displayPayoutRate, isFixed100Type,
@@ -107,6 +109,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
   const [pinnedEtcCols, setPinnedEtcCols] = useState<string[]>([]);
   // 조정항목 상세(조회 전용) 팝업 — 조회모드에서 셀 클릭 시 읽기 전용 표시
   const [adjustViewPopup, setAdjustViewPopup] = useState<number | null>(null);
+  const [remitPopup, setRemitPopup] = useState<number | null>(null);   // 해외 외주 송금내역 팝업(수행행 id)
   // 필터/정렬 (조회모드)
   const [q, setQ] = useState('');
   const [catFilter, setCatFilter] = useState('');
@@ -501,6 +504,13 @@ export default function PerformanceSection({ projectId, token, performances, onC
       identifierSnapshotMasked: c.businessNumber ?? null,
       lineCategory: r.performerCategory === 'vendor' && r.lineCategory ? r.lineCategory : vendorLineCategory(c.vendorType),
       residencyType: null, withholdingTreatment: 'tax_review_required',   // 외주업체 기본값: 세금계산서(기록용)
+      // 새로 선택한 외주업체부터 정산유형 적용(2026-11) — Master 국가가 국내(미입력 포함)면 국내·일반과세 10%, 그 외 해외송금.
+      //   같은 행에서 같은 유형이 이미 지정돼 있으면 유지(사용자가 고른 부가세 유형·통화 보존).
+      ...(r.vendorSettlementType
+        ? {}
+        : isDomesticCountry(c.vendorCountry)
+          ? { vendorSettlementType: 'domestic', purchaseEvidenceType: 'tax_invoice', contractCurrency: null }
+          : { vendorSettlementType: 'overseas', purchaseEvidenceType: 'none', contractCurrency: r.contractCurrency || 'USD' }),
     });
     clearSearch(null);
   };
@@ -584,6 +594,8 @@ export default function PerformanceSection({ projectId, token, performances, onC
     baseFee: num(r.baseFee), transportationFee: num(r.transportationFee), businessTripFee: num(r.businessTripFee),
     copyrightFee: num(r.copyrightFee), travelDayCompensation: num(r.travelDayCompensation), cancellationCompensation: num(r.cancellationCompensation),
     vendorCompanyId: r.vendorCompanyId ?? null, purchaseEvidenceType: r.purchaseEvidenceType ?? null,
+    vendorSettlementType: r.performerCategory === 'vendor' ? (r.vendorSettlementType ?? null) : null,
+    contractCurrency: r.performerCategory === 'vendor' && r.vendorSettlementType === 'overseas' ? (r.contractCurrency || 'USD') : null,
     purchaseInvoiceDate: r.purchaseInvoiceDate || null, supplyAmount: num(r.supplyAmount), vatAmountManual: num(r.vatAmount),
     expenses: (r.expenses ?? []).map(e => ({
       id: e.id, expenseType: e.expenseType, amount: num(e.amount), incurredDate: e.incurredDate || null,
@@ -742,8 +754,9 @@ export default function PerformanceSection({ projectId, token, performances, onC
       <th style={{ ...thBase, width: 80, textAlign: 'center' }}>단위</th>
       <th style={{ ...thBase, width: 112, textAlign: 'right' }}>단가</th>
       {/* 지급액 세전/세후 분리(§1) — 세전=수행원가(정산·수익률 기준), 세후=원천세 공제 후 실송금액 */}
-      <th style={{ ...thBase, width: RW.cost, textAlign: 'right' }}>{editable ? '지급액(세전)' : sortBtn('지급액(세전)', 'costTotal')}</th>
-      <th style={{ ...thBase, width: RW.cost, textAlign: 'right' }}>지급액(세후)</th>
+      {/* 외주업체(정산유형 지정) 행은 같은 칸에 공급가액 / 부가세·합계(국내) 또는 계약금액 / 송금예정액(해외)을 행별 라벨과 함께 표시 */}
+      <th style={{ ...thBase, width: RW.cost, textAlign: 'right' }} title="통번역사: 지급액(세전) · 외주업체: 공급가액(국내)/계약금액(해외)">{editable ? '지급액(세전)·공급가' : sortBtn('지급액(세전)·공급가', 'costTotal')}</th>
+      <th style={{ ...thBase, width: RW.cost, textAlign: 'right' }} title="통번역사: 지급액(세후) · 외주업체: 합계(국내)/해외송금 예정액(해외)">지급액(세후)·합계</th>
       {/* 세금처리 — 4컬럼보다 약간 넓게 + 좌측 여백(paddingLeft)으로 지급액과 명확히 분리 */}
       <th style={{ ...thBase, width: 156, paddingLeft: 20 }}>세금처리</th>
       <th style={{ ...thBase, width: RW.pay }}>지급상태</th>
@@ -788,7 +801,10 @@ export default function PerformanceSection({ projectId, token, performances, onC
     // 편집모드 입력 확대 — 유형 미지정 개인 행도 요금(100%)·통역료(85%) 입력(번역은 요금(100%)=directAmount 라 85% 제외),
     //   개인 행은 수량·단위·단가 입력. 조회모드 표시는 기존 그대로.
     const interpCols = isInterp || (editable && isIndiv && !isTrans);
-    const qtyCols = isTrans || isEquip || (editable && isIndiv);
+    // 정산유형 지정 외주 행(2026-11) — 수량·단위·단가 입력, 금액칸은 공급가액·부가세·합계(국내) / 계약금액·송금예정액(해외)
+    const settleVendor = cat === 'vendor' && !!r.vendorSettlementType;
+    const vs = settleVendor ? vendorSettlementPreview(r) : null;
+    const qtyCols = isTrans || isEquip || (editable && isIndiv) || settleVendor;
     const locked = isDateLocked(r);
     const deletable = canDelete(r);
     const dateTitle = locked ? '지급 진행 행은 수정 불가' : '';
@@ -919,7 +935,11 @@ export default function PerformanceSection({ projectId, token, performances, onC
         </td>
         {/* ⑮ 단위 — 번역: 글자/단어 선택. 장비: 저장 단위 표시(읽기전용). */}
         <td style={{ ...tdBase, textAlign: 'center' }}>
-          {(isTrans || (editable && isIndiv))
+          {settleVendor
+            ? (editable
+                ? <input data-testid={`perf-unit-${i}`} aria-label="단위" style={{ ...inp, textAlign: 'center' }} value={r.unit ?? ''} placeholder="set·대" onChange={e => patchRow(i, { unit: e.target.value })} />
+                : <span>{r.unit || muted}</span>)
+            : (isTrans || (editable && isIndiv))
             ? (editable
                 ? <ClickSelect value={TRANS_UNIT_OPTS.some(o => o.value === r.unit) ? (r.unit as string) : ''} onChange={(v: string) => patchRow(i, unitChangePatch(r, v))} triggerStyle={{ ...inp, minWidth: 64 }} options={TRANS_UNIT_OPTS} />
                 : <span>{r.unit || muted}</span>)
@@ -932,13 +952,53 @@ export default function PerformanceSection({ projectId, token, performances, onC
             : muted}
         </td>
         {/* 지급액(세전) — 수행원가(정산·수익률 기준 §3·§6). 기존 지급액값 그대로. */}
+        {vs ? (vs.type === 'domestic' ? <>
+          <td style={{ ...tdR, width: RW.cost, fontWeight: 700, color: C.primaryText }} data-testid={`perf-supply-${i}`} title="공급가액 = 수량 × 단가">
+            <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 400 }}>공급가액</div>{won(vs.supply)}원</td>
+          <td style={{ ...tdR, width: RW.cost }} data-testid={`perf-total-${i}`} title="합계 = 공급가액 + 부가세">
+            <div style={{ fontSize: 10, color: C.textMuted }}>부가세 {won(vs.vat)}원</div><b>합계 {won(vs.total)}원</b></td>
+        </> : <>
+          <td style={{ ...tdR, width: RW.cost, fontWeight: 700, color: C.primaryText }} data-testid={`perf-contract-${i}`} title="계약금액 = 수량 × 단가(계약통화)">
+            <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 400 }}>계약금액</div>{fmtForeignAmt(vs.currency, vs.foreign)}</td>
+          <td style={{ ...tdR, width: RW.cost }} data-testid={`perf-remit-${i}`} title="해외송금 예정액 = 계약금액(국내 부가세·원천징수 미적용)">
+            <div style={{ fontSize: 10, color: C.textMuted }}>해외송금 예정액</div>{fmtForeignAmt(vs.currency, vs.foreign)}
+            {/* 실제 송금내역 — 저장된 해외 외주 행만(계약금액과 분리된 송금기록, 분할송금) */}
+            {r.id != null && r.remittanceSummary && (
+              <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                <RemitStatusBadge s={r.remittanceSummary} />
+                <button type="button" onClick={() => setRemitPopup(r.id!)} data-testid={`perf-remit-open-${i}`} aria-label="해외송금 내역"
+                  title={`누적 ${fmtFx(r.remittanceSummary.contractCurrency, r.remittanceSummary.remittedAmount)} · 미송금 ${fmtFx(r.remittanceSummary.contractCurrency, r.remittanceSummary.remainingAmount)}`}
+                  style={{ border: `1px solid ${C.g300}`, borderRadius: 5, background: '#fff', cursor: 'pointer', padding: '1px 6px', fontSize: 10, fontWeight: 700 }}>송금내역</button>
+              </div>
+            )}</td>
+        </>) : <>
         <td style={{ ...tdR, width: RW.cost, fontWeight: 700, color: C.primaryText }}>{won(before)}원</td>
         {/* 지급액(세후) — 세전 × (1−원천세율). 실제 송금 기준(§3). 세율 0이면 세전과 동일. */}
         <td style={{ ...tdR, width: RW.cost }} title="세전 × (1 − 원천세율)">{won(after)}원</td>
+        </>}
         {/* 세금처리 — 통번역사·외주업체 공통 드롭다운(3.3% / 원천징수 예외 / 세금계산서). 외주업체는 기록용(지급액 불변) */}
         {/* paddingLeft 20 — 헤더와 동일. 지급액(우측정렬 금액)과 세금처리 사이 여백 확보(붙어 보임 방지) */}
         <td style={{ ...tdBase, paddingLeft: 20 }}>
-          {(isIndiv || cat === 'vendor')
+          {cat === 'vendor'
+            // 외주업체 — 정산유형(국내 부가세 유형 / 해외송금) 선택. 기존 행(유형 미지정)은 기존 표시를 유지하고, 사용자가 명시 선택한 경우에만 새 방식 적용.
+            ? (editable
+                ? <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                    <ClickSelect value={vendorSettleKey(r) || 'legacy'} triggerStyle={catSel} menuStyle={catMenu}
+                      options={[...(r.vendorSettlementType ? [] : [{ value: 'legacy', label: `기존(${withholdingText(r)})` }]), ...VENDOR_SETTLE_OPTS]}
+                      onChange={(v: string) => {
+                        if (v === 'legacy') return;
+                        if (v === 'overseas') patchRow(i, { vendorSettlementType: 'overseas', purchaseEvidenceType: 'none', contractCurrency: r.contractCurrency || 'USD' });
+                        else patchRow(i, { vendorSettlementType: 'domestic', purchaseEvidenceType: v.split(':')[1], contractCurrency: null });
+                      }} />
+                    {r.vendorSettlementType === 'overseas' && (
+                      <ClickSelect value={r.contractCurrency || 'USD'} triggerStyle={{ ...inp, minWidth: 58 }} options={CONTRACT_CURRENCY_OPTS}
+                        onChange={(v: string) => patchRow(i, { contractCurrency: v })} />
+                    )}
+                  </div>
+                : <span style={{ fontSize: 12 }} data-testid={`perf-settle-${i}`}>{r.vendorSettlementType
+                    ? (VENDOR_SETTLE_OPTS.find(o => o.value === vendorSettleKey(r))?.label ?? '') + (r.vendorSettlementType === 'overseas' ? ` · ${r.contractCurrency || 'USD'}` : '')
+                    : withholdingText(r)}</span>)
+            : isIndiv
             ? (editable
                 ? <ClickSelect value={effectiveTreatment(r)} onChange={(v: string) => patchRow(i, { withholdingTreatment: v })} triggerStyle={catSel} menuStyle={catMenu} options={TREATMENT_OPTS} />
                 : <span style={{ fontSize: 12 }}>{withholdingText(r)}</span>)
@@ -1134,6 +1194,8 @@ export default function PerformanceSection({ projectId, token, performances, onC
           hideSelectTypes={etcMode ? INTERP_DEDICATED_EXPENSE_TYPES : undefined} />;
       })()}
       {/* 조정항목(조회화면 즉시 수정, §1·§2·§6) — 수정화면과 동일한 공통 AdjustmentPopup. 확인 시 해당 1행만 즉시 저장 */}
+      {/* 해외 외주 송금내역 — 저장 즉시 반영, 변경 시 판매 상세 재조회로 요약(누적·미송금·상태) 갱신 */}
+      {remitPopup != null && <RemittancePopup assignmentId={remitPopup} token={token} onClose={() => setRemitPopup(null)} onChanged={() => { void onChanged(); }} />}
       {!editMode && adjustViewPopup != null && viewRows[adjustViewPopup] && (() => {
         const vr = viewRows[adjustViewPopup];
         const indiv = vr.performerCategory === 'individual';

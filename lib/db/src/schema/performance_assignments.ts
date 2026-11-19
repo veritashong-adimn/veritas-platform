@@ -215,6 +215,11 @@ export const performanceAssignmentsTable = pgTable("performance_assignments", {
   supplyAmount: numeric("supply_amount", { precision: 14, scale: 2 }).notNull().default("0"),
   vatAmount: numeric("vat_amount", { precision: 14, scale: 2 }).notNull().default("0"),
   totalPurchaseAmount: numeric("total_purchase_amount", { precision: 14, scale: 2 }).notNull().default("0"),
+  // 외주업체 정산유형(2026-11 추가, NULL 허용) — 'domestic'(세금계산서: 공급가액·부가세·합계) | 'overseas'(해외송금: 계약통화·외화 계약금액).
+  //   NULL = 기존 행(기존 계산 그대로). 사용자가 외주업체를 새로 선택하거나 유형을 명시 변경한 행부터 지정된다.
+  vendorSettlementType: text("vendor_settlement_type"),
+  contractCurrency: text("contract_currency"),          // 해외송금 계약통화(KRW/USD/EUR/JPY …)
+  contractAmountForeign: numeric("contract_amount_foreign", { precision: 16, scale: 2 }), // 계약금액 = 수량 × 단가(계약통화 단위) = 해외송금 예정액
 
   // ── 공통 ───────────────────────────────────────────────────────────────────
   memo: text("memo"),                     // 번역 상세정보 인코딩 저장용(파일명·형식·단어수) — 사용자 비고와 별개
@@ -321,6 +326,36 @@ export function calcVendorPurchase(
     default: vat = round2(manualVat ?? 0); break;
   }
   return { supply, vat, total: round2(supply + vat) };
+}
+
+/**
+ * 외주업체 정산유형별 금액(2026-11) — vendor_settlement_type 이 지정된 행에만 사용(NULL=기존 calcVendorPurchase 경로).
+ *  · domestic(세금계산서): 공급가액 = 수량 × 단가(원 단위), 부가세 = 공급가액 × 율(일반과세 10% / 영세율·면세 0, 원 단위), 합계 = 공급가액 + 부가세.
+ *  · overseas(해외송금): 계약금액 = 수량 × 단가(계약통화 단위) = 해외송금 예정액. 국내 부가세·원천징수 미적용.
+ *      KRW 계약이면 원화 지급액(공급가액=합계)으로 반영, 외화 계약이면 원화 금액 0(외화·원화 합산 금지) — 외화는 contractAmountForeign 에만.
+ *  · 수량·단가가 비어 있으면 입력 공급가액(fallbackSupply)을 유지(자동 재계산 안 함).
+ */
+export type VendorSettlementType = "domestic" | "overseas";
+export function calcVendorSettlement(
+  type: VendorSettlementType,
+  quantity: number | string | null | undefined,
+  unitPrice: number | string | null | undefined,
+  fallbackSupply: number | null | undefined,
+  evidenceType: PurchaseEvidenceType | null | undefined,
+  currency?: string | null,
+): { supply: number; vat: number; total: number; evidence: PurchaseEvidenceType; currency: string | null; contractAmountForeign: number | null } {
+  const hasQP = quantity != null && quantity !== "" && unitPrice != null && unitPrice !== "";
+  const raw = hasQP ? (Number(quantity) || 0) * (Number(unitPrice) || 0) : Number(fallbackSupply ?? 0) || 0;
+  if (type === "overseas") {
+    const cur = (currency ?? "").trim().toUpperCase() || "USD";
+    const amount = cur === "KRW" ? Math.round(raw) : round2(raw);
+    const krw = cur === "KRW" ? amount : 0;
+    return { supply: krw, vat: 0, total: krw, evidence: "none", currency: cur, contractAmountForeign: amount };
+  }
+  const ev: PurchaseEvidenceType = evidenceType === "zero_rate_tax_invoice" || evidenceType === "invoice" ? evidenceType : "tax_invoice";
+  const supply = Math.round(raw);
+  const vat = ev === "tax_invoice" ? Math.round(supply * 0.1) : 0;
+  return { supply, vat, total: supply + vat, evidence: ev, currency: null, contractAmountForeign: null };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

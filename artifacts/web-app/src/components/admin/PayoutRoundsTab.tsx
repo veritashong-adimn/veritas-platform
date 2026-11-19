@@ -13,6 +13,7 @@ import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
 import './readTableView.css';
 import { downloadTableExcel, todayStamp, type ExcelColumn } from '../../lib/payoutExcel';
 import PayoutExecutionModal from './PayoutExecutionModal';
+import RemittancePopup, { RemitStatusBadge, fmtFx } from './RemittancePopup';
 import { DateField } from './DatePickerShared';
 
 // VERITAS 공통 기본 폰트(App.tsx 와 동일 스택). 드롭다운 옵션은 포털(document.body)로 렌더되어
@@ -898,7 +899,7 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
         <PayoutExecutionModal token={token} round={{ id: selId, batchNumber: round.batchNumber, paymentDate: round.paymentDate, status: round.status }} onToast={onToast} onClose={() => setShowExec(false)} canTransfer={perms.transfer} />
       )}
       {showCreate && <CreateDialog token={token} onToast={onToast} onClose={() => setShowCreate(false)} onCreated={async (d) => { setShowCreate(false); await loadRounds(); setSel(String(d.round.id)); setDetail(d); }} />}
-      {showWarn && <WarningsModal warnings={warnings} busy={busy} onUnhold={!locked && perms.manage ? unholdItem : undefined} onClose={() => setShowWarn(false)} />}
+      {showWarn && <WarningsModal warnings={warnings} busy={busy} token={token} onUnhold={!locked && perms.manage ? unholdItem : undefined} onClose={() => setShowWarn(false)} />}
       {holdFor && (
         <Modal title={`지급보류 — ${holdFor.name}`} onClose={() => setHoldFor(null)}>
           <p style={{ ...TYPO.helper, margin: '0 0 8px' }}>보류 사유를 선택하거나 입력하세요 (필수).</p>
@@ -975,7 +976,8 @@ function CreateDialog({ token, onToast, onClose, onCreated }: { token: string; o
 }
 
 // ── 제외·확인 필요 목록 모달(§8) ──
-function WarningsModal({ warnings, busy, onUnhold, onClose }: { warnings: any; busy?: boolean; onUnhold?: (id: number) => void; onClose: () => void; }) {
+function WarningsModal({ warnings, busy, token, onUnhold, onClose }: { warnings: any; busy?: boolean; token: string; onUnhold?: (id: number) => void; onClose: () => void; }) {
+  const [remitId, setRemitId] = useState<number | null>(null);   // 해외송금 내역(수행정보와 같은 송금기록 조회 전용)
   return (
     <Modal title={`제외·확인 필요 ${warnings.total}건`} onClose={onClose}>
       {warnings.byReason.length === 0 && <p style={{ ...TYPO.helper }}>확인이 필요한 항목이 없습니다.</p>}
@@ -989,7 +991,17 @@ function WarningsModal({ warnings, busy, onUnhold, onClose }: { warnings: any; b
               <div key={it.id} style={{ ...TYPO.helper, color: C.textSecondary, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
                 <span>{it.performerName || '(미지정)'} · {it.productName || `#${it.projectId}`}</span>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontVariantNumeric: 'tabular-nums' }}>{won(it.costTotal)}원</span>
+                  {it.remittanceSummary ? (
+                    // 해외 외주 — 계약통화·계약금액·누적 송금액·미송금액·송금상태(외화, 원화 합계와 분리)
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontVariantNumeric: 'tabular-nums' }} data-testid={`payout-remit-${it.id}`}>
+                      계약 {fmtFx(it.remittanceSummary.contractCurrency, it.remittanceSummary.contractAmount)}
+                      · 누적 {fmtFx(it.remittanceSummary.contractCurrency, it.remittanceSummary.remittedAmount)}
+                      · 미송금 {fmtFx(it.remittanceSummary.contractCurrency, it.remittanceSummary.remainingAmount)}
+                      <RemitStatusBadge s={it.remittanceSummary} />
+                      <button type="button" onClick={() => setRemitId(it.id)} data-testid={`payout-remit-open-${it.id}`} aria-label="송금내역 상세 보기"
+                        style={{ border: `1px solid ${C.g300}`, borderRadius: 5, background: '#fff', cursor: 'pointer', padding: '2px 8px', fontSize: 10, fontWeight: 700 }}>송금내역</button>
+                    </span>
+                  ) : <span style={{ fontVariantNumeric: 'tabular-nums' }}>{won(it.costTotal)}원</span>}
                   {isHold && onUnhold && (
                     <button type="button" onClick={() => onUnhold(it.id)} disabled={busy} data-testid={`payout-unhold-${it.id}`}
                       title="지급보류 해제 (미지급으로 복귀)" style={{ border: '1px solid #86efac', borderRadius: 5, background: '#f0fdf4', color: '#15803d', cursor: busy ? 'not-allowed' : 'pointer', padding: '2px 8px', fontSize: 10, fontWeight: 700 }}>보류 해제</button>
@@ -1002,6 +1014,7 @@ function WarningsModal({ warnings, busy, onUnhold, onClose }: { warnings: any; b
         </div>
         );
       })}
+      {remitId != null && <RemittancePopup assignmentId={remitId} token={token} readOnly onClose={() => setRemitId(null)} />}
     </Modal>
   );
 }

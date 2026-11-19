@@ -8,11 +8,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { Router, type IRouter } from "express";
 import {
-  db, performanceAssignmentsTable, performanceExpensesTable, performanceDeductionsTable,
+  db, performanceAssignmentsTable, performanceExpensesTable, performanceDeductionsTable, performanceRemittancesTable,
   quotesTable, quoteItemsTable, quoteItemFilesTable, productsTable, holidaysTable, projectsTable,
   translatorSensitiveTable, translatorProfilesTable, translatorRatesTable, usersTable, companiesTable,
   translatorEmailsTable,
-  calcIndividualPayout, calcVendorPurchase, DEFAULT_DOMESTIC_WITHHOLDING_TREATMENT,
+  calcIndividualPayout, calcVendorPurchase, calcVendorSettlement, DEFAULT_DOMESTIC_WITHHOLDING_TREATMENT,
   calcBasePerformanceFee, calcCostTotal, calcPaymentDate,
 } from "@workspace/db";
 import { LANGUAGE_CODES } from "./products";
@@ -394,6 +394,9 @@ export const rowSchema = z.object({
   purchaseInvoiceDate: dateStr,
   supplyAmount: money.optional(),
   vatAmountManual: money.optional(),                   // 기타·미발행 시 수동 부가세
+  // 외주 정산유형(2026-11) — 지정 시 새 계산(국내: 공급가액·부가세·합계 / 해외: 계약통화·외화 계약금액). 생략·null=기존 계산.
+  vendorSettlementType: z.enum(["domestic", "overseas"]).nullable().optional(),
+  contractCurrency: z.string().trim().regex(/^[A-Za-z]{3}$/).nullable().optional(),
 });
 
 export type RowInput = z.infer<typeof rowSchema>;
@@ -416,6 +419,30 @@ export function computeRowValues(r: RowInput) {
       taxTreatyApplicable: false, overseasEvidenceExists: false,
       purchaseEvidenceType: null, purchaseInvoiceDate: null,
       supplyAmount: "0", vatAmount: "0", totalPurchaseAmount: "0",
+      vendorSettlementType: null, contractCurrency: null, contractAmountForeign: null,   // 정산유형은 지정된 외주 행만
+    };
+  }
+  if (category === "vendor" && r.vendorSettlementType) {
+    // 정산유형 지정 행(2026-11) — 국내=세금계산서(공급가액·부가세·합계), 해외=해외송금(계약통화·외화 계약금액). 원천징수 미적용.
+    const v = calcVendorSettlement(r.vendorSettlementType, r.quantity, r.contractUnitPrice, r.supplyAmount, r.purchaseEvidenceType, r.contractCurrency);
+    return {
+      performerCategory: "vendor" as const,
+      costType: r.costType ?? "vendor",
+      payeeType: "vendor",
+      residencyType: null, serviceCountry: null, serviceLocationType: null,
+      baseFee: "0", transportationFee: "0", businessTripFee: "0", copyrightFee: "0",
+      travelDayCompensation: "0", cancellationCompensation: "0",
+      grossPayment: "0",
+      withholdingTreatment: r.withholdingTreatment ?? "tax_review_required", withholdingRate: null,   // 외주: 기록용(원천세 미적용)
+      withholdingTax: "0", netPayment: "0", taxReviewReason: null,
+      taxTreatyApplicable: false, overseasEvidenceExists: false,
+      individualUserId: null,
+      vendorCompanyId: r.vendorCompanyId ?? null,
+      purchaseEvidenceType: v.evidence,
+      purchaseInvoiceDate: r.purchaseInvoiceDate ?? null,
+      supplyAmount: String(v.supply), vatAmount: String(v.vat), totalPurchaseAmount: String(v.total),
+      vendorSettlementType: r.vendorSettlementType, contractCurrency: v.currency,
+      contractAmountForeign: v.contractAmountForeign != null ? String(v.contractAmountForeign) : null,
     };
   }
   if (category === "vendor") {
@@ -458,6 +485,7 @@ export function computeRowValues(r: RowInput) {
       purchaseEvidenceType: linkedEvidence,           // §1 세금처리에서 자동 연동된 증빙유형 저장
       purchaseInvoiceDate: r.purchaseInvoiceDate ?? null,
       supplyAmount: String(supply), vatAmount: String(vat), totalPurchaseAmount: String(total),
+      vendorSettlementType: null, contractCurrency: null, contractAmountForeign: null,   // 정산유형은 지정된 외주 행만
     };
   }
   // individual
@@ -478,6 +506,7 @@ export function computeRowValues(r: RowInput) {
     // 업체 필드 초기화
     purchaseEvidenceType: null, purchaseInvoiceDate: null,
     supplyAmount: "0", vatAmount: "0", totalPurchaseAmount: "0",
+    vendorSettlementType: null, contractCurrency: null, contractAmountForeign: null,
     // 개인
     individualUserId: r.individualUserId ?? null,
     residencyType: r.residencyType ?? null,
@@ -1051,6 +1080,18 @@ router.put("/admin/projects/:id/performances", ...adminGuard, requireRolePermiss
   if (!parsed.success) { res.status(400).json({ error: "유효성 검증 실패", detail: parsed.error.flatten() }); return; }
   const { rows, deletedIds } = parsed.data;
   const userId = req.user?.id ?? null;
+  // 해외송금 내역이 있는 수행행은 해외 외주 정산유형을 벗어나거나 삭제할 수 없다 — 외화 송금 후 원화로 재지급되는 이중지급 방지.
+  {
+    const leaving = [...deletedIds, ...rows.filter(r => r.id != null && !(r.performerCategory === "vendor" && r.vendorSettlementType === "overseas")).map(r => r.id as number)];
+    if (leaving.length) {
+      const held = await db.select({ assignmentId: performanceRemittancesTable.assignmentId }).from(performanceRemittancesTable)
+        .where(and(inArray(performanceRemittancesTable.assignmentId, leaving), isNull(performanceRemittancesTable.deletedAt)));
+      if (held.length) {
+        res.status(409).json({ error: "해외송금 내역이 등록된 수행정보는 정산유형 변경·수행자 유형 변경·삭제를 할 수 없습니다. 송금내역을 먼저 확인해 주세요.", assignmentIds: [...new Set(held.map(h => h.assignmentId))] });
+        return;
+      }
+    }
+  }
   const activatedTranslatorIds: number[] = [];   // 이번 저장으로 자동 활성화된 통번역사(가산 응답 필드)
 
   try {

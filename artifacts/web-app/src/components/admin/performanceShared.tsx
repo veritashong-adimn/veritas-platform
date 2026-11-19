@@ -335,6 +335,11 @@ export interface Row {
   supplyAmount?: string | number | null;
   vatAmount?: string | number | null;
   totalPurchaseAmount?: string | number | null;
+  // 외주 정산유형(2026-11) — 'domestic' | 'overseas'. null = 기존 외주 행(기존 계산 유지).
+  vendorSettlementType?: string | null;
+  contractCurrency?: string | null;
+  contractAmountForeign?: string | number | null;
+  remittanceSummary?: any;   // 해외 외주 송금 요약(서버 계산, 읽기전용)
   // 하위 다건
   expenses?: ExpenseRow[];
   deductions?: DeductionRow[];
@@ -379,6 +384,7 @@ export const toRow = (p: any): Row => ({
   legacyPayout: p.legacyPayout ?? null, quantityFromSale: p.quantityFromSale ?? false,
   grossPayment: p.grossPayment, withholdingTax: p.withholdingTax, netPayment: p.netPayment,
   supplyAmount: p.supplyAmount, vatAmount: p.vatAmount, totalPurchaseAmount: p.totalPurchaseAmount,
+  vendorSettlementType: p.vendorSettlementType ?? null, contractCurrency: p.contractCurrency ?? null, contractAmountForeign: p.contractAmountForeign ?? null, remittanceSummary: p.remittanceSummary ?? null,
   expenses: Array.isArray(p.expenses) ? p.expenses.map((e: any) => ({
     id: e.id, expenseType: e.expenseType, amount: e.amount, baseAmount: e.baseAmount, payoutRate: e.payoutRate, incurredDate: e.incurredDate,
     includedInPayout: e.includedInPayout ?? true, evidenceUrl: e.evidenceUrl, evidenceFileName: e.evidenceFileName, memo: e.memo,
@@ -543,6 +549,36 @@ export function isAutoRateOverwritable(r: Row): boolean {
   return autoRateSig(r) === r._autoRateSig;
 }
 
+// ── 외주업체 정산유형(2026-11) — 서버 calcVendorSettlement(@workspace/db)와 같은 규칙(화면 미리보기용) ──
+//   국내: 공급가액 = 수량×단가(원), 부가세 = 공급가액×율(일반과세 10% / 영세율·면세 0, 원), 합계 = 공급가액+부가세.
+//   해외: 계약금액 = 수량×단가(계약통화) = 해외송금 예정액. 국내 부가세·원천징수 미적용. 수량·단가 없으면 입력 공급가액 유지.
+export const VENDOR_SETTLE_OPTS = [
+  { value: 'domestic:tax_invoice', label: '국내 · 일반과세 10%' },
+  { value: 'domestic:zero_rate_tax_invoice', label: '국내 · 영세율 0%' },
+  { value: 'domestic:invoice', label: '국내 · 면세' },
+  { value: 'overseas', label: '해외송금' },
+];
+export const CONTRACT_CURRENCY_OPTS = ['USD', 'EUR', 'JPY', 'CNY', 'GBP', 'KRW'].map(c => ({ value: c, label: c }));
+export const vendorSettleKey = (r: Row): string => r.vendorSettlementType === 'overseas' ? 'overseas'
+  : r.vendorSettlementType === 'domestic' ? `domestic:${r.purchaseEvidenceType === 'zero_rate_tax_invoice' || r.purchaseEvidenceType === 'invoice' ? r.purchaseEvidenceType : 'tax_invoice'}` : '';
+// 외주업체 Master 국가 → 기본 정산유형. 비어 있거나 한국이면 국내.
+export const isDomesticCountry = (c?: string | null) => { const t = String(c ?? '').trim().toLowerCase(); return !t || ['kr', 'kor', 'korea', 'south korea', '한국', '대한민국'].includes(t); };
+export function vendorSettlementPreview(r: Row): { type: 'domestic' | 'overseas'; supply: number; vat: number; total: number; currency: string | null; foreign: number | null } {
+  const hasQP = r.quantity != null && r.quantity !== '' && r.contractUnitPrice != null && r.contractUnitPrice !== '';
+  const raw = hasQP ? num(r.quantity) * num(r.contractUnitPrice) : num(r.supplyAmount);
+  if (r.vendorSettlementType === 'overseas') {
+    const cur = String(r.contractCurrency ?? '').trim().toUpperCase() || 'USD';
+    const amount = cur === 'KRW' ? Math.round(raw) : round2(raw);
+    const krw = cur === 'KRW' ? amount : 0;
+    return { type: 'overseas', supply: krw, vat: 0, total: krw, currency: cur, foreign: amount };
+  }
+  const supply = Math.round(raw);
+  const ev = r.purchaseEvidenceType === 'zero_rate_tax_invoice' || r.purchaseEvidenceType === 'invoice' ? r.purchaseEvidenceType : 'tax_invoice';
+  const vat = ev === 'tax_invoice' ? Math.round(supply * 0.1) : 0;
+  return { type: 'domestic', supply, vat, total: supply + vat, currency: null, foreign: null };
+}
+export const fmtForeignAmt = (cur: string | null, v: number | null) => v == null ? '-' : `${cur ?? ''} ${v.toLocaleString('ko-KR', { minimumFractionDigits: cur === 'KRW' || cur === 'JPY' ? 0 : 2, maximumFractionDigits: 2 })}`;
+
 // 통역료(85%) 지급률(§통역료85) — 통역료(85%) 입력금액은 85% 적용 전 '기준금액'. 실제 세전 반영액 = 입력금액 × 0.85.
 //   화면 셀은 입력값(기준금액) 그대로 표시하고, 지급액(세전) 계산에서만 0.85를 곱한다(§1·§8). 번역 요금(100%)·경비에는 적용하지 않는다(§5).
 export const INTERP_FEE_RATE = 0.85;
@@ -555,7 +591,11 @@ export function calcRowCostPreview(r: Row): { base: number; expenseTotal: number
   const hasUnitPrice = r.contractUnitPrice != null && r.contractUnitPrice !== '';
   const hasQty = r.quantity != null && r.quantity !== '';
   let base: number;
-  if (isEquipmentKind(r)) {
+  if (r.performerCategory === 'vendor' && r.vendorSettlementType) {
+    // 정산유형 지정 외주 행 — 원화 지급액 = 국내 공급가액 / 해외 KRW 계약금액(외화 계약은 0: 외화·원화 합산 금지). 서버 calcVendorSettlement 와 동일.
+    base = vendorSettlementPreview(r).supply;
+  }
+  else if (isEquipmentKind(r)) {
     // 장비 원가 = 계약단가 × 수량(§계약단가통일). 계약단가가 없으면 기존 공급가액을 유지(자동 재계산 안 함).
     //   (장비는 외주로 분류되므로 vendor 분기보다 먼저 판정한다. 부가세는 서버에서 공급가액 기준으로 별도 계산 — 불변.)
     base = (hasUnitPrice && hasQty)

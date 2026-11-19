@@ -59,6 +59,7 @@ import { loadPerformanceAnnotations } from "../services/legacyPayoutStatus";
 import { legacyOriginOfProject, customerNoteOf, customerMemoOf } from "../services/customerDocText";
 import { captureIfMissing, recaptureRecipient, freezeProjectQuotes, liveRecipientOf, hasSnapshot } from "../services/quoteRecipientSnapshot";
 import { restoredCustomerNameOfProject, linkedContactNameOfSaleNo } from "../services/legacyContactRestore";
+import { loadRemittanceSummaries } from "../services/performanceRemittance";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -696,7 +697,10 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
     // 수행정보(원가) — 추가비용·차감 하위행 포함, soft-delete 제외. 암호문 제외(마스킹값만).
     // + 표시용 추가 필드(기존 응답 형태 유지): legacyPayout(과거 CRM 지급확인 상태: 지급완료/지급예정/확인 필요) · quantityFromSale(판매수량 복사 수량)
     const perfNotes = await loadPerformanceAnnotations(db, projectId);
-    const performances = (await loadPerformanceRows(projectId)).map((p: any) => ({ ...p, ...(perfNotes.get(Number(p.id)) ?? { legacyPayout: null, quantityFromSale: false }) }));
+    const perfRows = await loadPerformanceRows(projectId);
+    const remitByRow = await loadRemittanceSummaries(db, perfRows as any[]);   // 해외 외주 송금 요약(가산 필드)
+    const performances = perfRows.map((p: any) => ({ ...p, ...(perfNotes.get(Number(p.id)) ?? { legacyPayout: null, quantityFromSale: false }),
+      ...(remitByRow.has(Number(p.id)) ? { remittanceSummary: remitByRow.get(Number(p.id)) } : {}) }));
     // 결제정보(고객 수금) — 회차 오름차순. 기존 payments(요청/승인 흐름)와는 별개 테이블.
     const paymentRecords = await loadPaymentRecords(projectId);
 

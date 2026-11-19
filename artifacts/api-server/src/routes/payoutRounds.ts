@@ -12,6 +12,7 @@ import {
   calcPayoutWithholding, vendorVatApplies,
 } from "@workspace/db";
 import { eq, and, or, isNull, isNotNull, inArray, ne, sql } from "drizzle-orm";
+import { loadRemittanceSummaries } from "../services/performanceRemittance";
 import { z } from "zod";
 import { requireAuth, requireRole, requireStaffPermission } from "../middlewares/auth";
 import { getPermissionsForRole } from "../lib/rbac";
@@ -137,6 +138,7 @@ function selectItems(whereClause: any) {
       withholdingTreatment: performanceAssignmentsTable.withholdingTreatment,
       withholdingRate: performanceAssignmentsTable.withholdingRate,
       purchaseEvidenceType: performanceAssignmentsTable.purchaseEvidenceType,  // 표시용 — 외주 세금계산서(VAT별도) 라벨 판단
+      vendorSettlementType: performanceAssignmentsTable.vendorSettlementType,  // 국내 외주(정산유형 지정) — 부가세 원 단위
       paymentStatus: performanceAssignmentsTable.paymentStatus,
       remark: performanceAssignmentsTable.remark,
       // 소속 지급회차 표시용(§3) — 미배정이면 전부 null. 회차 상세 조회에도 무해(자기 회차값).
@@ -183,13 +185,20 @@ const loadCollectable = (round: any) => (!round.periodStart || !round.periodEnd)
   : selectItems(collectWhere(round.periodStart, round.periodEnd, round.collectionBasis || DEFAULT_COLLECTION_BASIS));
 
 // 지급대상별 자동합산(§9·§10·§11) — 개인=individualUserId, 외주=vendorCompanyId 기준(반드시 고유 ID).
+// 국내 외주업체(정산유형 domestic) 행은 수행정보와 같은 원 단위 부가세 — 합계(공급가액+부가세)가 지급예정액. 기존 행(NULL)은 기존 계산 그대로.
+function wonVendorVat<T extends { vat: number; gross: number; net: number }>(it: any, tax: T): T {
+  if (it.vendorSettlementType !== "domestic" || !tax.vat) return tax;
+  const vat = Math.round(tax.gross * 0.1);
+  return { ...tax, vat, net: tax.gross + vat };
+}
+
 function aggregate(items: any[]) {
   const groups = new Map<string, any>();
   for (const it of items) {
     const isIndiv = it.payeeType === "individual" || it.performerCategory === "individual";
     const payeeId = isIndiv ? it.individualUserId : it.vendorCompanyId;
     const key = `${isIndiv ? "i" : "v"}:${payeeId ?? "none"}`;
-    const tax = calcPayoutWithholding(num(it.costTotal), isIndiv ? "individual" : "vendor", it.withholdingTreatment, it.withholdingRate != null ? num(it.withholdingRate) : null, it.purchaseEvidenceType);
+    const tax = wonVendorVat(it, calcPayoutWithholding(num(it.costTotal), isIndiv ? "individual" : "vendor", it.withholdingTreatment, it.withholdingRate != null ? num(it.withholdingRate) : null, it.purchaseEvidenceType));
     let g = groups.get(key);
     if (!g) {
       g = {
@@ -431,6 +440,8 @@ function notEligibleReason(r: any): string | null {
   if (!hasPayee) return "수행자 미지정";
   if (!r.deliveryDate) return "납품일 미입력";
   if (!r.deliveryConfirmed) return "납품확인 미완료";
+  // 해외 외주업체 외화 계약 — 원화 지급회차(원화 합계·IBK 이체)에 합산하지 않는다. 외화 계약금액은 수행정보에 유지.
+  if (r.vendorSettlementType === "overseas" && (r.contractCurrency ?? "KRW") !== "KRW") return "해외송금(외화) — 원화 지급회차 별도";
   if (num(r.costTotal) <= 0) return "지급액 0원";
   if (r.performerCategory === "individual" && !r.withholdingTreatment) return "세금처리 미선택";
   return null;
@@ -445,6 +456,7 @@ async function loadPending() {
     vendorCompanyId: performanceAssignmentsTable.vendorCompanyId, deliveryDate: performanceAssignmentsTable.deliveryDate,
     deliveryConfirmed: performanceAssignmentsTable.deliveryConfirmed, costTotal: performanceAssignmentsTable.costTotal,
     withholdingTreatment: performanceAssignmentsTable.withholdingTreatment, paymentStatus: performanceAssignmentsTable.paymentStatus,
+    vendorSettlementType: performanceAssignmentsTable.vendorSettlementType, contractCurrency: performanceAssignmentsTable.contractCurrency,
   }).from(performanceAssignmentsTable).where(and(
     isNull(performanceAssignmentsTable.deletedAt),
     sql`${performanceAssignmentsTable.performerCategory} IN ('individual','vendor')`,
@@ -480,6 +492,9 @@ async function loadWarnings(round: any) {
       payoutRoundId: performanceAssignmentsTable.payoutRoundId,
       payoutHoldReason: performanceAssignmentsTable.payoutHoldReason,
       productName: performanceAssignmentsTable.productNameSnapshot,
+      vendorSettlementType: performanceAssignmentsTable.vendorSettlementType,
+      contractCurrency: performanceAssignmentsTable.contractCurrency,
+      contractAmountForeign: performanceAssignmentsTable.contractAmountForeign,
     })
     .from(performanceAssignmentsTable)
     .where(and(
@@ -495,7 +510,9 @@ async function loadWarnings(round: any) {
     ));
 
   const buckets: Record<string, any[]> = {};
-  const push = (reason: string, r: any) => { (buckets[reason] ??= []).push({ id: r.id, projectId: r.projectId, performerName: r.performerName, productName: r.productName, costTotal: num(r.costTotal), reason }); };
+  const push = (reason: string, r: any) => { (buckets[reason] ??= []).push({ id: r.id, projectId: r.projectId, performerName: r.performerName, productName: r.productName, costTotal: num(r.costTotal), reason,
+    // 해외 외화 계약(가산 필드) — 원화 금액과 합산하지 않고 통화 그대로 표시
+    ...(r.vendorSettlementType === "overseas" && r.contractCurrency && r.contractCurrency !== "KRW" ? { contractCurrency: r.contractCurrency, contractAmountForeign: num(r.contractAmountForeign) } : {}) }); };
   let holdAmount = 0;
   for (const r of rows) {
     if (r.payoutRoundId != null && r.payoutRoundId !== round.id) { push("이미 다른 회차에 포함됨", r); continue; }
@@ -504,6 +521,9 @@ async function loadWarnings(round: any) {
     if (why) { push(why, r); continue; }
     // 위 조건을 모두 통과했는데도 이 회차에 없는 건 = 미수집(예: 저장 전 제외 처리) → 별도 표기
   }
+  // 해외 외주 송금 요약(수행정보와 같은 송금기록 조회 — 계약통화·계약금액·누적 송금액·미송금액·송금상태). 원화 합계와 분리.
+  const remit = await loadRemittanceSummaries(db, rows as any[]);
+  for (const list of Object.values(buckets)) for (const it of list) if (remit.has(it.id)) it.remittanceSummary = remit.get(it.id);
   const byReason = Object.entries(buckets).map(([reason, items]) => ({ reason, count: items.length, items }));
   const total = byReason.reduce((s, b) => s + b.count, 0);
   return { total, holdAmount, byReason };

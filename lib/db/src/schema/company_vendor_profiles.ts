@@ -23,6 +23,8 @@ export const companyVendorProfilesTable = pgTable("company_vendor_profiles", {
   // 향후 확장 가능하도록 varchar 로 둔다(pgEnum 미사용) — §4 "과도한 구조 금지".
   outsourcingField: varchar("outsourcing_field", { length: 30 }),
   mainWork: text("main_work"), // 주요 업무(자유입력)
+  // 국가(2026-11 추가, NULL 허용) — 수행정보 외주 정산유형 기본값(국내/해외) 판정용. NULL·KR·대한민국 = 국내.
+  country: text("country"),
 
   // 세금계산서 발행 여부(§5 지급정보). 부가세/공급가액 등 건별 계산은 기존 수행정보
   // (performance_assignments 의 purchaseEvidenceType/supplyAmount/vatAmount)에서 처리하므로

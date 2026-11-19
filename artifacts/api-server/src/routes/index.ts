@@ -14,6 +14,7 @@ import adminQuoteDuplicateRouter from "./adminQuoteDuplicate";
 import companySealRouter from "./companySeal";
 import settlementsRouter from "./settlements";
 import performancesRouter from "./performances";
+import performanceRemittancesRouter from "./performanceRemittances";
 import performanceImportRouter from "./performanceImport";
 import projectPaymentsRouter from "./projectPayments";
 import collectionsRouter from "./collections";
@@ -94,6 +95,7 @@ router.use(adminQuoteDuplicateRouter);
 router.use(companySealRouter);
 router.use(settlementsRouter);
 router.use(performancesRouter);
+router.use(performanceRemittancesRouter);   // 해외 외주 송금내역(수행정보·지급회차 공용)
 router.use(performanceImportRouter);
 router.use(projectPaymentsRouter);
 router.use(collectionsRouter);
