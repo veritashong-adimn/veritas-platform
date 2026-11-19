@@ -18,7 +18,7 @@ export type RemittanceSummary = {
 type Rec = { id: number; remitDate: string | null; currency: string; foreignAmount: string; fxRate: string | null; krwAmount: string | null; bankFee: string; status: string; memo: string | null };
 
 export const REMIT_STATUS_LABEL: Record<string, string> = { planned: '송금예정', partial: '부분송금', completed: '송금완료' };
-const REC_STATUS_OPTS = [{ value: 'completed', label: '송금완료' }, { value: 'requested', label: '송금요청' }, { value: 'failed', label: '실패·반송' }];
+const REC_STATUS_OPTS = [{ value: 'completed', label: '송금완료' }, { value: 'requested', label: '송금예정(요청)' }, { value: 'failed', label: '실패·반송' }];
 const recStatusLabel = (v: string) => REC_STATUS_OPTS.find(o => o.value === v)?.label ?? v;
 const CUR_OPTS = ['USD', 'EUR', 'JPY', 'CNY', 'GBP', 'KRW'].map(c => ({ value: c, label: c }));
 
@@ -131,12 +131,12 @@ export default function RemittancePopup({ assignmentId, token, readOnly, onClose
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>{form.id == null ? '송금내역 추가' : '송금내역 수정'}</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10 }}>
               <div><label style={lbl}>송금일</label><DateField value={form.remitDate} onChange={(v: string) => setForm(f => ({ ...f, remitDate: v }))} testid="remit-date" ariaLabel="송금일" /></div>
-              <div><label style={lbl}>통화</label><ClickSelect value={form.currency} onChange={(v: string) => setForm(f => ({ ...f, currency: v }))} triggerStyle={inp} options={CUR_OPTS} /></div>
+              <div><label style={lbl}>통화</label><ClickSelect value={form.currency} onChange={(v: string) => setForm(f => ({ ...f, currency: v }))} triggerStyle={inp} options={CUR_OPTS} data-testid="remit-currency" aria-label="송금 통화" /></div>
               <div><label style={lbl}>외화 송금액</label><input style={inp} type="number" min={0} step="0.01" value={form.foreignAmount} onChange={e => setForm(f => ({ ...f, foreignAmount: e.target.value }))} data-testid="remit-amount" aria-label="외화 송금액" /></div>
               <div><label style={lbl}>적용환율</label><input style={inp} type="number" min={0} step="0.0001" value={form.fxRate} onChange={e => setForm(f => ({ ...f, fxRate: e.target.value }))} data-testid="remit-fx" aria-label="적용환율" /></div>
               <div><label style={lbl}>원화 환산액(자동)</label><div style={{ ...inp, background: C.g50 ?? '#f9fafb' }} data-testid="remit-krw-preview">{krwPreview != null ? won(krwPreview) : '-'}</div></div>
               <div><label style={lbl}>은행 수수료(원)</label><input style={inp} type="number" min={0} value={form.bankFee} onChange={e => setForm(f => ({ ...f, bankFee: e.target.value }))} data-testid="remit-fee" aria-label="은행 수수료" /></div>
-              <div><label style={lbl}>송금상태</label><ClickSelect value={form.status} onChange={(v: string) => setForm(f => ({ ...f, status: v }))} triggerStyle={inp} options={REC_STATUS_OPTS} /></div>
+              <div><label style={lbl}>송금상태</label><ClickSelect value={form.status} onChange={(v: string) => setForm(f => ({ ...f, status: v }))} triggerStyle={inp} options={REC_STATUS_OPTS} data-testid="remit-status" aria-label="송금상태" /></div>
               <div><label style={lbl}>메모</label><input style={inp} value={form.memo} onChange={e => setForm(f => ({ ...f, memo: e.target.value }))} data-testid="remit-memo" aria-label="송금 메모" /></div>
             </div>
             {err && <p style={{ ...TYPO.helper, color: C.danger, marginTop: 6 }}>{err}</p>}

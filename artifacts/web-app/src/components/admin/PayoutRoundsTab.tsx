@@ -518,6 +518,7 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
             <div style={{ width: 440, maxWidth: '100%' }}>
               <ClickSelect value={sel} onChange={(v: string) => setSel(v || 'all')}
                 triggerStyle={{ ...inp, minHeight: 38, fontWeight: 600 }} menuStyle={{ fontFamily: APP_FONT }}
+                data-testid="payout-round-select" aria-label="지급회차 선택"
                 options={[
                   { value: 'all', label: '전체 지급대상' },
                   { value: 'unassigned', label: '미배정' },
@@ -979,7 +980,8 @@ function CreateDialog({ token, onToast, onClose, onCreated }: { token: string; o
 function WarningsModal({ warnings, busy, token, onUnhold, onClose }: { warnings: any; busy?: boolean; token: string; onUnhold?: (id: number) => void; onClose: () => void; }) {
   const [remitId, setRemitId] = useState<number | null>(null);   // 해외송금 내역(수행정보와 같은 송금기록 조회 전용)
   return (
-    <Modal title={`제외·확인 필요 ${warnings.total}건`} onClose={onClose}>
+    <Modal title={`제외·확인 필요 ${warnings.total}건`} onClose={onClose}
+      width={warnings.byReason.some((b: any) => b.items.some((it: any) => it.remittanceSummary)) ? 860 : 560}>
       {warnings.byReason.length === 0 && <p style={{ ...TYPO.helper }}>확인이 필요한 항목이 없습니다.</p>}
       {warnings.byReason.map((b: any) => {
         const isHold = b.reason === '지급보류';
@@ -999,7 +1001,7 @@ function WarningsModal({ warnings, busy, token, onUnhold, onClose }: { warnings:
                       · 미송금 {fmtFx(it.remittanceSummary.contractCurrency, it.remittanceSummary.remainingAmount)}
                       <RemitStatusBadge s={it.remittanceSummary} />
                       <button type="button" onClick={() => setRemitId(it.id)} data-testid={`payout-remit-open-${it.id}`} aria-label="송금내역 상세 보기"
-                        style={{ border: `1px solid ${C.g300}`, borderRadius: 5, background: '#fff', cursor: 'pointer', padding: '2px 8px', fontSize: 10, fontWeight: 700 }}>송금내역</button>
+                        style={{ border: `1px solid ${C.g300}`, borderRadius: 5, background: '#fff', cursor: 'pointer', padding: '2px 8px', fontSize: 10, fontWeight: 700, whiteSpace: 'nowrap' }}>송금내역</button>
                     </span>
                   ) : <span style={{ fontVariantNumeric: 'tabular-nums' }}>{won(it.costTotal)}원</span>}
                   {isHold && onUnhold && (
@@ -1020,10 +1022,10 @@ function WarningsModal({ warnings, busy, token, onUnhold, onClose }: { warnings:
 }
 
 // ── 공용 모달 ──
-function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void; }) {
+function Modal({ title, children, onClose, width = 560 }: { title: string; children: React.ReactNode; onClose: () => void; width?: number; }) {
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: C.bgCard, borderRadius: 12, boxShadow: '0 12px 40px rgba(0,0,0,0.2)', padding: 22, width: 560, maxWidth: '100%', maxHeight: '86vh', overflowY: 'auto' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.bgCard, borderRadius: 12, boxShadow: '0 12px 40px rgba(0,0,0,0.2)', padding: 22, width, maxWidth: '100%', maxHeight: '86vh', overflowY: 'auto' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
           <h3 style={{ margin: 0, ...TYPO.sectionTitle }}>{title}</h3>
           <button type="button" onClick={onClose} aria-label="닫기" style={{ border: 'none', background: 'none', fontSize: 20, cursor: 'pointer', color: C.textSecondary, lineHeight: 1 }}>×</button>
