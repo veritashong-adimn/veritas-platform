@@ -145,7 +145,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [expandedSearchResult, setExpandedSearchResult] = useState<number | null>(null);
   const [expandedQuotes, setExpandedQuotes] = useState<Record<number, boolean>>({});
   // 거래명세서 (판매 확정 건만 출력)
-  const [stmtData, setStmtData] = useState<{ data: ReturnType<typeof buildQuotePdfData>; title: string } | null>(null);
+  const [stmtData, setStmtData] = useState<{ data: ReturnType<typeof buildQuotePdfData>; title: string; quoteId: number } | null>(null);
   const [stmtLoading, setStmtLoading] = useState<number | null>(null);
   const [translatorSearch, setTranslatorSearch] = useState("");
   const [translatorSearchResults, setTranslatorSearchResults] = useState<any[]>([]);
@@ -273,7 +273,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
         onToast('견적 품목이 없습니다.');
         return;
       }
-      setStmtData({ data: buildQuotePdfData(qDetail), title });
+      setStmtData({ data: buildQuotePdfData(qDetail), title, quoteId });
     } catch {
       onToast('거래명세서 생성에 실패했습니다. 다시 시도해 주세요.');
     } finally {
@@ -2986,6 +2986,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       <TransactionStatementModal
         data={stmtData.data}
         quoteTitle={stmtData.title}
+        quoteId={stmtData.quoteId}
+        token={token}
         onClose={() => setStmtData(null)}
       />
     )}

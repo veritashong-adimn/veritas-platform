@@ -42,7 +42,8 @@ export function useDateAnchor(ref: React.RefObject<HTMLElement | null>, open: bo
       const el = ref.current;
       if (!el) return;
       const r = el.getBoundingClientRect();
-      const vw = window.innerWidth, vh = window.innerHeight;
+      const w = ref.current?.ownerDocument?.defaultView ?? window;   // 독립 미리보기 창 안에서도 그 창 기준
+      const vw = w.innerWidth, vh = w.innerHeight;
       // 세로: 아래 공간이 부족하고 위 공간이 넉넉하면 위로 flip.
       const below = r.bottom + gap;
       const top = (below + CAL_H > vh && r.top - gap - CAL_H > 0) ? (r.top - gap - CAL_H) : below;
@@ -51,11 +52,12 @@ export function useDateAnchor(ref: React.RefObject<HTMLElement | null>, open: bo
       setPos({ top, left, width: r.width });
     };
     compute();
-    window.addEventListener('scroll', compute, true);   // capture — 내부 스크롤 컨테이너 포함
-    window.addEventListener('resize', compute);
+    const ow = ref.current?.ownerDocument?.defaultView ?? window;
+    ow.addEventListener('scroll', compute, true);   // capture — 내부 스크롤 컨테이너 포함
+    ow.addEventListener('resize', compute);
     return () => {
-      window.removeEventListener('scroll', compute, true);
-      window.removeEventListener('resize', compute);
+      ow.removeEventListener('scroll', compute, true);
+      ow.removeEventListener('resize', compute);
     };
   }, [open, gap, ref]);
   return pos ?? { top: -9999, left: -9999, width: 0 };
@@ -249,11 +251,13 @@ export function DateField({
       if (ref.current?.contains(t) || popRef.current?.contains(t)) return;
       setOpen(false);
     };
-    document.addEventListener('keydown', onKey);
-    document.addEventListener('mousedown', onDown);
+    // 소유 문서 기준(메인 창이면 document 와 동일 · 독립 미리보기 창이면 그 창의 document)
+    const doc = ref.current?.ownerDocument ?? document;
+    doc.addEventListener('keydown', onKey);
+    doc.addEventListener('mousedown', onDown);
     return () => {
-      document.removeEventListener('keydown', onKey);
-      document.removeEventListener('mousedown', onDown);
+      doc.removeEventListener('keydown', onKey);
+      doc.removeEventListener('mousedown', onDown);
     };
   }, [open]);
 
@@ -300,7 +304,7 @@ export function DateField({
         >
           <MonthCalendar value={value} onSelect={pick} min={min} max={max} onClear={allowClear ? clear : undefined} autoFocus />
         </div>,
-        document.body,
+        (ref.current?.ownerDocument ?? document).body,   // 트리거가 있는 창의 body(독립 미리보기 창 대응)
       )}
     </div>
   );

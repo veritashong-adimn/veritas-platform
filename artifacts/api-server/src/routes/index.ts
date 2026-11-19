@@ -15,6 +15,7 @@ import companySealRouter from "./companySeal";
 import settlementsRouter from "./settlements";
 import performancesRouter from "./performances";
 import performanceRemittancesRouter from "./performanceRemittances";
+import transactionStatementsRouter from "./transactionStatements";
 import performanceImportRouter from "./performanceImport";
 import projectPaymentsRouter from "./projectPayments";
 import collectionsRouter from "./collections";
@@ -96,6 +97,7 @@ router.use(companySealRouter);
 router.use(settlementsRouter);
 router.use(performancesRouter);
 router.use(performanceRemittancesRouter);   // 해외 외주 송금내역(수행정보·지급회차 공용)
+router.use(transactionStatementsRouter);    // 거래명세서 거래일자(판매 상세·견적 상세 공용)
 router.use(performanceImportRouter);
 router.use(projectPaymentsRouter);
 router.use(collectionsRouter);

@@ -100,7 +100,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
   }, [project, loading]);   // 상단 버튼이 마운트된 뒤(로딩 완료·프로젝트 로드) 관찰 시작
 
   const [pdfData,  setPdfData]  = useState<{ data: ReturnType<typeof buildQuotePdfData>; title: string } | null>(null);
-  const [stmtData, setStmtData] = useState<{ data: ReturnType<typeof buildQuotePdfData>; title: string } | null>(null);
+  const [stmtData, setStmtData] = useState<{ data: ReturnType<typeof buildQuotePdfData>; title: string; quoteId: number } | null>(null);
   const [pdfLoading,  setPdfLoading]  = useState(false);
   const [stmtLoading, setStmtLoading] = useState(false);
   const [deleting,    setDeleting]    = useState(false);
@@ -285,7 +285,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
       if (!res.ok) { setToast(`거래명세서 생성 실패 (${res.status})`); return; }
       const detail = await res.json() as QuoteDetail;
       if (!detail.items || detail.items.length === 0) { setToast('견적 품목이 없습니다.'); return; }
-      setStmtData({ data: buildQuotePdfData(detail), title: quoteDocTitle });
+      setStmtData({ data: buildQuotePdfData(detail), title: quoteDocTitle, quoteId: quote.id });
     } catch {
       setToast('거래명세서 생성에 실패했습니다. 다시 시도해 주세요.');
     } finally {
@@ -585,7 +585,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
         <QuotePdfPreviewModal data={pdfData.data} quoteTitle={pdfData.title} onClose={() => setPdfData(null)} />
       )}
       {stmtData && (
-        <TransactionStatementModal data={stmtData.data} quoteTitle={stmtData.title} onClose={() => setStmtData(null)} />
+        <TransactionStatementModal data={stmtData.data} quoteTitle={stmtData.title} quoteId={stmtData.quoteId} token={token} onClose={() => setStmtData(null)} />
       )}
 
       {/* ── 우측 하단 플로팅 "목록으로"(§3·§4) — 상단 버튼이 뷰포트 밖일 때만. position:fixed(뷰포트 기준),
