@@ -354,32 +354,54 @@ export default function PerformanceSection({ projectId, token, performances, onC
     if (searchTimer.current) clearTimeout(searchTimer.current);
     setSearchIdx(i); setSearchResults([]); setSearchState('idle'); setPrefillQ('');
   };
-  const runSearch = (i: number, url: string) => {
+  // 검색 URL 1건 조회 → 배열(실패 시 throw → 조회 오류 표시)
+  const fetchList = async (url: string): Promise<any[]> => {
+    const res = await fetch(api(url), { headers: { Authorization: `Bearer ${token}` } });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || data == null) throw new Error('search failed');
+    return Array.isArray(data) ? data : (data.rows ?? []);
+  };
+  const runSearch = (i: number, load: string | (() => Promise<any[]>)) => {
     setSearchIdx(i);
     const seq = ++searchSeq.current;
     if (searchTimer.current) clearTimeout(searchTimer.current);
     setSearchState('loading');
     searchTimer.current = setTimeout(async () => {
       try {
-        const res = await fetch(api(url), { headers: { Authorization: `Bearer ${token}` } });
-        const data = await res.json().catch(() => null);
+        const arr = typeof load === 'string' ? await fetchList(load) : await load();
         if (seq !== searchSeq.current) return;
-        if (!res.ok || data == null) { setSearchResults([]); setSearchState('error'); return; }
-        const arr = Array.isArray(data) ? data : (data.rows ?? []);
         setSearchResults(arr.slice(0, 8)); setSearchState('done');
       } catch { if (seq === searchSeq.current) { setSearchResults([]); setSearchState('error'); } }
     }, 200);
   };
-  const onSearchTranslator = (i: number, s: string) => { if (!s.trim()) { clearSearch(i); return; } runSearch(i, `/api/admin/translators?view=picker&search=${encodeURIComponent(s.trim())}`); };
-  // 외주 역할(is_vendor=true) 회사 검색 — 고객+외주 겸업 회사도 포함(§3·§7). page 지정으로 서버 필터/검색 분기 사용.
-  const onSearchVendor = (i: number, s: string) => { if (!s.trim()) { clearSearch(i); return; } runSearch(i, `/api/admin/companies?role=vendor&page=1&pageSize=20&search=${encodeURIComponent(s.trim())}`); };
+  // 외주업체 Master 검색 URL — 외주 역할(is_vendor) 또는 외주업체 등록 회사. 결과에 _kind='vendor' 표식.
+  const vendorUrl = (s: string) => `/api/admin/companies?role=vendor&page=1&pageSize=20&search=${encodeURIComponent(s)}`;
+  const asVendor = (arr: any[]) => arr.map(x => ({ ...x, _kind: 'vendor' }));
+  // 통번역사 행 검색 = 외주업체 Master 우선 + 통번역사(외주업체와 동일 업체는 서버에서 제외, excludeVendorDup=1).
+  //   과거 CRM 은 외주업체도 통번역사 명부에 등록했으므로 같은 업체가 양쪽에 있으면 외주업체로만 표시한다.
+  const onSearchTranslator = (i: number, s: string) => {
+    const kw = s.trim();
+    if (!kw) { clearSearch(i); return; }
+    runSearch(i, async () => {
+      const [vendors, translators] = await Promise.all([
+        fetchList(vendorUrl(kw)),
+        fetchList(`/api/admin/translators?view=picker&excludeVendorDup=1&search=${encodeURIComponent(kw)}`),
+      ]);
+      return [...asVendor(vendors), ...translators];
+    });
+  };
+  const onSearchVendor = (i: number, s: string) => {
+    const kw = s.trim();
+    if (!kw) { clearSearch(i); return; }
+    runSearch(i, async () => asVendor(await fetchList(vendorUrl(kw))));
+  };
   // 조회모드 필터는 '배정된 행' 안에서만 찾는다. 0건이면 같은 검색어로 수정모드 새 통번역사 행에서 Master 검색을 시작한다.
   const searchMasterFromFilter = () => {
     const kw = q.trim();
     const base = list.map(toRow);
     setRows([...base, { performerCategory: 'individual', lineCategory: '통번역사', status: 'unassigned', paymentStatus: 'unpaid', quantity: 1, expenses: [], deductions: [], withholdingTreatment: DEFAULT_TREATMENT }]);
     setDeletedIds([]); setPinnedEtcCols([]); setEditMode(true); setQ('');
-    runSearch(base.length, `/api/admin/translators?view=picker&search=${encodeURIComponent(kw)}`);
+    onSearchTranslator(base.length, kw);   // 신규 행도 같은 검색 기준(외주업체 우선)
     setPrefillQ(kw);
   };
   const onClearPerformer = (i: number) => { patchRow(i, { performerNameSnapshot: null }); clearSearch(i); };
@@ -460,13 +482,24 @@ export default function PerformanceSection({ projectId, token, performances, onC
       }));
     } catch { /* 자동매칭 실패해도 로컬 선택은 유지 */ }
   };
+  const vendorLineCategory = (vt?: string | null) => {
+    const t = String(vt ?? '').toLowerCase();
+    if (/equip|장비/.test(t)) return '장비업체';
+    if (/dtp/.test(t)) return 'DTP업체';
+    if (/media|미디어/.test(t)) return '미디어업체';
+    if (/translat|번역/.test(t)) return '번역업체';
+    if (/interpret|통역/.test(t)) return '통역업체';
+    return '외주업체';
+  };
   const pickVendor = (i: number, c: any) => {
     const r = rows[i];
     // 업체 정보(상호·업체유형·사업자번호)는 검색결과에 포함(비PII) — 로컬 반영만. 저장 시 서버가 스냅샷 재도출.
     patchRow(i, {
       performerCategory: 'vendor', vendorCompanyId: c.id, individualUserId: null,
       performerNameSnapshot: c.name, vendorTypeSnapshot: c.vendorType ?? null,
-      identifierSnapshotMasked: c.businessNumber ?? null, lineCategory: r.lineCategory || '외주업체',
+      // 통번역사 행에서 외주업체를 고른 경우(변경 포함) 세부구분도 업체 기준으로 — 업체유형에서 도출, 미상이면 '외주업체'.
+      identifierSnapshotMasked: c.businessNumber ?? null,
+      lineCategory: r.performerCategory === 'vendor' && r.lineCategory ? r.lineCategory : vendorLineCategory(c.vendorType),
       residencyType: null, withholdingTreatment: 'tax_review_required',   // 외주업체 기본값: 세금계산서(기록용)
     });
     clearSearch(null);

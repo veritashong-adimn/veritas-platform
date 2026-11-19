@@ -47,3 +47,24 @@ export function normalizeCompanyName(raw: unknown): string {
   if (!s) s = original.toLowerCase().replace(/[\s.,·・'"“”‘’()\-_/\\|&]+/g, "");
   return s;
 }
+
+/**
+ * 외주업체 동일성 판정 키 집합 — 수행정보 검색에서 '통번역사 명부에도 남아 있는 외주업체'를 식별할 때 사용.
+ *  · 전체 정규화명 + 괄호 앞 본명 + 괄호 안 병기명(예: '코리아미디어(KOREA MEDIA)' → 코리아미디어koreamedia·코리아미디어·koreamedia).
+ *  · 정규화 키 '완전 일치'로만 비교한다(부분일치 금지 — '코리아미디어랩'과 '코리아미디어'는 다른 업체).
+ */
+export function vendorIdentityKeys(raw: unknown): string[] {
+  const original = (raw == null ? "" : String(raw)).trim();
+  if (!original) return [];
+  const keys = new Set<string>([normalizeCompanyName(original)]);
+  const m = original.match(/^(.*?)[(（]([^()（）]+)[)）]\s*$/);   // 끝의 병기 괄호 1개만 분리
+  if (m) {
+    const base = normalizeCompanyName(m[1]);
+    const inner = normalizeCompanyName(m[2]);   // '(주)' 등 법인표기 괄호는 1글자 이하로 남아 아래 길이 조건에서 제외
+    if (base.length >= 2) keys.add(base);
+    // 괄호 안은 영문 병기명일 때만 별도 키 — '(영업소)'·'(서울지사)' 같은 일반 단어가 다른 이름과 일치하지 않도록.
+    if (inner.length >= 2 && /[a-z]/.test(inner)) keys.add(inner);
+  }
+  keys.delete("");
+  return [...keys];
+}

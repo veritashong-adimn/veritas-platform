@@ -69,6 +69,9 @@ function listBox(rect: { left: number; top: number; width: number; inputTop: num
   return { left, bottom: vh - rect.inputTop + GAP, width, maxHeight: Math.min(MAX_H, above) };
 }
 
+// 통합 검색 결과 중 외주업체 Master 항목 판별(PerformanceSection 이 _kind='vendor' 표식)
+const isVendorHit = (x: any) => x?._kind === 'vendor';
+
 export default function InlinePerformerPicker(props: Props) {
   const { r, i, searchIdx, searchResults, searchState = 'idle', initialQuery, onSearchTranslator, onSearchVendor, onPickTranslator, onPickVendor, onClear, onCancelChange, patch, fetchRecentPerformances, fetchTranslatorContact } = props;
   const inputRef = useRef<HTMLInputElement>(null);
@@ -95,7 +98,7 @@ export default function InlinePerformerPicker(props: Props) {
     if (pendingEnter.current == null || cat === 'vendor' || searchIdx !== i) return;
     if (searchState === 'loading' || searchState === 'idle') return;   // 응답 대기
     pendingEnter.current = null;
-    if (searchState === 'done' && searchResults.length === 1) openPreview(searchResults[0]);
+    if (searchState === 'done' && searchResults.length === 1 && !isVendorHit(searchResults[0])) openPreview(searchResults[0]);
   }, [searchState, searchResults, searchIdx, i, cat]);
 
   // 변경 시작 — 원본을 아직 안 잡았을 때만 캡처(연속 재선택 시 최초 원본 보존) 후 검색모드 진입.
@@ -150,7 +153,8 @@ export default function InlinePerformerPicker(props: Props) {
   const placeholder = isVendor ? `${r.lineCategory || '외주업체'} 검색` : '통번역사 검색';
   const onSearch = (q: string) => (isVendor ? onSearchVendor(i, q) : onSearchTranslator(i, q));
   // 클릭 동작(§2) — 업체는 기존대로 즉시 선택, 통번역사는 상세 미리보기를 먼저 띄운다(선택은 미리보기 하단 버튼에서).
-  const onRowClick = (x: any) => (isVendor ? onPickVendor(i, x) : openPreview(x));
+  // 통번역사 행에서도 외주업체 결과(_kind='vendor')는 업체로 즉시 선택 → 수행자 유형·연결ID 를 외주업체 Master 기준으로 저장.
+  const onRowClick = (x: any) => (isVendor || isVendorHit(x) ? onPickVendor(i, x) : openPreview(x));
   const confirmPreview = () => { if (previewTarget) onPickTranslator(i, previewTarget); setPreviewTarget(null); };
   const noopRecent = async () => [] as RecentPerformance[];
   // 입력 중에는 미리보기를 자동으로 열지 않는다 — Enter 이후 검색어가 바뀌면 대기 중인 Enter 처리 취소.
@@ -168,7 +172,7 @@ export default function InlinePerformerPicker(props: Props) {
     pendingEnter.current = q;                      // 한글 조합 중 Enter(중복 keydown)도 같은 값으로 1회 처리
     if (searchIdx === i && searchState === 'done') {
       pendingEnter.current = null;
-      if (searchResults.length === 1) openPreview(searchResults[0]);   // 같은 대상이면 상태만 동일 → 팝업 중복 없음
+      if (searchResults.length === 1 && !isVendorHit(searchResults[0])) openPreview(searchResults[0]);   // 같은 대상이면 상태만 동일 → 팝업 중복 없음
     } else if (searchIdx !== i || searchState === 'idle' || searchState === 'error') {
       onSearch(q);                                 // 검색 결과가 없거나 다른 행 결과면 재검색 → 응답 도착 시 위 effect 가 처리
     }
@@ -189,14 +193,15 @@ export default function InlinePerformerPicker(props: Props) {
             <div role="status" data-testid={`perf-search-empty-${i}`} aria-label={emptyMsg}
               style={{ padding: '8px 10px', fontSize: 12, color: searchState === 'error' ? C.danger : C.textMuted }}>{emptyMsg}</div>
           )}
-          {searchResults.map((x: any) => (
-            <button key={x.id} type="button" onMouseDown={e => { e.preventDefault(); onRowClick(x); }}
-              data-testid={`perf-search-result-${i}-${x.id}`} aria-label={`${x.name || x.email || ''} 상세 보기`}
-              style={{ display: 'block', width: '100%', textAlign: 'left', padding: isVendor ? '7px 10px' : '9px 12px', border: 'none', borderBottom: `1px solid ${isVendor ? C.g100 : C.g200}`, background: previewTarget?.id === x.id ? C.primaryBg : 'transparent', cursor: 'pointer' }}>
-              <div style={{ fontWeight: isVendor ? 600 : 700, fontSize: 13 }}>{x.name || x.email}
-                {!isVendor && x.isActive === false && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: C.textSecondary, border: `1px solid ${C.g300}`, borderRadius: 999, padding: '0 6px' }}>비활성</span>}
+          {searchResults.map((x: any) => { const xv = isVendor || isVendorHit(x); return (
+            <button key={`${xv ? 'v' : 't'}-${x.id}`} type="button" onMouseDown={e => { e.preventDefault(); onRowClick(x); }}
+              data-testid={`perf-search-result-${i}-${xv ? 'vendor-' : ''}${x.id}`} aria-label={xv ? `${x.name || ''} 외주업체 선택` : `${x.name || x.email || ''} 상세 보기`}
+              style={{ display: 'block', width: '100%', textAlign: 'left', padding: xv ? '7px 10px' : '9px 12px', border: 'none', borderBottom: `1px solid ${xv ? C.g100 : C.g200}`, background: !xv && previewTarget?.id === x.id ? C.primaryBg : 'transparent', cursor: 'pointer' }}>
+              <div style={{ fontWeight: xv ? 600 : 700, fontSize: 13 }}>{x.name || x.email}
+                {xv && <span data-testid={`perf-search-vendor-badge-${i}-${x.id}`} style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: C.primary, border: `1px solid ${C.primary}`, borderRadius: 999, padding: '0 6px' }}>외주업체</span>}
+                {!xv && x.isActive === false && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: C.textSecondary, border: `1px solid ${C.g300}`, borderRadius: 999, padding: '0 6px' }}>비활성</span>}
               </div>
-              {isVendor
+              {xv
                 ? <div style={{ ...TYPO.helper, whiteSpace: 'normal', lineHeight: 1.4 }}>
                     {`${VENDOR_TYPE_LABEL[x.vendorType] ?? x.vendorType ?? '외주'}${x.businessNumber ? ` · ${x.businessNumber}` : ''}${x.representativeName ? ` · ${x.representativeName}` : ''}`}
                   </div>
@@ -209,7 +214,7 @@ export default function InlinePerformerPicker(props: Props) {
                     ))}
                   </div>}
             </button>
-          ))}
+          ); })}
         </div>,
         document.body,
       )}

@@ -7,11 +7,11 @@ import {
   db, usersTable, translatorProfilesTable, translatorRatesTable,
   translatorProductsTable, productsTable, translatorSensitiveTable,
   tasksTable, settlementsTable, logsTable, translatorEmailsTable,
-  notesTable, invitationsTable, companiesTable, translatorAliasesTable,
+  notesTable, invitationsTable, companiesTable, translatorAliasesTable, companyAliasesTable,
   performanceAssignmentsTable, legacyMasterMappingsTable, importRowSourcesTable,
 } from "@workspace/db";
 import { eq, and, ilike, ne, or, sql, desc, gte, lte, inArray, isNotNull, isNull } from "drizzle-orm";
-import { normalizeCompanyName } from "../lib/normalizeCompany";
+import { normalizeCompanyName, vendorIdentityKeys } from "../lib/normalizeCompany";
 import { buildTranslatorAliasValues, ensureDefaultTranslatorAlias } from "../lib/translatorAlias";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
 import { getPermissionsForRole } from "../lib/rbac";
@@ -663,6 +663,24 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
       const contactVisible = !roleId || (await getPermissionsForRole(roleId)).has("project.update");
       result = result.filter(r => isPickerEligible(r, trashIds))
         .map(r => ({ ...r, region: toDisplayRegion(r.region), phone: contactVisible ? (r.phone?.trim() || null) : maskPhoneLast4(r.phone), contactVisible }));
+      // excludeVendorDup=1(수행정보 통합 검색): 외주업체 Master 에도 등록된 업체는 통번역사 결과에서 제외 → 외주업체로만 표시.
+      //   과거 CRM 은 외주업체도 통번역사 명부에 등록했으므로, 같은 업체가 양쪽에 있으면 외주업체 Master 를 우선한다.
+      //   동일 판정: (a) 기존 Master 연결(users.company_id → 외주업체) 또는 (b) 업체명·별칭 정규화 키 완전 일치. 데이터는 변경하지 않음.
+      if ((req.query as { excludeVendorDup?: string }).excludeVendorDup === "1" && result.length) {
+        const vendors = await db.select({ id: companiesTable.id, name: companiesTable.name }).from(companiesTable)
+          .where(and(isNull(companiesTable.deletedAt), or(eq(companiesTable.isVendor, true), eq(companiesTable.companyType, "vendor"))));
+        const vendorIds = new Set(vendors.map(v => v.id));
+        const keys = new Set(vendors.flatMap(v => vendorIdentityKeys(v.name)));
+        if (vendorIds.size) {
+          const aliases = await db.select({ name: companyAliasesTable.aliasName }).from(companyAliasesTable)
+            .where(inArray(companyAliasesTable.companyId, [...vendorIds]));
+          for (const a of aliases) for (const k of vendorIdentityKeys(a.name)) keys.add(k);
+        }
+        const links = await db.select({ id: usersTable.id, companyId: usersTable.companyId }).from(usersTable)
+          .where(inArray(usersTable.id, result.map(r => r.id)));
+        const linkedToVendor = new Set(links.filter(l => l.companyId != null && vendorIds.has(l.companyId)).map(l => l.id));
+        result = result.filter(r => !linkedToVendor.has(r.id) && !keys.has(normalizeCompanyName(r.name)));
+      }
     }
 
     if (paginate) {
