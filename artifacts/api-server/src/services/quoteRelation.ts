@@ -76,6 +76,16 @@ export function resolveChainCurrent(family: any[]): { current: any | null; resto
   return { current: cand, restored: cand != null };
 }
 
+// ── 대체된 대기 변경견적(과거본) 판정 ──────────────────────────────────────────────
+// 판매취소는 판매건에 연결된 approved 견적을 모두 pending 으로 되돌린다. 이때 이미 다른 변경견적으로 대체된 과거 변경견적(예: R3 가
+//  현재유효인데 R1)도 pending 이 되어 '승인대기'처럼 보이고, '미확정 변경견적 존재'로 집계되어 다음 변경견적 생성을 막았다.
+//  → 현재유효 견적보다 낮은 버전의 대기 변경견적은 '과거본'으로 본다(DB 값은 그대로 — 판정만). 승인·거절·생성 기준 대상 아님.
+export function isSupersededPendingRevision(q: any, family: any[]): boolean {
+  if (q?.relationType !== "revision" || q?.status !== "pending") return false;
+  const { current } = resolveChainCurrent(family);
+  return !!current && current.id !== q.id && Number(current.version) > Number(q.version);
+}
+
 // 체인에 유효본이 없으면 후보를 유효본으로 되돌린다(변경견적 거절·삭제 트랜잭션 내부에서 호출).
 //  is_current 플래그만 변경 — 상태·금액·번호·프로젝트는 건드리지 않는다. 복구된 견적 id(없으면 null) 반환.
 export async function restoreChainCurrentIfVacant(tx: Db, rootId: number): Promise<number | null> {

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { chainStatusMap, QUOTE_CHAIN_STATUS_LABEL, QUOTE_CHAIN_STATUS_COLOR, QUOTE_CHAIN_STATUS_TITLE, type QuoteChainStatus } from '../../lib/quoteChainStatus';
 import { api } from '../../lib/constants';
 import { ClickSelect } from '../ui';
 import { QuoteEditorWorkspace, type QuoteItemForm, type QuoteType } from './QuoteEditorWorkspace';
@@ -301,6 +302,14 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
     arr.sort((a, b) => (REL_ORDER[a.relationType ?? ''] ?? 9) - (REL_ORDER[b.relationType ?? ''] ?? 9) || a.version - b.version || a.id - b.id);
   }
   const roots = quotes.filter(q => q.relationType == null);  // 원견적만 최상위. 정렬은 서버 desc(id) 유지.
+  // 리비전 체인 표시 상태(현재유효/승인대기/과거본/거절) — 변경견적이 있는 family 에만 적용(상세·이력 화면과 같은 판정 함수).
+  //  변경견적이 없는 단독 견적은 기존 상태(대기/판매/거절) 표시를 유지한다.
+  const chainStatusById = new Map<number, QuoteChainStatus>();
+  for (const root of roots) {
+    const kids = childrenByRoot.get(root.id) ?? [];
+    if (!kids.some(k => k.relationType === 'revision')) continue;
+    for (const [id, st] of chainStatusMap([root, ...kids])) chainStatusById.set(id, st);
+  }
 
   const filtersActive = !!(search || statusFilter !== 'all' || typeFilter !== 'all');
   // 표시 대상 root: 부모가 매칭되거나 자식 중 매칭이 있으면 표시. 자식 매칭이 있으면 자동 펼침(§11/§12).
@@ -451,6 +460,9 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
     // 스크롤 패딩을 상쇄하므로, 여기서 별도의 음수 margin wrapper가 필요 없다.
     return (
       <QuoteEditorWorkspace
+        // 견적 전환(변경견적 생성 후 이동 · 원견적/현재유효 링크) 시 편집기를 새로 마운트한다.
+        //  편집기 내부 상태는 useState(initialQuoteId …)로 최초 1회만 초기화되므로, key 없이 id 만 바꾸면 이전 견적 화면이 그대로 남는다.
+        key={editQuoteId ?? 'new'}
         asPage
         token={token}
         projectId={null}
@@ -762,11 +774,8 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                           {relBadge && (
                             <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4, background: relBadge.bg, color: relBadge.color }}>{relBadge.label}</span>
                           )}
-                          {/* 현재 유효견적 배지(§8) — family에 관계견적이 있을 때만 표시(과잉 방지) */}
-                          {(hasKids || depth === 1) && q.isCurrent && (
-                            <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4, background: '#dcfce7', color: '#15803d' }}>현재유효</span>
-                          )}
-                          {depth === 1 && (q.relationType === 'revision' || q.relationType === 'derived') && q.status === 'pending' && (
+                          {/* 리비전 체인(원견적·변경견적) 상태는 '상태' 열에서 공통 기준으로 표시. 분할견적 승인대기 배지만 유지. */}
+                          {depth === 1 && q.relationType === 'derived' && q.status === 'pending' && (
                             <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4, background: '#fef9c3', color: '#854d0e' }}>승인대기</span>
                           )}
                         </div>
@@ -827,7 +836,22 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                       </td>
                       {/* 상태 — 가운데 정렬. 분할견적(derived)이 승인되면 '판매'가 아니라 '분할확정'으로 표시(표시만, DB status 불변). */}
                       <td style={{ padding: '6px 10px', textAlign: 'center' }}>
-                        {q.relationType === 'derived' && q.status === 'approved' ? (
+                        {chainStatusById.has(q.id) ? (() => {
+                          const cs = chainStatusById.get(q.id)!;
+                          const cc = QUOTE_CHAIN_STATUS_COLOR[cs];
+                          return (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+                              <span data-testid={`quote-chain-status-${q.id}`} data-chain-status={cs} title={QUOTE_CHAIN_STATUS_TITLE[cs]}
+                                style={{ fontSize: 11, padding: '2px 8px', borderRadius: 5, fontWeight: 700, background: cc.bg, color: cc.color }}>
+                                {QUOTE_CHAIN_STATUS_LABEL[cs]}
+                              </span>
+                              {/* 현재유효 견적이 판매전환된 상태면 판매 여부를 보조 표시(현재유효 판정과는 무관) */}
+                              {cs === 'current' && q.status === 'approved' && (
+                                <span style={{ fontSize: 10, color: '#15803d', fontWeight: 600 }} title="판매전환된 현재유효 견적">판매</span>
+                              )}
+                            </span>
+                          );
+                        })() : q.relationType === 'derived' && q.status === 'approved' ? (
                           <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 5, fontWeight: 700, background: '#fef3c7', color: '#92400e' }}>분할확정</span>
                         ) : (
                           <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 5, fontWeight: 700, background: sColor.bg, color: sColor.color }}>

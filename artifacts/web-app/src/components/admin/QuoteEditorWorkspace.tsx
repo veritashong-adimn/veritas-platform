@@ -7,6 +7,7 @@
  * Version Engine 및 저장 로직 100% 유지.
  */
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react';
+import { chainStatusMap, QUOTE_CHAIN_STATUS_LABEL, QUOTE_CHAIN_STATUS_COLOR, QUOTE_CHAIN_STATUS_TITLE } from '../../lib/quoteChainStatus';
 import { formatWon } from "@/lib/utils";
 import { api, Product, UNITS_BY_PRODUCT_TYPE } from '../../lib/constants';
 import { QuickProductCreateModal } from './QuickProductCreateModal';
@@ -2638,7 +2639,11 @@ export function QuoteEditorWorkspace({
   convertedRef.current = converted;
   const rootMember     = family.find(m => m.relationType == null) ?? null;   // 원견적
   const currentMember  = family.find(m => m.isCurrent) ?? null;              // 현재 유효본
-  const isPendingRevision = isRevision && meMember?.status === 'pending';
+  // 리비전 체인 표시 상태(목록·이력과 같은 판정). 변경견적이 있는 family 에만 적용.
+  const familyHasRevision = family.some(m => m.relationType === 'revision');
+  const chainMap = familyHasRevision ? chainStatusMap(family) : new Map<number, string>();
+  // 승인대기 = 대기 변경견적 중 과거본(판매취소로 대기 복귀한 대체본)이 아닌 것만 — 승인/거절 버튼 대상.
+  const isPendingRevision = isRevision && meMember?.status === 'pending' && chainMap.get(meMember.id) !== 'superseded';
   // 파생견적(STEP3) — is_current 는 항상 false. 과거견적(isSuperseded)로 오분류되지 않도록 별도 처리.
   const isDerived      = meMember?.relationType === 'derived';
   isDerivedRef.current = isDerived;
@@ -2647,9 +2652,15 @@ export function QuoteEditorWorkspace({
     ? (family.find(m => m.id === meMember.parentVersionId) ?? null) : null;   // 기준견적(§26)
   const isSuperseded   = meMember != null && meMember.isCurrent === false && !isPendingRevision && !isDerived;
   const hasRevisionChildren = family.some(m => m.relationType === 'revision');
-  // 변경견적 생성 가능: 저장된 b2b 일반견적 + 현재 유효본 + 미확정 변경견적 없음 (파생 자신 제외)
-  const canCreateRevision = quoteType === 'b2b_standard' && savedQuoteId != null && !isDerived && (meMember?.isCurrent ?? true)
-    && !family.some(m => m.relationType === 'revision' && m.status === 'pending');
+  // 변경견적 생성 버튼 노출: 저장된 b2b 일반견적 + 리비전 체인(원견적/변경)의 현재 유효본.
+  //  family 미조회(로딩·실패) 상태에서는 노출하지 않는다 — 과거본(원견적)에서 생성되어 R 순서/내용이 어긋나는 것 방지.
+  //  승인대기(미확정) 변경견적 자체는 현재 유효견적이 아니다(판매취소로 대기 복귀한 경우 포함).
+  const isChainMember = meMember != null && (meMember.relationType == null || meMember.relationType === 'revision');
+  const canShowCreateRevision = quoteType === 'b2b_standard' && savedQuoteId != null && !isDerived
+    && isChainMember && meMember?.isCurrent === true && !isPendingRevision;
+  // 생성 가능: 위 조건 + 미확정 변경견적 없음(한 번에 1건만 승인대기 — 승인/거절 후 다음 R 생성). 횟수 제한은 없음.
+  const pendingRevisionMember = family.find(m => m.relationType === 'revision' && m.status === 'pending' && chainMap.get(m.id) === 'pending_revision') ?? null;
+  const canCreateRevision = canShowCreateRevision && pendingRevisionMember == null;
   // 파생견적 생성 가능: b2b 일반견적 + 현재유효 견적(원견적/변경 현재본)에서만(§5/§37/§38). 파생 자신에서는 불가.
   const canCreateDerived = quoteType === 'b2b_standard' && savedQuoteId != null && !isDerived && (meMember?.isCurrent ?? true);
 
@@ -3163,6 +3174,43 @@ export function QuoteEditorWorkspace({
     </span>
   );
   const showDerivedSummary = !isDerived && (allocation?.derivedCount ?? 0) > 0;
+  // 리비전 체인 표시 상태 — 견적서 목록·관련 견적 이력과 같은 판정 함수(quoteChainStatus) 사용. 변경견적이 있는 family 에만 적용.
+  const meChain = savedQuoteId != null ? chainMap.get(savedQuoteId) ?? null : null;
+  const chainChip = meChain ? (
+    <span data-testid="quote-chain-status" data-chain-status={meChain} title={QUOTE_CHAIN_STATUS_TITLE[meChain as keyof typeof QUOTE_CHAIN_STATUS_TITLE]}
+      style={{ ...relBadge, background: QUOTE_CHAIN_STATUS_COLOR[meChain as keyof typeof QUOTE_CHAIN_STATUS_COLOR].bg, color: QUOTE_CHAIN_STATUS_COLOR[meChain as keyof typeof QUOTE_CHAIN_STATUS_COLOR].color }}>
+      {QUOTE_CHAIN_STATUS_LABEL[meChain as keyof typeof QUOTE_CHAIN_STATUS_LABEL]}
+      {meChain === 'current' && meMember?.status === 'approved' ? ' · 판매' : ''}
+    </span>
+  ) : null;
+  // 관련 견적 이력(원견적 → R1 → R2 …) — 각 견적의 표시 상태를 함께 보여주고 클릭 시 해당 견적으로 이동.
+  const chainMembers = familyHasRevision ? family.filter(m => m.relationType == null || m.relationType === 'revision') : [];
+  // 관련 견적 이력(원견적 → R1 → R2 …) — 목록과 같은 상태명. 헤더(52px 한 줄) 아래 별도 줄로 표시해 Action 버튼 레이아웃을 깨지 않는다.
+  //  현재 화면의 견적은 테두리·굵게, 다른 견적은 클릭해 이동.
+  const chainHistoryBar = chainMembers.length > 1 ? (
+    <div style={{ display: 'flex', marginBottom: 14 }}>
+        <span data-testid="quote-chain-history" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', fontSize: 12, color: '#6b7280' }}>
+          관련 견적:
+          {chainMembers.map((m, i) => {
+            const st = chainMap.get(m.id) as keyof typeof QUOTE_CHAIN_STATUS_LABEL | undefined;
+            const isMe = m.id === savedQuoteId;
+            const label = m.relationType === 'revision' ? derivedSuffix(m.quoteNumber) : '원견적';
+            return (
+              <span key={m.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                {i > 0 && <span style={{ color: '#d1d5db' }}>→</span>}
+                <button type="button" data-testid={`chain-history-${m.id}`} data-chain-status={st ?? ''} disabled={isMe || !onOpenQuote}
+                  onClick={() => !isMe && onOpenQuote?.(m.id)} aria-label={`${m.quoteNumber ?? label} ${st ? QUOTE_CHAIN_STATUS_LABEL[st] : ''} 견적으로 이동`}
+                  title={m.quoteNumber ?? ''}
+                  style={{ border: isMe ? '1px solid #94a3b8' : '1px solid transparent', borderRadius: 5, background: st ? QUOTE_CHAIN_STATUS_COLOR[st].bg : '#f3f4f6',
+                    color: st ? QUOTE_CHAIN_STATUS_COLOR[st].color : '#6b7280', fontSize: 11, fontWeight: isMe ? 800 : 600, padding: '1px 6px', cursor: isMe ? 'default' : 'pointer' }}>
+                  {label} {st ? QUOTE_CHAIN_STATUS_LABEL[st] : ''}
+                </button>
+              </span>
+            );
+          })}
+        </span>
+    </div>
+  ) : null;
   const headerSubtitle: React.ReactNode = (isRevision || isDerived || isSuperseded || hasRevisionChildren || showDerivedSummary) ? (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
       {isRevision && (
@@ -3176,7 +3224,7 @@ export function QuoteEditorWorkspace({
               원견적: {rootMember.quoteNumber}
             </button>
           )}
-          {meMember?.status && statusChip(meMember.status)}
+          {chainChip ?? (meMember?.status && statusChip(meMember.status))}
         </>
       )}
       {isDerived && (
@@ -3199,20 +3247,16 @@ export function QuoteEditorWorkspace({
           {meMember?.status && statusChip(meMember.status)}
         </>
       )}
-      {isSuperseded && (
-        <span data-testid="badge-superseded" style={{ ...relBadge, background: '#f3f4f6', color: '#6b7280' }}>
-          🗂 과거 견적
+      {/* 원견적(변경견적 아님)의 체인 상태: 현재유효 / 과거본 / 거절 */}
+      {!isRevision && !isDerived && chainChip}
+      {isSuperseded && meChain !== 'rejected' && (
+        <span data-testid="badge-superseded" style={{ ...relBadge, background: 'transparent', color: '#6b7280', padding: '4px 0' }}>
           {currentMember?.quoteNumber && currentMember.id !== savedQuoteId && (
             <button type="button" onClick={() => currentMember && onOpenQuote?.(currentMember.id)}
-              title="현재 유효견적으로 이동" style={relLinkBtn('#2563eb')}>
-              현재 유효견적: {currentMember.quoteNumber}
+              title={currentMember.relationType === 'revision' && currentMember.status === 'pending' ? '승인대기 변경견적으로 이동' : '현재 유효견적으로 이동'} style={relLinkBtn('#2563eb')}>
+              {currentMember.relationType === 'revision' && currentMember.status === 'pending' ? '승인대기 변경견적' : '현재 유효견적'}: {currentMember.quoteNumber}
             </button>
           )}
-        </span>
-      )}
-      {!isRevision && !isDerived && !isSuperseded && hasRevisionChildren && (
-        <span data-testid="badge-has-revision" style={{ ...relBadge, background: '#fef9c3', color: '#854d0e', fontWeight: 600 }}>
-          🔁 변경견적 존재
         </span>
       )}
       {/* 파생 배분현황(§28) — 현재유효 견적에서만, 파생이 1건 이상일 때 간단 표시(과도 확장 금지) */}
@@ -3342,12 +3386,17 @@ export function QuoteEditorWorkspace({
       {/* 관계/신분 배지(변경견적·원견적·과거견적)는 Action 영역에서 제거하고 제목 옆 신분정보(headerSubtitle)로 이동(§3~§5) */}
 
       {/* 견적 작업: 변경견적 생성 — 일반견적(b2b) 유효본에서만. 원견적은 보존됨. */}
-      {canCreateRevision && (
-        <button type="button" onClick={() => { if (hasUnsavedChanges()) { onToast('저장 후 변경견적을 생성할 수 있습니다.'); return; } setShowRevisionModal(true); }} disabled={revBusy}
-          data-testid="btn-create-revision" aria-label="변경견적 생성"
-          title="현재 견적을 기준으로 변경견적을 생성합니다(원견적 보존)."
-          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 700, border: `1px solid ${C.primary}`,
-            background: '#fff', color: C.primary, cursor: revBusy ? 'not-allowed' : 'pointer', opacity: revBusy ? 0.6 : 1 }}>
+      {canShowCreateRevision && (
+        <button type="button" onClick={() => {
+            if (pendingRevisionMember) { onToast(`승인대기 변경견적 ${pendingRevisionMember.quoteNumber ?? ''}을(를) 먼저 승인 또는 거절해 주세요.`); return; }
+            if (hasUnsavedChanges()) { onToast('저장 후 변경견적을 생성할 수 있습니다.'); return; }
+            setShowRevisionModal(true);
+          }} disabled={revBusy}
+          data-testid="btn-create-revision" aria-label="변경견적 생성" aria-disabled={!canCreateRevision}
+          title={canCreateRevision ? '현재 유효견적을 기준으로 다음 변경견적을 생성합니다(기존 견적·판매 보존).'
+            : `승인대기 변경견적 ${pendingRevisionMember?.quoteNumber ?? ''}을(를) 먼저 승인 또는 거절해야 다음 변경견적을 생성할 수 있습니다.`}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 700, border: `1px solid ${canCreateRevision ? C.primary : '#d1d5db'}`,
+            background: '#fff', color: canCreateRevision ? C.primary : '#9ca3af', cursor: revBusy ? 'not-allowed' : 'pointer', opacity: revBusy ? 0.6 : 1 }}>
           🔀 변경견적 생성
         </button>
       )}
@@ -3518,7 +3567,7 @@ export function QuoteEditorWorkspace({
             style={{ background: '#fff', borderRadius: 14, padding: '26px 30px', width: 480, maxWidth: '92vw', boxShadow: '0 20px 60px rgba(0,0,0,0.25)' }}>
             <h2 style={{ margin: '0 0 10px', fontSize: 18, fontWeight: 800, color: C.textPrimary }}>변경견적을 생성하시겠습니까?</h2>
             <p style={{ margin: '0 0 16px', fontSize: 13, color: '#374151', lineHeight: 1.6 }}>
-              현재 견적을 기준으로 변경견적을 생성합니다. <b>원견적은 그대로 보존</b>되며, 변경견적이 승인되기 전까지는 기존 견적이 계속 유효합니다.
+              현재 유효견적{meMember?.quoteNumber ? ` ${meMember.quoteNumber}` : ''}을(를) 기준으로 다음 변경견적을 생성합니다. <b>기존 견적·판매는 변경되지 않으며</b>, 변경견적이 승인되기 전까지는 현재 견적이 계속 유효합니다.
             </p>
             <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#6b7280', marginBottom: 6 }}>변경 사유 (선택)</label>
             <textarea value={revisionReason} onChange={e => setRevisionReason(e.target.value)} data-testid="input-revision-reason"
@@ -3700,6 +3749,7 @@ export function QuoteEditorWorkspace({
 
         {/* 카드 컨텐츠 — 좌우 여백은 스크롤 컨테이너 패딩이 제공(가로 0) */}
         <div style={{ padding: '24px 0 64px' }}>
+          {chainHistoryBar}
           {formContent}
         </div>
       </div>
@@ -3725,6 +3775,7 @@ export function QuoteEditorWorkspace({
       {wsHeader(C.bgCard, BD.card, BD.shadow.card, '24px')}
       <div style={{ flex: 1, overflowY: 'auto', padding: '24px 24px 64px' }}>
         <div style={{ maxWidth: 1200, margin: '0 auto' }}>
+          {chainHistoryBar}
           {formContent}
         </div>
       </div>

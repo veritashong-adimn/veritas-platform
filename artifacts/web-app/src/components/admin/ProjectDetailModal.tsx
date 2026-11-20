@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { chainStatusMap, QUOTE_CHAIN_STATUS_LABEL, QUOTE_CHAIN_STATUS_COLOR, QUOTE_CHAIN_STATUS_TITLE } from '../../lib/quoteChainStatus';
 import './readTableView.css';
 import { api, ProjectDetail, MatchCandidate, getActionLabel, COMM_TYPE_LABEL, COMM_TYPE_COLOR, STATUS_LABEL, PROJECT_STATUS_TRANSITIONS, ALL_FINANCIAL_STATUSES, FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE, AdminUser, BOARD_CATEGORY_LABEL, Product } from '../../lib/constants';
 import { StatusBadge, PrimaryBtn, GhostBtn, ClickSelect, NumericInput, confirmDialog } from '../ui';
@@ -2162,9 +2163,12 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                     versionReason: string | null; price: string;
                     status: string; quoteNumber: string | null;
                     quoteType: string | null; createdAt: string;
+                    relationType?: string | null; deletedAt?: string | null;
                   }> | undefined;
                   if (!versions || versions.length <= 1) return null;
                   const statusLabel: Record<string, string> = { pending: "대기", sent: "발송", approved: "승인", rejected: "반려" };
+                  // 변경견적이 있으면 견적서 목록·상세와 같은 기준(현재유효/승인대기/과거본/거절)으로 표시 — 표시 전용
+                  const vChain = versions.some(v => v.relationType === "revision") ? chainStatusMap(versions) : new Map();
                   return (
                     <div style={{ marginTop: 18, marginBottom: 4 }}>
                       <p style={{ margin: "0 0 10px", fontSize: 12, fontWeight: 700, color: "#374151", borderLeft: "3px solid #d1d5db", paddingLeft: 8 }}>
@@ -2192,12 +2196,25 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                 <span style={{ fontSize: 12, fontWeight: 600, color: v.isCurrent ? "#111827" : "#6b7280" }}>
                                   {v.versionReason || "—"}
                                 </span>
-                                {v.isCurrent && (
-                                  <span style={{ fontSize: 10, fontWeight: 700, background: "#7c3aed", color: "#fff", borderRadius: 4, padding: "1px 5px" }}>현재</span>
-                                )}
-                                <span style={{ fontSize: 10, color: "#9ca3af" }}>
-                                  {statusLabel[v.status] ?? v.status}
-                                </span>
+                                {(() => {
+                                  const cs = vChain.get(v.id) as keyof typeof QUOTE_CHAIN_STATUS_LABEL | undefined;
+                                  if (cs) return (
+                                    <span data-testid={`version-chain-status-${v.id}`} data-chain-status={cs} title={QUOTE_CHAIN_STATUS_TITLE[cs]}
+                                      style={{ fontSize: 10, fontWeight: 700, background: QUOTE_CHAIN_STATUS_COLOR[cs].bg, color: QUOTE_CHAIN_STATUS_COLOR[cs].color, borderRadius: 4, padding: "1px 5px" }}>
+                                      {QUOTE_CHAIN_STATUS_LABEL[cs]}
+                                    </span>
+                                  );
+                                  return (
+                                    <>
+                                      {v.isCurrent && (
+                                        <span style={{ fontSize: 10, fontWeight: 700, background: "#7c3aed", color: "#fff", borderRadius: 4, padding: "1px 5px" }}>현재</span>
+                                      )}
+                                      <span style={{ fontSize: 10, color: "#9ca3af" }}>
+                                        {statusLabel[v.status] ?? v.status}
+                                      </span>
+                                    </>
+                                  );
+                                })()}
                               </div>
                               <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>
                                 {Number(v.price).toLocaleString("ko-KR")}원

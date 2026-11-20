@@ -9,7 +9,8 @@ import { and, eq, sql } from "drizzle-orm";
 import {
   quotesTable, quoteItemsTable, projectsTable, projectPaymentsTable, paymentsTable,
 } from "@workspace/db";
-import { generateRelationQuoteNumber, isRelationEngineQuoteType, restoreChainCurrentIfVacant } from "./quoteRelation";
+import { generateRelationQuoteNumber, isRelationEngineQuoteType, restoreChainCurrentIfVacant, getQuoteFamily, resolveChainCurrent, isSupersededPendingRevision } from "./quoteRelation";
+import { todayKst } from "../lib/legacyPayoutRule";
 import { approvedDerivedSum } from "./quoteDerived";
 import { remapClonedParentLinks } from "./quoteItemGroup";
 
@@ -30,11 +31,24 @@ export async function createRevision(
   await tx.select({ id: quotesTable.id }).from(quotesTable).where(eq(quotesTable.id, rootId)).for("update");
 
   // 미확정(pending) 변경견적이 이미 있으면 차단(§32) — current/승인 관계 단순화
-  const [pend] = await tx.select({ id: quotesTable.id, quoteNumber: quotesTable.quoteNumber })
-    .from(quotesTable)
-    .where(sql`COALESCE(${quotesTable.rootQuoteId}, ${quotesTable.id}) = ${rootId} AND ${quotesTable.relationType} = 'revision' AND ${quotesTable.status} = 'pending' AND ${quotesTable.deletedAt} IS NULL`)
-    .limit(1);
+  //  단, 판매취소로 pending 복귀한 '과거본'(현재유효보다 낮은 버전)은 미확정 변경견적이 아니므로 제외한다.
+  const family = await getQuoteFamily(tx, rootId);
+  const pend = family.find((q: any) => q.relationType === "revision" && q.status === "pending" && !isSupersededPendingRevision(q, family));
   if (pend) return { http: 409, body: { error: "미확정 변경견적이 이미 존재합니다. 먼저 승인 또는 거절해 주세요.", pendingRevisionId: pend.id, pendingRevisionNumber: pend.quoteNumber } };
+
+  // 생성 기준 = 리비전 체인의 '현재 유효견적'만 허용. (분할/추가견적·과거본·거절본에서 생성 금지)
+  //  과거본(예: R1 승인 후의 원견적)에서 생성하면 이미 대체된 내용·발행일로 R2 가 만들어져
+  //  R1(현재유효)의 변경내용이 누락되고 날짜 순서가 역전된다. 화면(family API)·판매전환과 같은 판정(resolveChainCurrent) 사용.
+  if (src.relationType != null && src.relationType !== "revision") {
+    return { http: 400, body: { error: "분할/추가 견적에서는 변경견적을 생성할 수 없습니다. 현재 유효견적에서 생성해 주세요." } };
+  }
+  const { current: chainCurrent } = resolveChainCurrent(family);
+  if (!chainCurrent || chainCurrent.id !== src.id) {
+    return { http: 409, body: {
+      error: `현재 유효견적이 아닙니다. 변경견적은 현재 유효견적${chainCurrent?.quoteNumber ? `(${chainCurrent.quoteNumber})` : ""}에서 생성해 주세요.`,
+      currentQuoteId: chainCurrent?.id ?? null, currentQuoteNumber: chainCurrent?.quoteNumber ?? null,
+    } };
+  }
 
   const quoteNumber = await generateRelationQuoteNumber(tx, rootId, "revision");
   const [{ maxv } = { maxv: 1 }] = await tx.select({ maxv: sql<number>`COALESCE(MAX(${quotesTable.version}), 1)` })
@@ -45,7 +59,8 @@ export async function createRevision(
     price: src.price, title: src.title, note: src.note,
     quoteType: "b2b_standard", billingType: src.billingType, paymentMethod: src.paymentMethod,
     taxDocumentType: src.taxDocumentType, taxCategory: src.taxCategory,
-    validUntil: src.validUntil, issueDate: src.issueDate, invoiceDueDate: src.invoiceDueDate, paymentDueDate: src.paymentDueDate,
+    validUntil: src.validUntil, issueDate: todayKst(),   // 변경견적 = 새로 발행하는 견적서 → 발행일은 생성일(KST). (기준 견적 발행일 복사 시 R 번호와 날짜 순서가 역전됨)
+    invoiceDueDate: src.invoiceDueDate, paymentDueDate: src.paymentDueDate,
     equipmentCommon: src.equipmentCommon,
     customerDisplay: src.customerDisplay ?? null,   // 견적서 거래처정보 편집값 승계(변경견적도 같은 수신처)
     status: "pending", isCurrent: false, projectId: null,   // 생성 직후 유효본 아님(§10), project 미연결
@@ -128,6 +143,11 @@ export async function approveRevision(tx: Db, revisionId: number, userId: number
 
   // §24: 파생견적 배분 안전검증 — 새 현재유효 금액이 기존 승인 파생 합계보다 작으면 배분 불변식이 깨진다.
   //  (예: 승인 파생 8m 인데 변경견적 7m → 7m < 8m 이므로 승인 차단. 파생을 먼저 조정해야 함.)
+  // 과거본(판매취소로 pending 복귀했지만 이미 더 높은 버전의 현재유효가 있는 변경견적)은 승인 불가 — 과거 내용으로 되돌아가는 것 방지.
+  if (isSupersededPendingRevision(rev, family)) {
+    const cur = resolveChainCurrent(family).current;
+    return { http: 409, body: { error: `이미 다른 견적으로 대체된 과거본입니다. 현재 유효견적${cur?.quoteNumber ? `(${cur.quoteNumber})` : ""}에서 변경견적을 생성해 주세요.`, currentQuoteId: cur?.id ?? null } };
+  }
   const derivedApproved = approvedDerivedSum(family);
   if (Number(rev.price) < derivedApproved) {
     return { http: 409, body: {
@@ -138,7 +158,13 @@ export async function approveRevision(tx: Db, revisionId: number, userId: number
 
   const priorCurrent = family.find((q: any) => q.isCurrent === true && q.id !== rev.id) ?? null;
   // family 의 기존 판매 project(있으면 재사용) — 현재 유효본 우선, 없으면 아무 연결된 quote
-  let projectId: number | null = priorCurrent?.projectId ?? (family.find((q: any) => q.projectId != null)?.projectId ?? null);
+  //  · 이전 유효본이 없고 이 변경견적이 이미 유효본(승인→판매취소로 대기 복귀)이면 자신의 판매건(승인 시 연결된 project)을 재사용.
+  //    (기존엔 family 를 정렬 없이 훑어 다른 변경견적의 '작성용 project'를 집어 판매로 바꿀 수 있었음 → 판매건 바뀜/중복 위험)
+  //  · 그 외 fallback 은 원견적부터(version·id 순) — 결정적으로 선택.
+  const ordered = [...family].sort((a: any, b: any) => Number(a.version) - Number(b.version) || a.id - b.id);
+  let projectId: number | null = priorCurrent?.projectId
+    ?? (rev.isCurrent === true ? rev.projectId : null)
+    ?? (ordered.find((q: any) => q.projectId != null)?.projectId ?? null);
 
   // 이미 청구/입금이 있는 판매건은 자동 갱신 금지(§22) — 명확히 차단
   if (projectId != null && await hasBillingOrPayment(tx, projectId)) {
@@ -172,6 +198,10 @@ export async function rejectRevision(tx: Db, revisionId: number): Promise<Result
   if (rev.relationType !== "revision") return { http: 400, body: { error: "변경견적이 아닙니다." } };
   if (rev.status === "rejected") return { http: 200, body: { id: rev.id, alreadyProcessed: true } };  // 멱등
   if (rev.status === "approved" && rev.isCurrent === true) return { http: 409, body: { error: "이미 승인된 변경견적은 거절할 수 없습니다." } };
+  // 과거본(대체된 대기 변경견적)은 거절 대상 아님 — 이력 의미(승인 후 대체됨) 보존.
+  if (isSupersededPendingRevision(rev, await getQuoteFamily(tx, rev.rootQuoteId ?? rev.id))) {
+    return { http: 409, body: { error: "이미 다른 견적으로 대체된 과거본은 거절할 수 없습니다." } };
+  }
   await tx.update(quotesTable).set({ status: "rejected", isCurrent: false }).where(eq(quotesTable.id, rev.id));
   // 이전 유효본은 건드리지 않는다(그대로 유지). §15/§16
   //  단, 이 변경견적이 유효본이었다면(승인→판매취소로 대기 복귀한 경우) 체인에 유효본이 사라지므로 이전 유효본을 되돌린다.

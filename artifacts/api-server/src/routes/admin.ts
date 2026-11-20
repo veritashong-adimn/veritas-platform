@@ -597,6 +597,9 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
         title: quotesTable.title,
         quoteType: quotesTable.quoteType,
         createdAt: quotesTable.createdAt,
+        // additive: 화면 표시 상태(현재유효/승인대기/과거본/거절) 공통 판정용 — 기존 필드·정렬 불변
+        relationType: quotesTable.relationType,
+        deletedAt: quotesTable.deletedAt,
       }).from(quotesTable)
         .where(eq(quotesTable.projectId, projectId))
         .orderBy(desc(quotesTable.version)),
