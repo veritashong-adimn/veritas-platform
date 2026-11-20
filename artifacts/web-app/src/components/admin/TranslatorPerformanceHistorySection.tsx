@@ -20,7 +20,68 @@ type Summary = { total: number; legacyCount: number; currentCount: number; first
 const td: React.CSSProperties = { padding: '8px 12px', fontSize: 13, color: '#374151', whiteSpace: 'nowrap' };
 const clamp2 = { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', whiteSpace: 'normal', lineHeight: 1.35 } as React.CSSProperties;
 
-export function TranslatorPerformanceHistorySection({ translatorId, token, onToast }: { translatorId: number; token: string; onToast: (m: string) => void }) {
+// [연결 수정] — 과거 CRM 수행행을 다른 통번역사로 행 단위 재연결(동명이인 수행이력 분리). 관리자(정산정보 권한)만, 사유 필수.
+//   POST /admin/legacy-progress-rows/:id/translator-link — 원본 행·지급·정산·판매 데이터는 변경하지 않고 이력 귀속만 바뀐다.
+function RelinkModal({ row, fromTranslatorId, token, onClose, onDone }: { row: HistoryItem; fromTranslatorId: number; token: string; onClose: () => void; onDone: (msg: string) => void }) {
+  const [q, setQ] = useState(''); const [results, setResults] = useState<any[]>([]); const [picked, setPicked] = useState<any | null>(null);
+  const [reason, setReason] = useState(''); const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
+  const search = async () => {
+    if (!q.trim()) return;
+    const r = await fetch(api(`/api/admin/translators?search=${encodeURIComponent(q.trim())}&includeInactive=true&pageSize=20`), { headers: { Authorization: `Bearer ${token}` } });
+    const d = await r.json().catch(() => []);
+    setResults((Array.isArray(d) ? d : (d.items ?? [])).filter((t: any) => t.id !== fromTranslatorId));
+  };
+  const submit = async () => {
+    if (!picked) { setErr('연결할 통번역사를 선택하세요.'); return; }
+    if (!reason.trim()) { setErr('수정 사유를 입력하세요.'); return; }
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch(api(`/api/admin/legacy-progress-rows/${row.id}/translator-link`), {
+        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ translatorId: picked.id, reason: reason.trim() }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setErr(d.error ?? '연결 수정 실패'); return; }
+      onDone(`수행이력(${row.workDate ?? '-'} ${row.client ?? ''})을 ${picked.name} 통번역사로 재연결했습니다.`);
+    } finally { setBusy(false); }
+  };
+  const box: React.CSSProperties = { width: '100%', padding: '7px 10px', border: '1px solid #d1d5db', borderRadius: 7, fontSize: 13, boxSizing: 'border-box' };
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 9500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }} onMouseDown={onClose}>
+      <div role="dialog" aria-label="수행이력 연결 수정" data-testid="tph-relink-modal" onMouseDown={e => e.stopPropagation()}
+        style={{ background: '#fff', borderRadius: 12, padding: 20, width: 520, maxWidth: '94vw', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ fontWeight: 700, fontSize: 15 }}>수행이력 연결 수정</div>
+        <div style={{ fontSize: 12.5, color: '#374151', background: '#f9fafb', borderRadius: 8, padding: '8px 10px' }}>
+          과거 CRM 원본 #{row.id} · {row.workDate ?? '-'} · {row.client ?? '-'} · {row.language ?? '-'} · {row.product ?? '-'}
+          <div style={{ color: '#6b7280', marginTop: 3 }}>이 행만 선택한 통번역사로 옮깁니다. 원본·지급·정산·판매 데이터는 변경되지 않습니다.</div>
+        </div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <input style={box} placeholder="통번역사 이름·이메일 검색" value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') search(); }} data-testid="tph-relink-search" aria-label="통번역사 검색" />
+          <button type="button" onClick={search} data-testid="tph-relink-search-btn" style={{ padding: '6px 12px', borderRadius: 7, border: '1px solid #d1d5db', background: '#fff', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>검색</button>
+        </div>
+        {results.length > 0 && (
+          <div style={{ maxHeight: 180, overflowY: 'auto', border: '1px solid #e5e7eb', borderRadius: 8 }}>
+            {results.map((t: any) => (
+              <button key={t.id} type="button" onClick={() => setPicked(t)} data-testid={`tph-relink-pick-${t.id}`} aria-label={`${t.name} 선택`}
+                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '7px 10px', border: 'none', borderBottom: '1px solid #f3f4f6', cursor: 'pointer', background: picked?.id === t.id ? '#eff6ff' : '#fff', fontSize: 13 }}>
+                <b>{t.name}</b> <span style={{ color: '#6b7280' }}>#{t.id} · {t.languagePairs || '언어 미입력'} · {t.email || '-'}{t.isActive === false ? ' · 비활성' : ''}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        <textarea style={{ ...box, minHeight: 60 }} placeholder="수정 사유(필수) — 예: 2019 독일어 번역, 독일어 김주희 수행건 확인" value={reason} onChange={e => setReason(e.target.value)} data-testid="tph-relink-reason" aria-label="수정 사유" />
+        {err && <div role="alert" data-testid="tph-relink-error" style={{ color: '#b91c1c', fontSize: 12.5, fontWeight: 600 }}>{err}</div>}
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button type="button" onClick={onClose} data-testid="tph-relink-cancel" style={{ padding: '7px 14px', borderRadius: 7, border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer' }}>취소</button>
+          <button type="button" onClick={submit} disabled={busy} data-testid="tph-relink-confirm" style={{ padding: '7px 14px', borderRadius: 7, border: 'none', background: '#2563eb', color: '#fff', fontWeight: 700, cursor: busy ? 'default' : 'pointer' }}>{busy ? '처리 중…' : '연결 수정'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function TranslatorPerformanceHistorySection({ translatorId, token, onToast, canRelink = false }: { translatorId: number; token: string; onToast: (m: string) => void; canRelink?: boolean }) {
+  const [relinkRow, setRelinkRow] = useState<HistoryItem | null>(null);
   const authH = { Authorization: `Bearer ${token}` };
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -143,7 +204,7 @@ export function TranslatorPerformanceHistorySection({ translatorId, token, onToa
       {/* 목록 — 최근 수행일 순 · zebra(veritas-read-table) */}
       <div style={{ overflowX: 'auto', border: '1px solid #e5e7eb', borderRadius: 10 }}>
         <table className="veritas-read-table vz-sticky" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-          <thead><tr>{['수행일', '출처', '거래처', '고객 담당자', '통역·번역', '언어', '상품/업무', '상세내역', '파일명', '수행상태'].map(h => <th key={h} style={{ padding: '9px 12px', textAlign: 'left', whiteSpace: 'nowrap' }}>{h}</th>)}</tr></thead>
+          <thead><tr>{['수행일', '출처', '거래처', '고객 담당자', '통역·번역', '언어', '상품/업무', '상세내역', '파일명', '수행상태', ...(canRelink ? ['연결'] : [])].map(h => <th key={h} style={{ padding: '9px 12px', textAlign: 'left', whiteSpace: 'nowrap' }}>{h}</th>)}</tr></thead>
           <tbody>
             {items.map((r, i) => (
               <tr key={r.sourceKey} data-testid={`tph-row-${i}`} data-source={r.source}>
@@ -157,12 +218,18 @@ export function TranslatorPerformanceHistorySection({ translatorId, token, onToa
                 <td style={{ ...td, whiteSpace: 'normal', maxWidth: 180 }} title={r.content ?? undefined}><div style={clamp2}>{r.content ?? '-'}</div></td>
                 <td style={{ ...td, whiteSpace: 'normal', maxWidth: 240 }} title={r.filename ?? undefined}><div style={clamp2}>{r.filename ?? '-'}</div></td>
                 <td style={td}>{r.status ? <span style={{ fontSize: 11, fontWeight: 600, color: r.source === 'legacy' ? '#475569' : '#1d4ed8', background: r.source === 'legacy' ? '#f1f5f9' : '#eff6ff', padding: '1px 6px', borderRadius: 7 }}>{r.status}</span> : '-'}</td>
+                {canRelink && <td style={td}>{r.source === 'legacy'
+                  ? <button type="button" onClick={() => setRelinkRow(r)} data-testid={`tph-relink-${r.id}`} aria-label="연결 수정" title="이 과거 CRM 행을 다른 통번역사로 재연결(동명이인 분리)"
+                      style={{ fontSize: 11, padding: '2px 8px', borderRadius: 6, border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer', fontWeight: 600 }}>연결 수정</button>
+                  : '-'}</td>}
               </tr>
             ))}
-            {items.length === 0 && !loading && <tr className="vz-summary"><td colSpan={10} style={{ padding: 28, textAlign: 'center', color: '#9ca3af' }}>{loadError ? '조회 오류로 표시할 수 없습니다(데이터 0건 아님).' : '수행이력이 없습니다.'}</td></tr>}
+            {items.length === 0 && !loading && <tr className="vz-summary"><td colSpan={canRelink ? 11 : 10} style={{ padding: 28, textAlign: 'center', color: '#9ca3af' }}>{loadError ? '조회 오류로 표시할 수 없습니다(데이터 0건 아님).' : '수행이력이 없습니다.'}</td></tr>}
           </tbody>
         </table>
       </div>
+      {relinkRow && <RelinkModal row={relinkRow} fromTranslatorId={translatorId} token={token} onClose={() => setRelinkRow(null)}
+        onDone={(m) => { setRelinkRow(null); onToast(m); load(pg.page); }} />}
       {pg.total > 0 && <Pagination idPrefix="tph" page={pg.page} pageSize={pg.pageSize} total={pg.total} unit="건" disabled={loading} onPageChange={(p) => load(p)} onPageSizeChange={(s) => { setPg(v => ({ ...v, pageSize: s })); setTimeout(() => load(1), 0); }} />}
     </div>
   );

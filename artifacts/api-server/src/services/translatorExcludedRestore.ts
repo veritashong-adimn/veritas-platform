@@ -42,7 +42,10 @@ export async function describeExcludedTranslator(dbx: Dbx, id: number): Promise<
       (s.resident_number IS NOT NULL AND s.resident_number <> '') AS has_rrn,
       (SELECT count(*)::int FROM legacy_archive_rows r WHERE r.is_effective AND r.source_type = 'progress'
          AND btrim(r.source_raw->>'통번역사명') IN (SELECT btrim(m.legacy_id) FROM legacy_master_mappings m
-           WHERE m.entity_type = 'translator' AND m.entity_id = u.id AND m.status <> 'rolled_back')) AS crm_rows,
+           WHERE m.entity_type = 'translator' AND m.entity_id = u.id AND m.status <> 'rolled_back')
+         -- 행 단위로 다른 통번역사에 연결된 행(동명이인)은 제외
+         AND NOT EXISTS (SELECT 1 FROM legacy_master_mappings rl WHERE rl.source_system = 'old_crm' AND rl.entity_type = 'translator_row'
+           AND rl.status <> 'rolled_back' AND rl.legacy_id = 'progress:' || r.id AND rl.entity_id <> u.id)) AS crm_rows,
       ((SELECT count(*) FROM performance_assignments pa WHERE pa.individual_user_id = u.id)
        + (SELECT count(*) FROM payout_round_items pri WHERE pri.payee_type = 'individual' AND pri.payee_id = u.id))::int AS platform_rows,
       EXISTS (SELECT 1 FROM users o WHERE o.id <> u.id AND o.deleted_at IS NULL AND lower(o.email) = lower(u.email)) AS email_taken

@@ -362,7 +362,10 @@ export async function collectUnifiedItems(opts: {
       CASE WHEN um.c=1 THEN um.uid ELSE NULL END AS name_user_id, nu.name AS name_user_name, nu.email AS name_email, ntp.phone AS name_phone,
       comp.is_vendor AS comp_vendor, (comp.nm IS NOT NULL) AS is_company
     FROM prog
-    LEFT JOIN lmm ON lmm.legacy_id = prog.translator
+    -- 행 단위 연결(동명이인 수행이력 분리)이 있으면 이름 매핑보다 우선(legacyRowTranslatorLink)
+    LEFT JOIN LATERAL (SELECT coalesce(
+      (SELECT rl.entity_id FROM legacy_master_mappings rl WHERE rl.source_system='old_crm' AND rl.entity_type='translator_row' AND rl.status <> 'rolled_back' AND rl.legacy_id = 'progress:' || prog.id LIMIT 1),
+      (SELECT l2.entity_id FROM lmm l2 WHERE l2.legacy_id = prog.translator LIMIT 1)) AS entity_id) lmm ON true
     LEFT JOIN users mu ON mu.id = lmm.entity_id
     LEFT JOIN translator_profiles mtp ON mtp.user_id = lmm.entity_id
     LEFT JOIN umatch um ON um.nm = prog.translator

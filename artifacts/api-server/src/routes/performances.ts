@@ -6,6 +6,7 @@
 //  · 개인 원천세·외주 매입 금액은 서버에서 재계산(프론트 값 불신뢰, §31).
 //  · 판매(매출) 금액과 완전 분리 — quote/견적서/거래명세서에 영향 없음(§35).
 // ─────────────────────────────────────────────────────────────────────────────
+import { rowLinkedTranslatorSql } from "../services/legacyRowTranslatorLink";
 import { Router, type IRouter } from "express";
 import {
   db, performanceAssignmentsTable, performanceExpensesTable, performanceDeductionsTable, performanceRemittancesTable,
@@ -1546,10 +1547,19 @@ router.get("/admin/performances/history-by-translator", ...adminGuard, async (re
           WHERE u.role='translator' AND u.deleted_at IS NULL`)).rows as any[];
         const repSameNorm = repRows.filter(r => normalizeCompanyName(r.name) === normX).length;
         if (repSameNorm === 1) { // 대표 유일 → 복원
+          // 이름만으로 연결하지 않는다(2026-11 김주희 동명이인 혼합) — 정규화 이름 일치 + 이메일 일치(본 이메일·추가 이메일)일 때만 동일인으로 본다.
+          //   이메일이 다르거나 없으면 다른 인물일 수 있으므로 연결하지 않고 모호(보고)로 둔다.
           const delRows = (await db.execute(sql`
-            SELECT id, name FROM users
-            WHERE role='translator' AND deleted_at IS NOT NULL AND date_trunc('minute',deleted_at)=${DEDUP_COHORT_MINUTE}`)).rows as any[];
-          dedupLinked = delRows.filter(r => normalizeCompanyName(r.name) === normX).map(r => Number(r.id));
+            SELECT u.id, u.name, (lower(u.email) IN (SELECT lower(email) FROM users WHERE id=${translatorId} AND email IS NOT NULL
+                                    UNION SELECT lower(email) FROM translator_emails WHERE translator_id=${translatorId})
+                   OR EXISTS (SELECT 1 FROM translator_emails te WHERE te.translator_id=u.id AND lower(te.email) IN (
+                                    SELECT lower(email) FROM users WHERE id=${translatorId} AND email IS NOT NULL
+                                    UNION SELECT lower(email) FROM translator_emails WHERE translator_id=${translatorId}))) AS email_match
+            FROM users u
+            WHERE u.role='translator' AND u.deleted_at IS NOT NULL AND date_trunc('minute',u.deleted_at)=${DEDUP_COHORT_MINUTE}`)).rows as any[];
+          const sameName = delRows.filter(r => normalizeCompanyName(r.name) === normX);
+          dedupLinked = sameName.filter(r => r.email_match === true).map(r => Number(r.id));
+          if (sameName.length > dedupLinked.length) dedupAmbiguous = true;   // 이름만 같은 제외 Master — 미연결(보고)
           dedupBasis = dedupLinked.length > 0;
         } else if (repSameNorm > 1) {
           dedupAmbiguous = true; // 대표 모호 → 미연결(보고 대상)
@@ -1571,9 +1581,17 @@ router.get("/admin/performances/history-by-translator", ...adminGuard, async (re
 
     // 2) 과거 CRM 수행이력 — 연결/링크된 이름으로만. 원본 행(id) 단위.
     //   legacy 행 조회 헬퍼(통번역사명 목록 기준). 통역/번역 구분은 원본 텍스트에서 도출(임의 생성 아님).
+    // 행 단위 연결(legacyRowTranslatorLink) — 이름 매핑보다 우선. 다른 통번역사에 행 단위로 연결된 행은 이름이 같아도 제외하고,
+    //   이 통번역사(또는 동일인 링크 Master)에 행 단위로 연결된 행은 이름이 달라도 포함한다(동명이인 수행이력 분리 · 2026-11 김주희).
+    const ownerIds = [translatorId, ...linkedMasterIds];
+    const ownerList = sql.join(ownerIds.map(id => sql`${id}`), sql`, `);
+    const rowLinkOk = sql`AND coalesce(${rowLinkedTranslatorSql("legacy_archive_rows")}, ${translatorId}) IN (${ownerList})`;
     const fetchLegacyByNames = async (names: string[]): Promise<any[]> => {
       if (names.length === 0) return [];
       const nl = sql.join(names.map(n => sql`${n}`), sql`, `);
+      return fetchLegacyWhere(sql`btrim(source_raw->>'통번역사명') IN (${nl}) ${rowLinkOk}`);
+    };
+    const fetchLegacyWhere = async (where: any): Promise<any[]> => {
       return (await db.execute(sql`
         SELECT id,
           'legacy:' || id AS source_key,
@@ -1595,7 +1613,7 @@ router.get("/admin/performances/history-by-translator", ...adminGuard, async (re
           END AS work_type
         FROM legacy_archive_rows
         WHERE source_type='progress' AND is_effective=true
-          AND btrim(source_raw->>'통번역사명') IN (${nl})
+          AND ${where}
           -- 운영 판매건으로 전환된 판매의 원본 수행행은 제외(전환 후에는 운영 수행정보 1건으로만 집계 — 중복 방지)
           AND NOT EXISTS (SELECT 1 FROM legacy_sales_progress_links lk JOIN legacy_archive_rows ls ON ls.id = lk.sale_row_id
             WHERE lk.progress_row_id = legacy_archive_rows.id AND lk.decision = 'confirmed'
@@ -1645,6 +1663,13 @@ router.get("/admin/performances/history-by-translator", ...adminGuard, async (re
           }
         }
       }
+    }
+
+    // 2-c) 행 단위로 이 통번역사(동일인 링크 포함)에 연결된 과거 수행행(이름이 달라도 포함) — 원본 ID 기준 중복 제외
+    {
+      const seen = new Set(legacyRows.map(r => Number(r.id)));
+      const linked = await fetchLegacyWhere(sql`${rowLinkedTranslatorSql("legacy_archive_rows")} IN (${ownerList})`);
+      for (const r of linked) if (!seen.has(Number(r.id))) { legacyRows.push(r); seen.add(Number(r.id)); }
     }
 
     // 3) 신규 플랫폼 수행이력 — individual_user_id = Master. 취소·삭제 제외.

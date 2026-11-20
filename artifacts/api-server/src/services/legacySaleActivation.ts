@@ -18,6 +18,7 @@
 //       - 금액 없음 → 미지급(지급대상 아님: 금액 0)
 //   · 수금: 입금일 + 입금내역 금액합계 = 판매총액일 때만 과거 수금완료 1건. 그 외는 '수금 확인 대상'(자동 수금완료 금지).
 // ─────────────────────────────────────────────────────────────────────────────
+import { loadRowLinks } from "./legacyRowTranslatorLink";
 import crypto from "node:crypto";
 import {
   db, legacyArchiveRowsTable, legacyMasterMappingsTable, importBatchesTable, importRowSourcesTable,
@@ -238,12 +239,18 @@ export async function buildActivationPlan(dbx: Dbx, legacyRowId: number) {
   const companyEmail: string | null = coRow?.email && String(coRow.email).trim() ? String(coRow.email).trim() : null;
   const matchTr = await loadTranslatorIndex(dbx);
   // 통번역사 Master 지급방식(원천세 3순위) — 연결된 통번역사만 미리 조회
-  const trIds = [...new Set(prog.map((p: any) => matchTr(rawRowFromRecord(p.source_raw ?? {}, "진행관리", 0).translatorName).id).filter((x: number | null): x is number => x != null))];
+  // 행 단위 연결(동명이인 수행이력 분리)이 있으면 이름 매핑보다 우선 — 같은 CRM 이름이라도 그 행의 실제 수행자로 연결
+  const rowLinks = await loadRowLinks(dbx, prog.map((p: any) => Number(p.id)));
+  const matchRow = (p: any, name: string) => {
+    const linked = rowLinks.get(Number(p.id));
+    return linked != null ? { id: linked, method: "row_link" as const } : matchTr(name);
+  };
+  const trIds = [...new Set(prog.map((p: any) => matchRow(p, rawRowFromRecord(p.source_raw ?? {}, "진행관리", 0).translatorName).id).filter((x: number | null): x is number => x != null))];
   const pmByTr = new Map<number, string | null>();
   if (trIds.length) for (const r of await rows(dbx, sql`SELECT translator_id, payment_method FROM translator_sensitive WHERE translator_id IN (${sql.join(trIds.map(i => sql`${i}`), sql`, `)})`)) pmByTr.set(Number(r.translator_id), r.payment_method ?? null);
   const performances = prog.map((p: any, i: number) => {
     const rr = rawRowFromRecord(p.source_raw ?? {}, "진행관리", Number(p.source_row ?? i + 1));
-    const tm = matchTr(rr.translatorName);
+    const tm = matchRow(p, rr.translatorName);
     const lp = buildLegacyPayload(rr, tm.id);
     const pv = { gross: lp.gross };
     const original = lp.original;

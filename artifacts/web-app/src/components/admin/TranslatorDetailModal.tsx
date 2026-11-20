@@ -2210,7 +2210,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
           {/* 수행이력 탭 — 과거 CRM + 신규 플랫폼 통합 조회(Master 연결 기준 · 읽기전용). */}
           <div style={tabShow("performance")}>
             {secRow("수행 이력")}
-            <TranslatorPerformanceHistorySection translatorId={userId} token={token} onToast={onToast} />
+            <TranslatorPerformanceHistorySection translatorId={userId} token={token} onToast={onToast} canRelink={hasPerm("translator.sensitive")} />
           </div>
 
           {/* ── 하단 바 ── */}
