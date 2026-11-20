@@ -71,7 +71,7 @@ function phoneFull(raw: string | null | undefined): string | null {
 function emailFull(raw: string | null | undefined): string | null { if (isLegacyPlaceholderEmail(raw)) return null; const e = (raw ?? "").trim(); return e || null; }
 
 // 과거 진행관리(progress) 정규화 — 원본 불변. 입금일/입금내역 = 고객 수금 기록(지급 증빙 아님).
-const PROG = sql`
+export const PROG = sql`
   prog AS (
     SELECT
       id,
@@ -101,6 +101,9 @@ const PROG = sql`
         OR coalesce(substring(source_raw->>'통번역사지급일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') < to_char((now() AT TIME ZONE 'Asia/Seoul')::date, 'YYYY-MM-DD'), false)) END AS legacy_paid,
       (act.payment_status = 'paid' AND act.actual_payment_date IS NOT NULL) AS legacy_paid_confirmed,
       to_char(act.actual_payment_date, 'YYYY-MM-DD') AS actual_payment_date,
+      -- 운영 판매로 전환된 행의 실제 수행자(담당자가 수행정보에서 바꾼 통번역사) — CRM 이름 매핑보다 우선(지급명세서 수취인 오귀속 방지, 2026-11)
+      act.uid AS act_user_id,
+      act.payment_status AS act_payment_status,
       coalesce(substring(source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') <= ${LEGACY_PAID_DELIVERY_CUTOFF}, false) AS legacy_paid_cutoff,
       -- 지급예정: 지급일이 오늘(KST) 당일 또는 이후. 지급일 미상은 지급확인 필요(지급일 경과는 위 legacy_paid).
       coalesce(coalesce(substring(source_raw->>'통번역사지급일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}'), act.expected_payment_date) >= to_char((now() AT TIME ZONE 'Asia/Seoul')::date, 'YYYY-MM-DD'), false) AS payout_future,
@@ -120,7 +123,7 @@ const PROG = sql`
         SELECT ch.cur AS row_id, s.id AS sid, s.status IN ${OPERATIONAL_LINEAGE} AS op,
           (xpa.id IS NOT NULL AND xpa.deleted_at IS NULL AND coalesce(xp.status::text, '') <> 'cancelled') AS live,
           EXISTS (SELECT 1 FROM legacy_master_mappings m WHERE m.source_system = 'old_crm' AND m.entity_type = 'sale' AND m.entity_id = xpa.project_id AND m.status = 'active') AS active_sale,
-          xpa.payment_status::text AS payment_status, xpa.actual_payment_date,
+          xpa.payment_status::text AS payment_status, xpa.actual_payment_date, xpa.individual_user_id AS uid,
           to_char(coalesce(xpa.expected_payment_date, xpa.expected_payment_date_auto), 'YYYY-MM-DD') AS expected_payment_date
         FROM ch JOIN import_row_sources s ON s.module = 'legacy_sale_activation' AND s.row_key = 'progress:' || ch.src
         LEFT JOIN performance_assignments xpa ON xpa.id = s.entity_id LEFT JOIN projects xp ON xp.id = xpa.project_id
@@ -129,7 +132,8 @@ const PROG = sql`
         bool_or(live AND op) AS has_op, bool_or(live) AS has_live, bool_or(active_sale) AS any_active_sale,
         (array_agg(payment_status ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS payment_status,
         (array_agg(actual_payment_date ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS actual_payment_date,
-        (array_agg(expected_payment_date ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS expected_payment_date
+        (array_agg(expected_payment_date ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS expected_payment_date,
+        (array_agg(uid ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS uid
       FROM l GROUP BY row_id
     ) act ON act.row_id = legacy_archive_rows.id
     WHERE source_type = 'progress' AND is_effective = true
@@ -148,7 +152,7 @@ const CUR_DEDUCTION = sql`(CASE WHEN pa.performer_category = 'individual' THEN r
 const CUR_VAT = sql`(CASE WHEN pa.performer_category = 'vendor' AND pa.purchase_evidence_type = 'tax_invoice' THEN round(coalesce(pa.cost_total, 0) * 0.1, 2) ELSE 0 END)`;
 
 // 신규 수행정보(performance_assignments) 정규화 — 지급일 = 지급예정일(자동/수동). 거래처 = 프로젝트 거래처 스냅샷.
-const CUR = sql`
+export const CUR = sql`
   cur AS (
     SELECT
       pa.id,
@@ -365,6 +369,7 @@ export async function collectUnifiedItems(opts: {
     -- 행 단위 연결(동명이인 수행이력 분리)이 있으면 이름 매핑보다 우선(legacyRowTranslatorLink)
     LEFT JOIN LATERAL (SELECT coalesce(
       (SELECT rl.entity_id FROM legacy_master_mappings rl WHERE rl.source_system='old_crm' AND rl.entity_type='translator_row' AND rl.status <> 'rolled_back' AND rl.legacy_id = 'progress:' || prog.id LIMIT 1),
+      prog.act_user_id,
       (SELECT l2.entity_id FROM lmm l2 WHERE l2.legacy_id = prog.translator LIMIT 1)) AS entity_id) lmm ON true
     LEFT JOIN users mu ON mu.id = lmm.entity_id
     LEFT JOIN translator_profiles mtp ON mtp.user_id = lmm.entity_id
@@ -462,7 +467,8 @@ export async function collectUnifiedItems(opts: {
   for (const it of items as any[]) {
     if (it.source !== "legacy") continue;
     it.conversion = conv.get(it.id) ?? null;
-    it.conversionEligible = it.status === "deposit_unconfirmed" && !it.payoutDate && it.pretax > 0
+    //  (2026-11) 지급일이 오늘 이후인 지급예정 CRM 건(아직 지급 전)도 전환 요청 가능 — 서버 checkEligibility 와 같은 기준.
+    it.conversionEligible = ((it.status === "deposit_unconfirmed" && !it.payoutDate) || (it.status === "scheduled" && !!it.payoutDate && it.payoutDate >= today)) && it.pretax > 0
       && !(it.conversion && (it.conversion.status === "requested" || it.conversion.status === "approved"));
   }
   return { items: items as UnifiedItem[], legacyCount: legacyItems.length, currentCount: curItems.length };

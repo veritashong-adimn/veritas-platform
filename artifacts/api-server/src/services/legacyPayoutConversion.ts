@@ -11,7 +11,7 @@
 import { sql, eq, and } from "drizzle-orm";
 import { legacyPayoutConversionsTable } from "@workspace/db";
 import { buildActivationPlan, executeActivation, resolvePayoutReview, ACTIVATION_MODULE, ActivationError } from "./legacySaleActivation";
-import { LEGACY_PAID_DELIVERY_CUTOFF } from "../lib/legacyPayoutRule";
+import { LEGACY_PAID_DELIVERY_CUTOFF, todayKst } from "../lib/legacyPayoutRule";
 
 export class ConversionError extends Error {
   status: number; code: string;
@@ -34,7 +34,10 @@ export async function checkEligibility(dbx: any, progressRowId: number) {
   const payDate = String(raw["통번역사지급일"] ?? "").match(/^\d{4}-\d{2}-\d{2}/)?.[0] ?? null;
   const delivery = String(raw["통번역사납품일"] ?? "").match(/^\d{4}-\d{2}-\d{2}/)?.[0] ?? null;
   const pretax = num(raw["지급액(세전)"]), posttax = num(raw["지금액(세후)"]);
-  if (payDate) return { ok: false as const, reason: "지급일이 있는 과거 건은 지급일 경과 시 별도 지급파일 처리분으로 지급완료됩니다(전환 대상 아님)." };
+  // 지급일이 이미 지난 과거 건은 '별도 지급파일 처리분'(지급일 경과 = 지급완료 규칙)이라 전환 대상이 아니다(이중 지급 방지).
+  //   (2026-11) 지급일이 오늘 또는 이후인 CRM 원본 건은 아직 지급 전이므로 전환 가능 — 승인 시 운영 미지급(지급회차·IBK 대상)으로 넘어가며,
+  //   전환 후에는 원본 행이 운영 수행정보로만 집계되어 지급일 경과 자동 지급완료 규칙을 받지 않는다(별도 지급파일과 중복 지급 금지 — 승인 시 확인).
+  if (payDate && payDate < todayKst()) return { ok: false as const, reason: "지급일이 지난 과거 건은 별도 지급파일 처리분으로 지급완료됩니다(전환 대상 아님)." };
   if (delivery && delivery <= LEGACY_PAID_DELIVERY_CUTOFF) return { ok: false as const, reason: "지급완료로 확인된 과거 건입니다(전환 대상 아님)." };
   if (pretax <= 0) return { ok: false as const, reason: "지급액이 0원인 건은 전환할 수 없습니다." };
   if (!r.sale_row_id) return { ok: false as const, reason: "연결된 과거 판매건이 없어 운영 판매건으로 전환할 수 없습니다(판매목록 연결 확인 필요)." };

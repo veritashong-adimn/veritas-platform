@@ -10,6 +10,7 @@ import { exportReproStatementExcel, exportReproStatementPdf, reproPayeeLanguages
 import { DateField } from './DatePickerShared';
 import './readTableView.css';
 import { ConversionCell, ConversionRequestsPanel, type ConversionInfo } from './LegacyPayoutConversion';
+import { PayoutReadinessPanel } from './PayoutReadinessPanel';
 
 type DateBasis = 'delivery' | 'payout';
 type RoundRow = {
@@ -161,6 +162,8 @@ export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (
 
   return (
     <div data-testid="payout-unified-tab">
+      {/* 지급 준비 점검·지급 누락 방지(2026-11) — ① 지급일 기준 후보(선택 회차 지급일 연동) ② 전체 기간 누락·날짜 공란. 조회 전용. */}
+      <PayoutReadinessPanel token={token} payoutDate={sel?.payoutDate ?? null} onToast={onToast} />
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, margin: '0 0 8px', flexWrap: 'wrap' }}>
         <h1 style={{ fontSize: 19, fontWeight: 800, color: '#111827', margin: 0 }}>지급회차관리</h1>
         <span style={{ fontSize: 11.5, color: '#9ca3af' }}>과거 CRM + 신규 플랫폼 통합 조회 · 조회/명세서 전용(지급확정·송금 없음) · 과거 CRM 지급완료 = 지급일 경과(다음 날부터 · 별도 지급파일 처리분, VERITAS 송금 아님) 또는 납품일 ≤ 2026-09-15(대표 확인) · 입금내역(고객 수금)은 지급 근거 아님</span>
