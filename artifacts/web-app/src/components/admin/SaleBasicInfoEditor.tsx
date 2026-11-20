@@ -4,6 +4,7 @@
 //  · 담당자 변경은 이 판매 거래처 소속 Master 에서만 선택. 신규 담당자 등록은 기존 담당자 보완 화면(SaleContactPicker) 재사용.
 //  · 수정 사유 필수 — 변경 전후·사유·Master 동시 수정 여부는 감사 로그(logs)에 남는다.
 //  · 수행·지급·청구·수금·정산 정보는 이 화면에서 바꾸지 않는다.
+import { DateField } from './DatePickerShared';
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../../lib/constants';
 import { GhostBtn, PrimaryBtn } from '../ui';
@@ -253,7 +254,7 @@ export function SaleBasicInfoEditor({ saleId, token, view, onCancel, onSaved, on
         </div>
         <div>
           <label style={lbl} htmlFor="sale-basic-issue">견적일 (= 판매일)</label>
-          <input id="sale-basic-issue" type="date" value={issueDate} onChange={e => setIssueDate(e.target.value)} style={inp} data-testid="input-sale-basic-issue-date" aria-label="견적일" />
+          <DateField value={issueDate} onChange={v => setIssueDate(v)} style={inp} testid="input-sale-basic-issue-date" ariaLabel="견적일" allowClear={false} />
           <div style={hint}>운영 판매의 판매일은 별도 저장 칸 없이 견적일을 사용합니다. 견적번호 표시(Q날짜-번호)도 견적일을 따릅니다.</div>
         </div>
         <div>

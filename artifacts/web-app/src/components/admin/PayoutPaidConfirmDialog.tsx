@@ -1,6 +1,7 @@
 // ─── 지급완료 확인 창(단일) — 지급일 · 실제 지급금액 · 증빙(선택) ─────────────────────────────
 //  이미 지급된 건을 확인해 기록하는 창이다(송금·지급 실행 아님). 저장하면 즉시 지급완료로 반영되고,
 //  새 지급회차·이체는 만들지 않는다. 단건은 지급일·금액을 이 창에서 확인·수정하고, 일괄은 행에 입력한 값으로 목록만 보여준다.
+import { DateField } from './DatePickerShared';
 import React, { useState } from 'react';
 import { ModalOverlay, PrimaryBtn, GhostBtn } from '../ui';
 
@@ -41,8 +42,7 @@ export function PayoutPaidConfirmDialog({ lines, busy = false, onCancel, onConfi
           <div style={{ display: 'grid', gridTemplateColumns: '96px 1fr', gap: '8px 10px', alignItems: 'center', fontSize: 13 }}>
             <span style={{ color: '#6b7280' }}>대상</span><span style={{ fontWeight: 700 }}>{lines[0].name ?? `#${lines[0].id}`}</span>
             <label htmlFor="paid-confirm-date" style={{ color: '#6b7280' }}>지급일</label>
-            <input id="paid-confirm-date" type="date" value={date} max={today} onChange={e => setDate(e.target.value)} style={inp}
-              data-testid="input-paid-confirm-date" aria-label="지급일" />
+            <DateField value={date} max={today} onChange={v => setDate(v)} style={inp} testid="input-paid-confirm-date" ariaLabel="지급일" />
             <label htmlFor="paid-confirm-amount" style={{ color: '#6b7280' }}>실제 지급금액</label>
             <input id="paid-confirm-amount" value={amount} onChange={e => setAmount(e.target.value.replace(/[^0-9.,]/g, ''))} style={{ ...inp, textAlign: 'right' }}
               inputMode="numeric" data-testid="input-paid-confirm-amount" aria-label="실제 지급금액" />

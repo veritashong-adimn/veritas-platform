@@ -4,6 +4,7 @@
  * 원본 VERITAS 견적(sourceQuoteId)을 SOURCE 로만 사용하며, 원본 quote/quote_items 를 절대 수정하지 않는다.
  * 판매전환·프로젝트·청구·정산과 무관(§10). 서버(comparison_quotes/items)와만 통신한다.
  */
+import { DateField } from './DatePickerShared';
 import React, { useState, useEffect, useCallback } from 'react';
 import { api } from '../../lib/constants';
 import { ClickSelect } from '../ui';
@@ -498,7 +499,7 @@ export default function ComparisonQuoteModal({ sourceQuoteId, sourceTitle, seedR
                 {/* 문서 정보 */}
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 14 }}>
                   <div><label style={lbl}>견적번호 (표시용, 선택)</label><input value={displayNumber} onChange={(e) => setDisplayNumber(e.target.value)} placeholder="예: ABC-2026-001" style={inp} data-testid="cq-display-number" /></div>
-                  <div><label style={lbl}>발행일</label><input type="date" value={quoteDate} onChange={(e) => setQuoteDate(e.target.value)} style={inp} /></div>
+                  <div><label style={lbl}>발행일</label><DateField value={quoteDate} onChange={(v) => setQuoteDate(v)} style={inp} testid="cq-quote-date" ariaLabel="발행일" /></div>
                   <div><label style={lbl}>부가세</label>
                     <ClickSelect value={vatMode} onChange={(v) => setVatMode(v as 'vat_10' | 'none')} triggerStyle={inp}
                       options={[{ value: 'vat_10', label: '부가세 10%' }, { value: 'none', label: '부가세 없음' }]} />

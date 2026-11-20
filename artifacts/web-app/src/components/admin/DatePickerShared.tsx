@@ -216,7 +216,28 @@ export function MonthCalendar({ value, onSelect, min, max, onClear, autoFocus }:
   );
 }
 
+/**
+ * 붙여넣기·직접입력 날짜 → "YYYY-MM-DD"(실제 존재하는 날짜만). 아니면 null.
+ *  허용: 2026-11-30 · 2026.11.30 · 2026/11/30 · 2026. 11. 30.(공백·끝 점) · 20261130 · 월/일 한 자리(2026-1-5)
+ */
+export function normalizeDateInput(raw?: string | null): string | null {
+  const s = String(raw ?? '').trim().replace(/\.$/, '');
+  let m = /^(\d{4})\s*[-./]\s*(\d{1,2})\s*[-./]\s*(\d{1,2})$/.exec(s);
+  if (!m) m = /^(\d{4})(\d{2})(\d{2})$/.exec(s);
+  if (!m) return null;
+  const y = +m[1], mo = +m[2], d = +m[3];
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  const dt = new Date(y, mo - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;   // 2026-02-30 등 거부
+  return toYmd(y, mo - 1, d);
+}
+
 // ─── DateField — native <input type="date"> 드롭인 대체 ───────────────────────
+//  (2026-11) 값 칸을 실제 텍스트 입력으로 — 마우스 드래그 선택·Ctrl+C 복사·Ctrl+V 붙여넣기·키보드 입력 지원.
+//   · 붙여넣기(2026-11-30 / 2026.11.30 / 2026/11/30 …)는 즉시 YYYY-MM-DD 로 정규화해 onChange 실행(기존 저장·자동계산 연동 그대로).
+//   · 키보드 입력은 Enter·포커스 이탈 시 확정. 형식이 틀리거나 min/max 밖이면 기존 값으로 되돌린다(데이터 변경 없음).
+//   · 달력 팝업: 입력칸 클릭(텍스트 선택 없을 때)·달력 아이콘·Enter/Space(빈 칸)로 기존처럼 연다.
+//   · disabled: 읽기 전용(값 선택·복사는 가능, 입력·붙여넣기·달력 불가).
 export interface DateFieldProps {
   value: string;                          // "YYYY-MM-DD" 또는 ''(빈 값)
   onChange: (value: string) => void;      // native input 과 동일: 선택값 문자열 전달('' 가능)
@@ -263,29 +284,61 @@ export function DateField({
 
   const pick = (ds: string) => { onChange(ds); setOpen(false); };   // 날짜 선택 → 적용 + 닫힘(§4)
   const clear = () => { onChange(''); setOpen(false); };
+  // 입력 중 텍스트(포커스 동안만 독립) — 포커스가 없으면 항상 저장값을 표시
+  const [draft, setDraft] = useState<string | null>(null);
+  const shown = draft ?? (value ? String(value).slice(0, 10) : '');
+  const inRange = (ds: string) => (!min || ds >= min) && (!max || ds <= max);
+  const commit = (text: string) => {
+    const t = text.trim();
+    if (!t) { if (value && allowClear) onChange(''); setDraft(null); return; }
+    const ds = normalizeDateInput(t);
+    if (ds && inRange(ds) && ds !== (value ? String(value).slice(0, 10) : '')) onChange(ds);
+    setDraft(null);   // 잘못된 입력은 기존 값으로 복귀
+  };
+  const onPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    if (disabled) return;
+    const ds = normalizeDateInput(e.clipboardData.getData('text'));
+    e.preventDefault();
+    if (ds && inRange(ds)) { setDraft(null); setOpen(false); if (ds !== (value ? String(value).slice(0, 10) : '')) onChange(ds); }
+  };
+  const hasSelection = (el: HTMLInputElement) => el.selectionStart != null && el.selectionEnd != null && el.selectionStart !== el.selectionEnd;
 
   return (
     <div ref={ref} style={{ position: 'relative', display: 'inline-flex', ...(style?.width ? { width: style.width } : {}) }}>
-      {/* 트리거 — native input 자리. 기존 style 을 그대로 적용해 크기/테두리 유지 */}
+      {/* 트리거 — native input 자리. 기존 style 을 그대로 적용해 크기/테두리 유지. 값은 선택·복사 가능한 입력칸 */}
       <div
-        onClick={() => { if (disabled) return; setOpen(o => !o); }}   // 재클릭 토글(§4)
-        role="button" tabIndex={disabled ? -1 : 0}
-        onKeyDown={e => { if (!disabled && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setOpen(o => !o); } }}
-        aria-label={ariaLabel || title || '날짜 선택'} aria-haspopup="dialog" aria-expanded={open}
         data-testid={testid} title={title}
+        // 입력칸 밖 여백 클릭도 기존처럼 달력 토글. <label> 안에 놓인 경우 라벨이 클릭을 입력칸으로 다시 보내 즉시 닫히지 않도록 preventDefault
+        onClick={e => { if (!disabled && e.target === e.currentTarget) { e.preventDefault(); setOpen(o => !o); } }}
         style={{
-          // 기존 native input 의 style(테두리·padding·width·height·background·color)을 그대로 적용해
-          // 크기/모양을 보존한다. flex 로 값 텍스트와 달력 아이콘을 한 줄에 배치.
-          display: 'flex', alignItems: 'center', gap: 4, cursor: disabled ? 'default' : 'pointer',
+          display: 'flex', alignItems: 'center', gap: 4, cursor: disabled ? 'default' : 'text',
           overflow: 'hidden', boxSizing: 'border-box', opacity: disabled ? 0.6 : 1,
           ...style,
         }}
       >
-        <span style={{ flex: 1, minWidth: 0, fontSize: (style?.fontSize as number) ?? 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: value ? (style?.color ?? C.textPrimary) : C.g400 }}>
-          {value || placeholder}
-        </span>
-        {/* 달력 아이콘 */}
-        <span aria-hidden style={{ flexShrink: 0, display: 'flex', color: C.g400 }}>
+        <input
+          type="text" inputMode="numeric" autoComplete="off" spellCheck={false}
+          value={shown} placeholder={placeholder} readOnly={disabled}
+          aria-label={ariaLabel || title || '날짜 선택'} aria-haspopup="dialog" aria-expanded={open}
+          data-testid={testid ? `${testid}-input` : undefined}
+          onChange={e => setDraft(e.target.value)}
+          onFocus={() => setDraft(null)}
+          onBlur={e => { if (draft != null) commit(e.target.value); }}
+          onPaste={onPaste}
+          onKeyDown={e => {
+            if (disabled) return;
+            if (e.key === 'Enter') { e.preventDefault(); if (draft != null) commit((e.target as HTMLInputElement).value); else setOpen(o => !o); }
+            else if (e.key === 'Escape') { setDraft(null); setOpen(false); }
+            else if (e.key === ' ' && !shown) { e.preventDefault(); setOpen(o => !o); }
+          }}
+          onClick={e => { if (disabled || hasSelection(e.currentTarget)) return; setOpen(o => !o); }}   // 드래그 선택 중엔 달력을 열지 않음
+          style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', padding: 0, margin: 0,
+            font: 'inherit', fontSize: (style?.fontSize as number) ?? 13, color: shown ? (style?.color ?? C.textPrimary) : C.g400,
+            cursor: disabled ? 'default' : 'text', userSelect: 'text' }}
+        />
+        {/* 달력 아이콘 — 클릭 시 달력 열기/닫기 */}
+        <span aria-hidden onClick={e => { e.preventDefault(); if (!disabled) setOpen(o => !o); }} data-testid={testid ? `${testid}-cal` : undefined}
+          style={{ flexShrink: 0, display: 'flex', color: C.g400, cursor: disabled ? 'default' : 'pointer' }}>
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <rect x="3" y="4" width="18" height="18" rx="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" />
           </svg>

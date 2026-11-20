@@ -3,6 +3,7 @@
 //  증빙(선택)을 받아 실제 지급확정 기록(수행정보 actual_payment_date/amount + 감사로그: 확인자·일시·근거)으로 남긴다.
 //  지급예정일·원가·원천세 등 기존 값은 변경하지 않는다. 확인 전 표시: 지급예정(예정일 도래 전) / 확인 필요(예정일 경과·없음).
 //  서버: POST /admin/projects/:id/legacy-payout-review/bulk (건별 처리·중복 확정 차단·건별 결과)
+import { DateField } from './DatePickerShared';
 import React, { useMemo, useState } from 'react';
 import { api } from '../../lib/constants';
 import { GhostBtn } from '../ui';
@@ -88,8 +89,8 @@ export function LegacyPayoutReviewPanel({ projectId, token, items, onToast, onDo
             <span>원가 {won(p.costTotal)}</span>
             <span style={{ color: '#6b7280' }}>지급예정일 {due ?? '없음'}</span>
             <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>실제 지급일
-              <input type="date" value={f(p.assignmentId).date} max={today} onChange={e => setF(p.assignmentId, { date: e.target.value })} style={inp}
-                data-testid={`input-legacy-paid-date-${p.assignmentId}`} aria-label={`${p.performerName ?? ''} 실제 지급일`} /></span>
+              <DateField value={f(p.assignmentId).date} max={today} onChange={v => setF(p.assignmentId, { date: v })} style={inp}
+                testid={`input-legacy-paid-date-${p.assignmentId}`} ariaLabel={`${p.performerName ?? ''} 실제 지급일`} /></span>
             <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>실제 지급액
               <input value={f(p.assignmentId).amount} onChange={e => setF(p.assignmentId, { amount: e.target.value.replace(/[^0-9.,]/g, '') })} style={{ ...inp, width: 96, textAlign: 'right' }}
                 data-testid={`input-legacy-paid-amount-${p.assignmentId}`} aria-label={`${p.performerName ?? ''} 실제 지급액`} /></span>
