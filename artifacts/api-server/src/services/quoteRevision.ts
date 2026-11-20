@@ -11,6 +11,7 @@ import {
 } from "@workspace/db";
 import { generateRelationQuoteNumber, isRelationEngineQuoteType, restoreChainCurrentIfVacant, getQuoteFamily, resolveChainCurrent, isSupersededPendingRevision } from "./quoteRelation";
 import { todayKst } from "../lib/legacyPayoutRule";
+import { findGroupSaleConflict, groupConflictMessage } from "./quoteAlternative";
 import { approvedDerivedSum } from "./quoteDerived";
 import { remapClonedParentLinks } from "./quoteItemGroup";
 
@@ -148,6 +149,9 @@ export async function approveRevision(tx: Db, revisionId: number, userId: number
     const cur = resolveChainCurrent(family).current;
     return { http: 409, body: { error: `이미 다른 견적으로 대체된 과거본입니다. 현재 유효견적${cur?.quoteNumber ? `(${cur.quoteNumber})` : ""}에서 변경견적을 생성해 주세요.`, currentQuoteId: cur?.id ?? null } };
   }
+  // 복수견적: 같은 그룹의 다른 견적안이 판매확정이면 변경견적 승인(=판매 반영)도 차단
+  const altConflict = await findGroupSaleConflict(tx, rev.id, { lock: true });
+  if (altConflict) return { http: 409, body: { error: groupConflictMessage(altConflict), code: "ALTERNATIVE_ALREADY_SOLD", conflictQuoteId: altConflict.quoteId } };
   const derivedApproved = approvedDerivedSum(family);
   if (Number(rev.price) < derivedApproved) {
     return { http: 409, body: {

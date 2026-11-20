@@ -209,6 +209,12 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
     const curTax = items.reduce((s: number, it: any) => s + Number(it.taxAmount ?? 0), 0);
     const amountChanged = Math.abs(editTotals.total - Number(quote.price ?? 0)) >= 0.005
       || Math.abs(editTotals.supply - curSupply) >= 0.005 || Math.abs(editTotals.tax - curTax) >= 0.005;
+    // 판매확정된 일반견적: 계약내용(수량·단가·금액) 직접 수정 불가 — 변경견적으로 처리(서버도 CONTRACT_LOCKED 로 차단).
+    //  과거 CRM 전환 판매·누적·차감 견적서는 기존 흐름 유지.
+    if (saleConfirmed && amountChanged && quote.quoteType === 'b2b_standard' && !isLegacyOrigin) {
+      await alertDialog({ title: '계약내용 직접 수정 불가', message: '판매확정된 견적의 상품·수량·단가·금액은 직접 수정할 수 없습니다.\n견적관리에서 이 견적을 열고 [변경견적 생성]으로 변경견적을 만들어 승인해 주세요.', variant: 'warning' });
+      return;
+    }
     if (saleConfirmed && amountChanged) {
       const r = await promptDialog({ title: '판매금액 변경 사유', message: '판매 확정 건의 금액(공급가액·부가세·총액)이 변경됩니다. 변경 사유를 입력하세요(감사로그에 기록됩니다).', placeholder: '예: 고객 요청으로 수량 조정', confirmLabel: '저장' });
       if (r == null || !r.trim()) return;

@@ -2620,8 +2620,28 @@ export function QuoteEditorWorkspace({
   const [dSourceItems, setDSourceItems]   = useState<Array<{ id: number; productName: string; totalAmount: number }>>([]);
   const updateSplit = (i: number, patch: Partial<SplitRow>) => setDerivedSplits(prev => prev.map((r, idx) => idx === i ? { ...r, ...patch } : r));
 
+  // ── 복수견적(대안 견적안) 그룹 — A안/B안… 와 각 안의 현재유효·판매확정 여부 ──
+  type AltMember = { rootId: number; rootQuoteNumber: string | null; label: string; isAnchor: boolean; currentId: number; currentQuoteNumber: string | null; currentStatus: string; price: number; title: string | null; sold: boolean };
+  const [altGroup, setAltGroup] = useState<{ groupId: number | null; members: AltMember[] }>({ groupId: null, members: [] });
+  const [showAltModal, setShowAltModal] = useState(false);
+  const [altReason, setAltReason] = useState('');
+  const [altBusy, setAltBusy] = useState(false);
+  // 판매확정 일반견적 계약내용 잠금 예외 판정용 — 과거 CRM 전환 판매(원본 총액 확인 흐름 유지)
+  const [legacySale, setLegacySale] = useState(false);
+  useEffect(() => {
+    if (savedQuoteId == null || !converted) { setLegacySale(false); return; }
+    fetch(api(`/api/admin/quotes/${savedQuoteId}`), { headers: authH })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => setLegacySale(!!d?.legacyOrigin))
+      .catch(() => setLegacySale(false));
+  }, [savedQuoteId, converted, token]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const fetchFamily = useCallback(async () => {
-    if (savedQuoteId == null) { setFamily([]); setAllocation(null); return; }
+    if (savedQuoteId == null) { setFamily([]); setAllocation(null); setAltGroup({ groupId: null, members: [] }); return; }
+    fetch(api(`/api/admin/quotes/${savedQuoteId}/alternatives`), { headers: authH })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => setAltGroup({ groupId: d?.groupId ?? null, members: Array.isArray(d?.members) ? d.members : [] }))
+      .catch(() => { /* 무시 */ });
     try {
       const r = await fetch(api(`/api/admin/quotes/${savedQuoteId}/family`), { headers: authH });
       if (!r.ok) return;
@@ -2661,6 +2681,12 @@ export function QuoteEditorWorkspace({
   // 생성 가능: 위 조건 + 미확정 변경견적 없음(한 번에 1건만 승인대기 — 승인/거절 후 다음 R 생성). 횟수 제한은 없음.
   const pendingRevisionMember = family.find(m => m.relationType === 'revision' && m.status === 'pending' && chainMap.get(m.id) === 'pending_revision') ?? null;
   const canCreateRevision = canShowCreateRevision && pendingRevisionMember == null;
+  // 복수견적: 현재유효 일반견적에서 생성(횟수 제한 없음). 같은 그룹의 다른 견적안이 판매확정이면 이 안은 판매전환 불가.
+  const myAltRootId = family.find(m => m.relationType == null)?.id ?? savedQuoteId;
+  const otherSoldAlt = altGroup.members.find(m => m.sold && m.rootId !== myAltRootId) ?? null;
+  const myAltMember = altGroup.members.find(m => m.rootId === myAltRootId) ?? null;
+  // 판매확정된 일반견적(현재유효)의 계약내용 잠금 — 변경견적으로만 변경(서버 CONTRACT_LOCKED 와 동일 기준, 과거 CRM 전환 판매 제외)
+  const contractLocked = quoteType === 'b2b_standard' && converted && meMember?.isCurrent === true && !legacySale;
   // 파생견적 생성 가능: b2b 일반견적 + 현재유효 견적(원견적/변경 현재본)에서만(§5/§37/§38). 파생 자신에서는 불가.
   const canCreateDerived = quoteType === 'b2b_standard' && savedQuoteId != null && !isDerived && (meMember?.isCurrent ?? true);
 
@@ -2681,6 +2707,24 @@ export function QuoteEditorWorkspace({
     } catch { onToast('변경견적 생성 중 오류가 발생했습니다.'); }
     finally { setRevBusy(false); }
   }, [savedQuoteId, revisionReason, token, onToast, onConverted, onOpenQuote, onClose]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleCreateAlternative = useCallback(async () => {
+    if (savedQuoteId == null) return;
+    setAltBusy(true);
+    try {
+      const res = await fetch(api(`/api/admin/quotes/${savedQuoteId}/create-alternative`), {
+        method: 'POST', headers: { ...authH, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: altReason.trim() || null }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { onToast(`복수견적 생성 실패: ${d.error ?? res.status}`); return; }
+      setShowAltModal(false); setAltReason('');
+      onToast(`복수견적 ${d.quoteNumber ?? ''} 이(가) 생성되었습니다. 기존 견적안은 그대로 보존됩니다.`);
+      onConverted?.();
+      if (onOpenQuote && d.id) onOpenQuote(d.id); else onClose?.();
+    } catch { onToast('복수견적 생성 중 오류가 발생했습니다.'); }
+    finally { setAltBusy(false); }
+  }, [savedQuoteId, altReason, token, onToast, onConverted, onOpenQuote, onClose]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleApproveRevision = useCallback(async () => {
     if (savedQuoteId == null) return;
@@ -3048,7 +3092,13 @@ export function QuoteEditorWorkspace({
         )}
         {/* 상품정보 편집 그리드 — 판매관리 수정모드와 공용(QuoteItemsEditor).
             누적 마감 시 편집 차단(pointer-events 무효화 + 흐리게). API에서도 수정 차단됨. */}
-        <div style={batchClosed ? { pointerEvents: 'none', opacity: 0.6 } : undefined} aria-disabled={batchClosed}>
+        {/* 판매확정 일반견적: 계약내용(상품·수량·단가·금액) 잠금 — 변경은 [변경견적 생성]으로(서버도 차단) */}
+        {contractLocked && !batchClosed && (
+          <div data-testid="contract-locked-notice" style={{ marginBottom: 10, padding: '9px 14px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, fontSize: 12, color: '#1e40af', fontWeight: 600 }}>
+            🔒 판매확정된 견적입니다. 상품·수량·단가·금액은 직접 수정할 수 없습니다. 계약 변경은 [변경견적 생성]으로 처리하세요. (제목·비고 등은 수정 가능)
+          </div>
+        )}
+        <div style={(batchClosed || contractLocked) ? { pointerEvents: 'none', opacity: 0.6 } : undefined} aria-disabled={batchClosed || contractLocked} data-testid="quote-items-editor-wrap">
           <QuoteItemsEditor items={items} onItemsChange={setItems} vatType={vatType} products={products} allowNegativePrice={isPrepaidQuote}
             productCreate={{ canCreate: canCreateProduct, onCreate: openQuickCreate }} />
         </div>
@@ -3211,6 +3261,29 @@ export function QuoteEditorWorkspace({
         </span>
     </div>
   ) : null;
+  // 복수견적 견적안 목록(A안/B안…) — 각 안의 현재유효 견적번호·금액·판매확정 여부. 클릭 시 해당 견적안으로 이동.
+  const alternativesBar = altGroup.members.length > 1 ? (
+    <div data-testid="quote-alternatives" style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontSize: 12, color: '#6b7280', marginBottom: 10 }}>
+      복수견적:
+      {altGroup.members.map(m => {
+        const isMe = m.rootId === myAltRootId;
+        const anySold = altGroup.members.some(x => x.sold);
+        const tag = m.sold ? '판매' : anySold ? '미선택' : '대기';
+        return (
+          <button key={m.rootId} type="button" data-testid={`alt-member-${m.rootId}`} data-sold={m.sold ? '1' : '0'} disabled={isMe || !onOpenQuote}
+            onClick={() => !isMe && onOpenQuote?.(m.currentId)}
+            aria-label={`${m.label} ${m.currentQuoteNumber ?? ''} ${tag} 견적안으로 이동`} title={m.title ?? ''}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 5, borderRadius: 6, padding: '2px 8px', fontSize: 11, fontWeight: isMe ? 800 : 600,
+              border: isMe ? '1px solid #0e7490' : '1px solid #e5e7eb', background: m.sold ? '#ecfdf5' : '#fff', color: '#0f172a', cursor: isMe ? 'default' : 'pointer' }}>
+            <b style={{ color: '#0e7490' }}>{m.label}</b>
+            <span style={{ fontFamily: 'monospace', color: '#475569' }}>{m.currentQuoteNumber}</span>
+            <span>{formatWon(m.price)}</span>
+            <span style={{ fontSize: 10, fontWeight: 700, padding: '0 5px', borderRadius: 4, background: m.sold ? '#dcfce7' : '#f3f4f6', color: m.sold ? '#15803d' : '#6b7280' }}>{tag}</span>
+          </button>
+        );
+      })}
+    </div>
+  ) : null;
   const headerSubtitle: React.ReactNode = (isRevision || isDerived || isSuperseded || hasRevisionChildren || showDerivedSummary) ? (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
       {isRevision && (
@@ -3357,7 +3430,9 @@ export function QuoteEditorWorkspace({
         // 견적 엔진: 미확정 변경견적/과거(대체)견적/파생견적은 판매전환 불가(§18/§19). 승인된 현재 유효견적만 전환 대상.
         //  파생견적은 '판매전환'이 아니라 [파생 승인]으로 배분 확정된다(별도 project/청구 단위).
         const revisionBlocked = isPendingRevision || isSuperseded || isDerived;
-        const convertDisabled = converted || converting || saving || !canConvert || revisionBlocked;
+        // 복수견적: 같은 그룹의 다른 견적안이 판매확정이면 이 안은 판매전환 불가(판매취소 후 재선택)
+        const altBlocked = !converted && otherSoldAlt != null;
+        const convertDisabled = converted || converting || saving || !canConvert || revisionBlocked || altBlocked;
         // 누적 견적서: 전환 후에도 견적을 계속 누적·저장하면 '연결된 판매건 1건'에 자동 반영되므로,
         // 완료 상태를 '판매 연결됨'으로 표기해 판매건이 이미 연결돼 있음을 명확히 안내한다(요구 §7).
         const isAccumulated = quoteType === 'accumulated_batch';
@@ -3368,6 +3443,7 @@ export function QuoteEditorWorkspace({
           : isDerived ? '분할견적은 판매전환 대신 [분할 승인]으로 배분 확정됩니다(원 계약금액을 청구주체별로 배분).'
           : isPendingRevision ? '변경견적은 [변경견적 승인]으로 확정됩니다(승인 시 현재 유효견적으로 전환).'
           : isSuperseded ? '과거(대체된) 견적입니다. 현재 유효견적을 사용하세요.'
+          : altBlocked ? `같은 복수견적 그룹의 ${otherSoldAlt?.label ?? '다른 견적안'}(${otherSoldAlt?.currentQuoteNumber ?? ''})이 판매확정 상태입니다. 고객이 견적안을 바꾼 경우 기존 판매를 판매취소한 뒤 이 견적안을 판매전환하세요.`
           : converted ? (isAccumulated
               ? '판매건이 연결되어 있습니다. 견적을 저장하면 같은 판매건에 자동 반영됩니다.'
               : '이미 판매전환된 견적입니다.')
@@ -3398,6 +3474,16 @@ export function QuoteEditorWorkspace({
           style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 700, border: `1px solid ${canCreateRevision ? C.primary : '#d1d5db'}`,
             background: '#fff', color: canCreateRevision ? C.primary : '#9ca3af', cursor: revBusy ? 'not-allowed' : 'pointer', opacity: revBusy ? 0.6 : 1 }}>
           🔀 변경견적 생성
+        </button>
+      )}
+      {/* 견적 작업: 복수견적 생성 — 현재유효 일반견적에서만. 같은 고객 의뢰의 대안 견적안(A/B/C안)을 만든다(횟수 제한 없음). */}
+      {canShowCreateRevision && (
+        <button type="button" onClick={() => { if (hasUnsavedChanges()) { onToast('저장 후 복수견적을 생성할 수 있습니다.'); return; } setShowAltModal(true); }} disabled={altBusy}
+          data-testid="btn-create-alternative" aria-label="복수견적 생성"
+          title="이 견적을 복사해 같은 의뢰의 다른 견적안(B안·C안…)을 만듭니다. 고객이 선택한 견적안 하나만 판매전환합니다."
+          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 700, border: '1px solid #0e7490',
+            background: '#fff', color: '#0e7490', cursor: altBusy ? 'not-allowed' : 'pointer', opacity: altBusy ? 0.6 : 1 }}>
+          🗂 복수견적 생성
         </button>
       )}
       {/* 견적 작업: 파생견적 생성 — 현재유효 일반견적에서만. 원 계약금액을 청구주체별로 분리(현재유효 견적 유지). */}
@@ -3560,6 +3646,29 @@ export function QuoteEditorWorkspace({
       )}
 
       {/* 변경견적 생성 확인 모달 (§4) — 변경사유(version_reason) 입력 */}
+      {showAltModal && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 9000, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onClick={() => { if (!altBusy) setShowAltModal(false); }}>
+          <div onClick={e => e.stopPropagation()} data-testid="modal-create-alternative" role="dialog" aria-label="복수견적 생성"
+            style={{ background: '#fff', borderRadius: 14, padding: '26px 30px', width: 480, maxWidth: '92vw', boxShadow: '0 20px 60px rgba(0,0,0,0.25)' }}>
+            <h2 style={{ margin: '0 0 10px', fontSize: 18, fontWeight: 800, color: C.textPrimary }}>복수견적(다른 견적안)을 생성하시겠습니까?</h2>
+            <p style={{ margin: '0 0 16px', fontSize: 13, color: '#374151', lineHeight: 1.6 }}>
+              {meMember?.quoteNumber ?? '현재 견적'}을(를) 복사해 같은 의뢰의 새 견적안을 만듭니다. 새 견적안의 상품·수량·단가는 따로 수정할 수 있습니다.
+              <b> 고객이 선택한 견적안 하나만 판매전환</b>되며, 기존 견적·판매는 변경되지 않습니다.
+            </p>
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#6b7280', marginBottom: 6 }}>견적안 메모 (선택)</label>
+            <textarea value={altReason} onChange={e => setAltReason(e.target.value)} data-testid="input-alternative-reason" aria-label="견적안 메모"
+              placeholder="예: 통역 4시간안 / 번역 5개 파일안"
+              style={{ width: '100%', minHeight: 64, boxSizing: 'border-box', padding: '9px 11px', borderRadius: 8, border: '1px solid #d1d5db', fontSize: 13, resize: 'vertical', marginBottom: 20 }} />
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <button onClick={() => setShowAltModal(false)} disabled={altBusy} data-testid="cancel-create-alternative" aria-label="취소"
+                style={{ padding: '9px 20px', borderRadius: 8, border: '1px solid #d1d5db', background: '#f9fafb', fontSize: 13, fontWeight: 600, cursor: 'pointer', color: '#374151' }}>취소</button>
+              <button onClick={handleCreateAlternative} disabled={altBusy} data-testid="confirm-create-alternative" aria-label="복수견적 생성 확인"
+                style={{ padding: '9px 20px', borderRadius: 8, border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, background: '#0e7490', cursor: altBusy ? 'not-allowed' : 'pointer', opacity: altBusy ? 0.7 : 1 }}>{altBusy ? '생성 중…' : '복수견적 생성'}</button>
+            </div>
+          </div>
+        </div>
+      )}
       {showRevisionModal && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 9000, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
           onClick={() => { if (!revBusy) setShowRevisionModal(false); }}>
@@ -3749,6 +3858,7 @@ export function QuoteEditorWorkspace({
 
         {/* 카드 컨텐츠 — 좌우 여백은 스크롤 컨테이너 패딩이 제공(가로 0) */}
         <div style={{ padding: '24px 0 64px' }}>
+          {alternativesBar}
           {chainHistoryBar}
           {formContent}
         </div>
@@ -3775,6 +3885,7 @@ export function QuoteEditorWorkspace({
       {wsHeader(C.bgCard, BD.card, BD.shadow.card, '24px')}
       <div style={{ flex: 1, overflowY: 'auto', padding: '24px 24px 64px' }}>
         <div style={{ maxWidth: 1200, margin: '0 auto' }}>
+          {alternativesBar}
           {chainHistoryBar}
           {formContent}
         </div>

@@ -1,4 +1,5 @@
-import { pgTable, serial, integer, numeric, timestamp, pgEnum, text, varchar, date, boolean, jsonb, type AnyPgColumn } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, numeric, timestamp, pgEnum, text, varchar, date, boolean, jsonb, index, type AnyPgColumn } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { projectsTable } from "./projects";
@@ -77,6 +78,11 @@ export const quotesTable = pgTable("quotes", {
   //    현행 데이터는 모두 NULL(원견적)로 완전 호환. 일반견적(b2b_standard)만 적용 대상.
   rootQuoteId: integer("root_quote_id").references((): AnyPgColumn => quotesTable.id),
   relationType: varchar("relation_type", { length: 20 }),
+  // ── 복수견적(대안 견적안) 그룹 ─────────────────────────────────────────────
+  //  NULL = 복수견적 아님(기존 데이터 전부). 값 = 그룹 기준 견적(A안) id — A안 자신도 첫 복수견적 생성 시 자기 id 로 설정.
+  //  각 견적안은 독립 원견적(relation_type NULL, root_quote_id NULL)이라 변경견적·현재유효·매출 로직을 그대로 재사용한다.
+  //  그룹 내 판매확정(status='approved' 체인)은 1개만 허용(서버 판매전환·변경견적 승인 경로에서 검증).
+  quoteGroupId: integer("quote_group_id"),
 
   // ── 파생견적(견적서 분할 발행) 전용 — relation_type='derived' 에서만 사용 ──────────
   //  파생견적은 별도 project 를 만들지 않고 quote family 안에서만 관리된다. 대신 이 두 필드가
@@ -108,7 +114,10 @@ export const quotesTable = pgTable("quotes", {
   deletedAt: timestamp("deleted_at"),
   deletedBy: integer("deleted_by"),          // 삭제 처리 사용자 id
   deletionReason: text("deletion_reason"),   // 삭제 사유(필수 입력)
-});
+}, (t) => [
+  // 복수견적 그룹 조회용 부분 인덱스 — drizzle/ADD_COLUMNS_quotes_quote_group_id.sql 과 동일 정의(push 시 삭제 제안 방지)
+  index("quotes_quote_group_id_idx").on(t.quoteGroupId).where(sql`quote_group_id IS NOT NULL`),
+]);
 
 export const insertQuoteSchema = createInsertSchema(quotesTable).omit({ id: true, createdAt: true, status: true, deletedAt: true, deletedBy: true, deletionReason: true });
 export type InsertQuote = z.infer<typeof insertQuoteSchema>;

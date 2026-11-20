@@ -51,6 +51,7 @@ import { loadSaleIdentities } from "../services/saleIdentity";
 import { loadFxSummaries, fmtForeign } from "../services/fxBilling";
 import { applyParentIndexLinks } from "../services/quoteItemGroup";
 import { createRevision, approveRevision, rejectRevision } from "../services/quoteRevision";
+import { createAlternative, getAlternativeGroup, findGroupSaleConflict, groupConflictMessage } from "../services/quoteAlternative";
 import { createDerivedSplit, approveDerived, rejectDerived, calculateAllocation, generateDerivedBillingRows, type DerivedSplitInput } from "../services/quoteDerived";
 import { evaluateProjectDependencies, buildGuardMessage } from "../services/saleDependency";
 import { planCustomer, executeCustomer, unresolved, type CustomerChoice, type CustomerSnapshot } from "../services/quoteCustomerResolve";
@@ -1591,6 +1592,7 @@ router.get("/admin/quotes", ...adminGuard, async (req, res) => {
         relationType: quotesTable.relationType,
         isCurrent: quotesTable.isCurrent,
         version: quotesTable.version,
+        quoteGroupId: quotesTable.quoteGroupId,   // 복수견적 그룹(additive)
         projectTitle: projectsTable.title,
         projectStatus: projectsTable.status,
         projectCompanyId: projectsTable.companyId,
@@ -1991,6 +1993,10 @@ router.patch("/admin/quotes/:quoteId/status", ...adminGuard, requirePermission("
           .where(eq(quotesTable.id, quoteId))
           .for("update");
 
+        // 복수견적: 같은 그룹의 다른 견적안이 판매확정이면 차단(그룹 기준 행 잠금으로 동시 전환 직렬화)
+        const altConflict = await findGroupSaleConflict(tx, quoteId, { lock: true });
+        if (altConflict) throw Object.assign(new Error("alternative sold"), { httpBody: { error: groupConflictMessage(altConflict), code: "ALTERNATIVE_ALREADY_SOLD", conflictQuoteId: altConflict.quoteId, conflictQuoteNumber: altConflict.quoteNumber } });
+
         // 이미 다른 요청이 프로젝트를 생성했다면 재생성하지 않고 기존 프로젝트를 반환
         if (locked?.projectId) {
           const [existingQuote] = await tx.select().from(quotesTable).where(eq(quotesTable.id, quoteId));
@@ -2048,6 +2054,11 @@ router.patch("/admin/quotes/:quoteId/status", ...adminGuard, requirePermission("
     // 일반 상태 변경 (프로젝트가 이미 연결된 경우 project status도 동기화)
     const isPrepaidQ = isPrepaidDeductionQuoteType(quote.quoteType);
     const updatedQuote = await db.transaction(async tx => {
+      // 복수견적: 같은 그룹의 다른 견적안이 판매확정이면 판매전환 차단(기존 판매건 재사용 경로 포함)
+      if (status === "approved") {
+        const altConflict = await findGroupSaleConflict(tx, quoteId, { lock: true });
+        if (altConflict) throw Object.assign(new Error("alternative sold"), { httpBody: { error: groupConflictMessage(altConflict), code: "ALTERNATIVE_ALREADY_SOLD", conflictQuoteId: altConflict.quoteId, conflictQuoteNumber: altConflict.quoteNumber } });
+      }
       const [uq] = await tx.update(quotesTable)
         .set({ status: status as any, ...(restoreCurrent ? { isCurrent: true } : {}) })
         .where(eq(quotesTable.id, quoteId))
@@ -2108,6 +2119,37 @@ router.post("/admin/quotes/:id/create-revision", ...adminGuard, requirePermissio
   } catch (err) {
     req.log.error({ err }, "Admin: failed to create revision");
     res.status(500).json({ error: "변경견적 생성 실패." });
+  }
+});
+
+// ─── 복수견적(대안 견적안) 생성 — 일반견적(b2b_standard) 현재유효 견적에서만 ───────────
+//  기존 견적을 복사해 같은 그룹의 독립 견적안(Q…-P{n}, 대기)을 만든다. 원본 견적·판매 데이터는 변경하지 않는다.
+router.post("/admin/quotes/:id/create-alternative", ...adminGuard, requirePermission("quote.create"), async (req, res) => {
+  const quoteId = Number(req.params.id);
+  if (isNaN(quoteId) || quoteId <= 0) { res.status(400).json({ error: "유효하지 않은 quote id." }); return; }
+  const { reason } = (req.body ?? {}) as { reason?: string };
+  const userId = ((req as any).user as { id: number }).id;
+  try {
+    const out = await db.transaction(async (tx) => createAlternative(tx, quoteId, { reason: reason?.trim() || null, userId }));
+    if (out.http === 200) {
+      await logEvent("quote", (out.body as any).id, "quote_alternative_created", req.log, req.user ?? undefined, JSON.stringify({ sourceQuoteId: quoteId, quoteGroupId: (out.body as any).quoteGroupId }));
+    }
+    res.status(out.http).json(out.body);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to create alternative quote");
+    res.status(500).json({ error: "복수견적 생성 실패." });
+  }
+});
+
+// ─── 복수견적 그룹 조회 — 견적안 목록(A안/B안…)·현재유효·판매확정 여부 ────────────────
+router.get("/admin/quotes/:id/alternatives", ...adminGuard, async (req, res) => {
+  const quoteId = Number(req.params.id);
+  if (isNaN(quoteId) || quoteId <= 0) { res.status(400).json({ error: "유효하지 않은 quote id." }); return; }
+  try {
+    res.json(await getAlternativeGroup(db, quoteId));
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to fetch alternative group");
+    res.status(500).json({ error: "복수견적 조회 실패." });
   }
 });
 
@@ -3571,9 +3613,26 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
   const calcItems = computeQuoteItemAmounts(items);
   const totalPrice = calcItems.reduce((s, it) => s + it.totalAmount, 0);
   // 감사로그용 수정 전 값 + 판매 확정(approved) 견적의 금액 변경은 변경사유 필수
-  const [qBefore] = await db.select({ price: quotesTable.price, status: quotesTable.status, projectId: quotesTable.projectId }).from(quotesTable).where(eq(quotesTable.id, quoteId));
-  const itemsBefore = await db.select({ id: quoteItemsTable.id, productName: quoteItemsTable.productName, supplyAmount: quoteItemsTable.supplyAmount, taxAmount: quoteItemsTable.taxAmount, totalAmount: quoteItemsTable.totalAmount }).from(quoteItemsTable).where(eq(quoteItemsTable.quoteId, quoteId));
+  const [qBefore] = await db.select({ price: quotesTable.price, status: quotesTable.status, projectId: quotesTable.projectId, quoteType: quotesTable.quoteType, isCurrent: quotesTable.isCurrent }).from(quotesTable).where(eq(quotesTable.id, quoteId));
+  const itemsBefore = await db.select({ id: quoteItemsTable.id, productName: quoteItemsTable.productName, supplyAmount: quoteItemsTable.supplyAmount, taxAmount: quoteItemsTable.taxAmount, totalAmount: quoteItemsTable.totalAmount, quantity: quoteItemsTable.quantity, unit: quoteItemsTable.unit, unitPrice: quoteItemsTable.unitPrice }).from(quoteItemsTable).where(eq(quoteItemsTable.quoteId, quoteId));
   const priceChanged = qBefore != null && Math.abs(Number(qBefore.price ?? 0) - totalPrice) >= 0.005;
+  // 판매확정된 일반견적의 계약내용(품목·수량·단위·단가·금액·견적유형) 직접 수정 차단 — 변경견적 이력 우회 방지.
+  //  계약 변경은 [변경견적 생성](또는 복수견적 재선택)으로 처리한다. 제목·비고·거래처 표시정보·품목 메모 등 금액 무관 정보는 그대로 저장 가능.
+  //  누적·차감 견적서(판매 후 저장 시 판매건 자동 반영 업무)와 과거 CRM 전환 판매(원본 총액 확인 흐름)는 기존 동작 유지.
+  if (qBefore?.status === "approved" && qBefore.isCurrent === true && qBefore.quoteType === "b2b_standard") {
+    const legacy = qBefore.projectId ? await legacyOriginOfProject(db, qBefore.projectId) : null;
+    if (!legacy) {
+      const sig = (arr: any[]) => arr.map(it => [String(it.productName ?? "").trim(), Number(it.quantity ?? 0), String(it.unit ?? "건"), Number(it.unitPrice ?? 0), Number(it.totalAmount ?? 0)].join("|")).sort().join("\n");
+      const typeChanged = quoteType != null && quoteType !== qBefore.quoteType;
+      if (priceChanged || typeChanged || sig(itemsBefore) !== sig(calcItems)) {
+        res.status(409).json({
+          error: "판매확정된 견적의 계약내용(상품·수량·단가·금액)은 직접 수정할 수 없습니다. [변경견적 생성]으로 변경견적을 만들어 승인해 주세요. (제목·비고 등 금액과 무관한 정보는 수정할 수 있습니다)",
+          code: "CONTRACT_LOCKED",
+        });
+        return;
+      }
+    }
+  }
   // 과거 CRM 전환 견적 — 원본은 총액만 있고 공급가·부가세 구분이 확인되지 않은 금액이다.
   //   편집 화면의 부가세 재계산 등으로 원본 총액과 다른 금액이 저장되지 않도록, 금액이 바뀌는 저장은 명시적 확인을 요구한다(임의 VAT 가산 방지).
   if (priceChanged && qBefore?.projectId && (req.body as any)?.confirmLegacyVat !== true) {

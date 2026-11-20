@@ -42,6 +42,7 @@ interface QuoteRow {
   relationType: string | null;   // null=원견적 | 'revision' | 'additional' | 'derived'
   isCurrent: boolean;
   version: number;
+  quoteGroupId?: number | null;   // 복수견적 그룹(기준 견적 id). NULL = 복수견적 아님
 }
 
 // ─── 상수 ──────────────────────────────────────────────────────────────────────
@@ -301,7 +302,27 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
     // 관계유형 → version → id 로 안정 정렬(R2 < R10 방지: 숫자 version 사용)
     arr.sort((a, b) => (REL_ORDER[a.relationType ?? ''] ?? 9) - (REL_ORDER[b.relationType ?? ''] ?? 9) || a.version - b.version || a.id - b.id);
   }
-  const roots = quotes.filter(q => q.relationType == null);  // 원견적만 최상위. 정렬은 서버 desc(id) 유지.
+  const rootsRaw = quotes.filter(q => q.relationType == null);  // 원견적만 최상위. 정렬은 서버 desc(id) 유지.
+  // 복수견적: 같은 그룹 견적안을 붙여 표시(그룹이 처음 나타나는 위치에 기준안→생성순으로 모음) + A안/B안 라벨·선택 여부.
+  const altLabelOf = (i: number) => { let n = i, t = ''; do { t = String.fromCharCode(65 + (n % 26)) + t; n = Math.floor(n / 26) - 1; } while (n >= 0); return `${t}안`; };
+  const groupRoots = new Map<number, QuoteRow[]>();
+  for (const r of rootsRaw) if (r.quoteGroupId != null) { const a = groupRoots.get(r.quoteGroupId) ?? []; a.push(r); groupRoots.set(r.quoteGroupId, a); }
+  for (const [gid, arr] of groupRoots) arr.sort((a, b) => (a.id === gid ? -1 : b.id === gid ? 1 : a.id - b.id));
+  const familySold = (r: QuoteRow) => r.status === 'approved' || (childrenByRoot.get(r.id) ?? []).some(k => k.status === 'approved' && k.relationType !== 'derived');
+  const altInfo = new Map<number, { label: string; size: number; sold: boolean; groupSold: boolean }>();
+  for (const arr of groupRoots.values()) {
+    if (arr.length < 2) continue;
+    const groupSold = arr.some(familySold);
+    arr.forEach((r, i) => altInfo.set(r.id, { label: altLabelOf(i), size: arr.length, sold: familySold(r), groupSold }));
+  }
+  const roots: QuoteRow[] = [];
+  const placedGroups = new Set<number>();
+  for (const r of rootsRaw) {
+    if (r.quoteGroupId != null && (groupRoots.get(r.quoteGroupId)?.length ?? 0) > 1) {
+      if (placedGroups.has(r.quoteGroupId)) continue;
+      placedGroups.add(r.quoteGroupId); roots.push(...groupRoots.get(r.quoteGroupId)!);
+    } else roots.push(r);
+  }
   // 리비전 체인 표시 상태(현재유효/승인대기/과거본/거절) — 변경견적이 있는 family 에만 적용(상세·이력 화면과 같은 판정 함수).
   //  변경견적이 없는 단독 견적은 기존 상태(대기/판매/거절) 표시를 유지한다.
   const chainStatusById = new Map<number, QuoteChainStatus>();
@@ -771,6 +792,16 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                           >
                             {editLoading === q.id ? '…' : (q.quoteNumber ?? (formatDocNumber('Q', q.quoteNumber, q.issueDate) || `#${q.id}`))}
                           </button>
+                          {altInfo.has(q.id) && (() => {
+                            const a = altInfo.get(q.id)!;
+                            return (
+                              <span data-testid={`quote-alt-badge-${q.id}`} data-alt-sold={a.sold ? '1' : '0'}
+                                title={`복수견적 ${a.size}안 중 ${a.label}${a.sold ? ' — 고객 선택(판매)' : a.groupSold ? ' — 미선택' : ''}`}
+                                style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4, background: '#ecfeff', color: '#0e7490', whiteSpace: 'nowrap' }}>
+                                복수 {a.label}{a.sold ? ' · 선택' : a.groupSold ? ' · 미선택' : ''}
+                              </span>
+                            );
+                          })()}
                           {relBadge && (
                             <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4, background: relBadge.bg, color: relBadge.color }}>{relBadge.label}</span>
                           )}

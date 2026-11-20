@@ -3,6 +3,7 @@ import { db, quotesTable, projectsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logEvent } from "../lib/logEvent";
 import { requireAuth } from "../middlewares/auth";
+import { findGroupSaleConflict, groupConflictMessage } from "../services/quoteAlternative";
 
 const router: IRouter = Router();
 
@@ -72,6 +73,9 @@ router.post("/quotes/:id/approve", async (req, res) => {
 
   try {
     const result = await db.transaction(async (tx) => {
+      // 복수견적: 같은 그룹의 다른 견적안이 판매확정이면 승인 차단
+      const altConflict = await findGroupSaleConflict(tx, quoteId, { lock: true });
+      if (altConflict) throw Object.assign(new Error("alternative sold"), { httpBody: { error: groupConflictMessage(altConflict), code: "ALTERNATIVE_ALREADY_SOLD" } });
       const [updated] = await tx
         .update(quotesTable)
         .set({ status: "approved" })
@@ -85,6 +89,8 @@ router.post("/quotes/:id/approve", async (req, res) => {
     await logEvent("quote", result.id, "quote_approved", req.log);
     res.json(result);
   } catch (err) {
+    const httpBody = (err as any)?.httpBody;
+    if (httpBody) { res.status(409).json(httpBody); return; }
     req.log.error({ err }, "Failed to approve quote");
     res.status(500).json({ error: "견적 승인 실패." });
   }
