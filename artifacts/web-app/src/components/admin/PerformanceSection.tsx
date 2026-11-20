@@ -29,7 +29,7 @@ import {
   CATEGORY_OPTS, TREATMENT_OPTS, normalizeTreatment, effectiveTreatment,
   PERFORMER_TYPE_OPTS, resolvePerformerType, performerTypeLabel, canonicalLineCategory,
   PAYMENT_STATUS_OPTS, PAYMENT_STATUS_SELECTABLE_OPTS,
-  PaymentBadge, LegacyPayoutBadge, unitChangePatch, UNIT_OPTS, payStage, vendorAmountFromIndividual, vendorClearPatch,
+  PaymentBadge, LegacyPayoutBadge, unitChangePatch, UNIT_OPTS, payStage, vendorAmountFromIndividual, vendorClearPatch, clearSaleCopiedQty, vendorQtyMissing,
 } from './performanceShared';
 import { DateField } from './DatePickerShared';
 import { exportPerformances, type PerformanceExportMeta } from '../../lib/performanceExcel';
@@ -221,7 +221,8 @@ export default function PerformanceSection({ projectId, token, performances, onC
     return out;
   }, [list, q, catFilter, payFilter, onlyUnpaid, sortKey, sortDir]);
 
-  const enterEdit = () => { setRows(list.map(toRow)); setDeletedIds([]); setPinnedEtcCols([]); setEditMode(true); };
+  // 판매수량 복사 수량은 수정모드에서도 조회화면과 같은 기준으로 빈 값(clearSaleCopiedQty)
+  const enterEdit = () => { setRows(list.map(toRow).map(clearSaleCopiedQty)); setDeletedIds([]); setPinnedEtcCols([]); setEditMode(true); };
   const cancelEdit = () => { setRows([]); setDeletedIds([]); setPinnedEtcCols([]); setEditMode(false); setAmountPopup(null); setAdjustPopup(null); };
   // 기타비용 선택기(§1~§4) — 항목 선택 시 동적 컬럼 추가(pin). 직접입력은 항목명 입력(빈이름·중복·전용3종 금지 §6·§11).
   const addEtcCol = (type: string) => setPinnedEtcCols(prev => prev.includes(type) ? prev : [...prev, type]);
@@ -656,6 +657,9 @@ export default function PerformanceSection({ projectId, token, performances, onC
     setBusy(true);
     try {
       const src = rowsOverride ?? rows;
+      // 외주 수량 미입력(단가 있음) 행은 저장 차단 — 0원으로 저장돼 기존 지급금액이 사라지지 않게(서버도 동일 검사)
+      const missingQty = src.map((r, idx) => (vendorQtyMissing(r) ? idx + 1 : 0)).filter(Boolean);
+      if (missingQty.length) { onToast(`수량 입력 필요: ${missingQty.join(', ')}행 외주업체 수량을 입력해 주세요. (수량 × 단가 = 공급가액)`); return; }
       const payload = { rows: src.map(buildRowPayload), deletedIds, ...(changeReason ? { changeReason } : {}) };
       const res = await fetch(api(`/api/admin/projects/${projectId}/performances`), { method: 'PUT', headers: authH, body: JSON.stringify(payload) });
       const data = await res.json().catch(() => ({}));
@@ -1048,7 +1052,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
         <td style={tdR}>
           {(editable ? qtyCols : qtyShown)
             ? (editable
-                ? <input type="number" min={0} inputMode="numeric" data-testid={`perf-qty-${i}`} aria-label="수량" disabled={amtLocked} title={amtLocked ? "금액 변경은 조회화면의 [수정 요청]·[정정 요청]으로 요청하세요(승인 후 반영)" : r.quantityFromSale ? `판매수량(${r.quantity}) 복사값 — 실제 수량을 입력하세요` : undefined}
+                ? <input type="number" min={0} inputMode="numeric" data-testid={`perf-qty-${i}`} aria-label="수량" disabled={amtLocked} title={amtLocked ? "금액 변경은 조회화면의 [수정 요청]·[정정 요청]으로 요청하세요(승인 후 반영)" : r.quantityFromSale ? `판매수량(${r.saleCopiedQty ?? r.quantity}) 복사값 — 실제 수행수량이 확인되면 입력하세요(빈 값 저장 가능)` : undefined}
                     style={{ ...inp, textAlign: 'right', ...(r.quantityFromSale ? { borderColor: C.danger } : {}) }} placeholder={settleVendor ? '수량 입력' : undefined}
                     value={r.quantity == null || r.quantity === '' ? '' : String(r.quantity)} onChange={e => patchRow(i, { quantity: e.target.value, quantityFromSale: false, _qtyManual: true, ...promoteVendor(), ...vendorClearPatch(r, 'quantity', e.target.value) })} />
                 : (r.quantityFromSale && qtyInCalc
@@ -1079,8 +1083,8 @@ export default function PerformanceSection({ projectId, token, performances, onC
         {vs ? (vs.type === 'domestic' ? <>
           <td style={{ ...tdR, width: RW.cost, fontWeight: 700, color: C.primaryText }} data-testid={`perf-supply-${i}`} title="공급가액 = 수량 × 단가">
             <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 400 }}>공급가액</div>{won(vs.supply)}원
-            {r.contractUnitPrice != null && r.contractUnitPrice !== '' && (r.quantity == null || r.quantity === '') &&
-              <div data-testid={`perf-supply-needqty-${i}`} style={{ fontSize: 10, color: C.danger, fontWeight: 400 }}>수량 입력 필요</div>}
+            {vendorQtyMissing(r) &&
+              <div data-testid={`perf-supply-needqty-${i}`} role="alert" style={{ fontSize: 10, color: C.danger, fontWeight: 700 }}>수량 입력 필요 · 저장 불가</div>}
             {editable && <button type="button" onClick={() => setAmountPopup(i)} data-testid={`perf-vendor-detail-${i}`} aria-label="매입 증빙 상세"
               style={{ marginTop: 2, border: `1px solid ${C.g300}`, borderRadius: 5, background: '#fff', cursor: 'pointer', padding: '0 6px', fontSize: 10, fontWeight: 600 }}>증빙상세</button>}</td>
           <td style={{ ...tdR, width: RW.cost }} data-testid={`perf-total-${i}`} title="부가세 = 공급가액 × 부가세율 · 합계 = 공급가액 + 부가세">

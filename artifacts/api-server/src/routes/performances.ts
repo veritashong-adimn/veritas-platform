@@ -17,7 +17,7 @@ import {
 } from "@workspace/db";
 import { LANGUAGE_CODES } from "./products";
 import { normalizeCompanyName } from "../lib/normalizeCompany";
-import { eq, and, isNull, inArray, ne, desc, sql } from "drizzle-orm";
+import { eq, and, isNull, inArray, ne, desc, sql, or, isNotNull } from "drizzle-orm";
 import { z } from "zod";
 import { requireAuth, requireRole, requireRolePermission } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
@@ -1172,6 +1172,21 @@ router.put("/admin/projects/:id/performances", ...adminGuard, requireRolePermiss
   const { rows, deletedIds } = parsed.data;
   const changeReason = parsed.data.changeReason?.trim() || null;
   const userId = req.user?.id ?? null;
+  // 외주 정산 행(공급가액 = 수량 × 단가)에 단가가 있는데 수량이 비어 있으면 저장 차단 — 수량 미입력이 0원으로 저장돼
+  //   기존 지급금액이 사라지는 것을 막는다(KDI 155). 지급완료·지급회차 배정 행은 금액 변경 대상이 아니므로 검사에서 제외.
+  {
+    const missing = rows.filter(r => r.performerCategory === "vendor" && r.vendorSettlementType && r.contractUnitPrice != null && r.quantity == null);
+    if (missing.length) {
+      const ids = missing.map(r => r.id).filter((x): x is number => x != null);
+      const locked = new Set<number>(ids.length ? (await db.select({ id: performanceAssignmentsTable.id }).from(performanceAssignmentsTable)
+        .where(and(inArray(performanceAssignmentsTable.id, ids), or(eq(performanceAssignmentsTable.paymentStatus, "paid"), isNotNull(performanceAssignmentsTable.payoutRoundId))))).map(x => x.id) : []);
+      const block = missing.filter(r => r.id == null || !locked.has(r.id));
+      if (block.length) {
+        res.status(400).json({ error: "외주업체 수행행에 수량이 입력되지 않았습니다. 수량 × 단가로 공급가액을 계산하므로 수량을 입력해 주세요.", code: "VENDOR_QTY_REQUIRED", assignmentIds: block.map(r => r.id ?? null) });
+        return;
+      }
+    }
+  }
   // 해외송금 내역이 있는 수행행은 해외 외주 정산유형을 벗어나거나 삭제할 수 없다 — 외화 송금 후 원화로 재지급되는 이중지급 방지.
   {
     const leaving = [...deletedIds, ...rows.filter(r => r.id != null && !(r.performerCategory === "vendor" && r.vendorSettlementType === "overseas")).map(r => r.id as number)];
