@@ -29,7 +29,7 @@ import {
   CATEGORY_OPTS, TREATMENT_OPTS, normalizeTreatment, effectiveTreatment,
   PERFORMER_TYPE_OPTS, resolvePerformerType, performerTypeLabel, canonicalLineCategory,
   PAYMENT_STATUS_OPTS, PAYMENT_STATUS_SELECTABLE_OPTS,
-  PaymentBadge, LegacyPayoutBadge, unitChangePatch, UNIT_OPTS, payStage, vendorAmountFromIndividual, vendorClearPatch, clearSaleCopiedQty, vendorQtyMissing,
+  PaymentBadge, LegacyPayoutBadge, unitChangePatch, UNIT_OPTS, payStage, vendorAmountFromIndividual, vendorClearPatch, vendorQtyMissing,
 } from './performanceShared';
 import { DateField } from './DatePickerShared';
 import { exportPerformances, type PerformanceExportMeta } from '../../lib/performanceExcel';
@@ -221,8 +221,9 @@ export default function PerformanceSection({ projectId, token, performances, onC
     return out;
   }, [list, q, catFilter, payFilter, onlyUnpaid, sortKey, sortDir]);
 
-  // 판매수량 복사 수량은 수정모드에서도 조회화면과 같은 기준으로 빈 값(clearSaleCopiedQty)
-  const enterEdit = () => { setRows(list.map(toRow).map(clearSaleCopiedQty)); setDeletedIds([]); setPinnedEtcCols([]); setEditMode(true); };
+  // 수정 진입은 저장값을 그대로 연다(수량·금액·수익률 불변). 판매수량 복사 수량은 값은 두고 표시만 구분하며,
+  //   사용자가 수량을 실제로 바꿨을 때만 새 금액이 계산된다. [취소]는 편집 상태를 버려 원래 값으로 돌아간다.
+  const enterEdit = () => { setRows(list.map(toRow)); setDeletedIds([]); setPinnedEtcCols([]); setEditMode(true); };
   const cancelEdit = () => { setRows([]); setDeletedIds([]); setPinnedEtcCols([]); setEditMode(false); setAmountPopup(null); setAdjustPopup(null); };
   // 기타비용 선택기(§1~§4) — 항목 선택 시 동적 컬럼 추가(pin). 직접입력은 항목명 입력(빈이름·중복·전용3종 금지 §6·§11).
   const addEtcCol = (type: string) => setPinnedEtcCols(prev => prev.includes(type) ? prev : [...prev, type]);
@@ -1052,9 +1053,11 @@ export default function PerformanceSection({ projectId, token, performances, onC
         <td style={tdR}>
           {(editable ? qtyCols : qtyShown)
             ? (editable
-                ? <input type="number" min={0} inputMode="numeric" data-testid={`perf-qty-${i}`} aria-label="수량" disabled={amtLocked} title={amtLocked ? "금액 변경은 조회화면의 [수정 요청]·[정정 요청]으로 요청하세요(승인 후 반영)" : r.quantityFromSale ? `판매수량(${r.saleCopiedQty ?? r.quantity}) 복사값 — 실제 수행수량이 확인되면 입력하세요(빈 값 저장 가능)` : undefined}
-                    style={{ ...inp, textAlign: 'right', ...(r.quantityFromSale ? { borderColor: C.danger } : {}) }} placeholder={settleVendor ? '수량 입력' : undefined}
+                ? <><input type="number" min={0} inputMode="numeric" data-testid={`perf-qty-${i}`} aria-label="수량" disabled={amtLocked} title={amtLocked ? "금액 변경은 조회화면의 [수정 요청]·[정정 요청]으로 요청하세요(승인 후 반영)" : r.quantityFromSale ? (qtyInCalc ? `판매수량(${r.quantity}) 복사값 — 현재 금액 계산에 사용 중. 실제 수량을 입력하세요` : `판매수량(${r.quantity}) 복사값 — 지급액 계산에 쓰이지 않음(실제 수행수량 아님)`) : undefined}
+                    style={{ ...inp, textAlign: 'right', ...(r.quantityFromSale ? (qtyInCalc ? { borderColor: C.danger, color: C.danger } : { borderStyle: 'dashed', color: C.textMuted }) : {}) }} placeholder={settleVendor ? '수량 입력' : undefined}
+                    data-sale-copied={r.quantityFromSale ? (qtyInCalc ? 'in-calc' : 'unused') : undefined}
                     value={r.quantity == null || r.quantity === '' ? '' : String(r.quantity)} onChange={e => patchRow(i, { quantity: e.target.value, quantityFromSale: false, _qtyManual: true, ...promoteVendor(), ...vendorClearPatch(r, 'quantity', e.target.value) })} />
+                {editable && r.quantityFromSale && <div data-testid={`perf-qty-sale-copied-${i}`} style={{ fontSize: 10, color: qtyInCalc ? C.danger : C.textMuted, whiteSpace: 'nowrap' }}>{qtyInCalc ? '판매수량 복사 · 확인 필요' : '판매수량 복사'}</div>}</>
                 : (r.quantityFromSale && qtyInCalc
                   ? <span style={{ color: C.danger, fontWeight: 700 }} title={`판매수량(${r.quantity}) 복사값 — 실제 수량 확인 필요(금액 계산에 사용 중)`} data-testid={`perf-qty-from-sale-warn-${i}`}>{num(r.quantity).toLocaleString('ko-KR', { maximumFractionDigits: 2 })} ⚠</span>
                   : r.quantityFromSale ? <span title={`판매수량(${r.quantity}) 복사값 — 개별 수행 수량 미상(지급액 계산 미사용)`} data-testid={`perf-qty-from-sale-${i}`}>—</span>
@@ -1191,7 +1194,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
           </div>
         </td>
         {/* 수익률%(§4·§5) — (공급가액 − 세전원가합계) ÷ 공급가액 × 100. 계산불가/미입력은 '—'. 적자(음수)만 붉은색(과도한 강조 없음 §13). */}
-        <td style={{ ...tdR, width: 92 }} title={profit == null ? '판매 공급가액 없음 또는 원가 미입력 — 계산불가' : '(판매 공급가액 − 세전 수행원가 합계) ÷ 판매 공급가액'}>
+        <td style={{ ...tdR, width: 92 }} data-testid={`perf-profit-${i}`} title={profit == null ? '판매 공급가액 없음 또는 원가 미입력 — 계산불가' : '(판매 공급가액 − 세전 수행원가 합계) ÷ 판매 공급가액'}>
           {profit == null
             ? muted
             : <span style={{ fontWeight: 600, color: profit < 0 ? C.danger : C.textPrimary }}>{profit.toFixed(1)}%</span>}

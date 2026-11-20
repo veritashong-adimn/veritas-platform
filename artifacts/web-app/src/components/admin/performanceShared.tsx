@@ -332,7 +332,6 @@ export interface Row {
   //  · quantityFromSale: 진행관리 '수행 수량'이 없어 판매수량(전체 행사 수량)이 복사된 값 — 개별 수행 수량 아님(표시 '—')
   legacyPayout?: { lineageStatus: string; display: 'paid' | 'scheduled' | 'review' | null; label: string | null } | null;
   quantityFromSale?: boolean;
-  saleCopiedQty?: string | number | null;   // 수정모드에서 비운 판매수량 복사값(안내 표시용, 저장 안 함)
   // 정산요약(읽기전용)
   grossPayment?: string | number | null;
   withholdingTax?: string | number | null;
@@ -694,21 +693,8 @@ export function calcRowCostPreview(r: Row): { base: number; expenseTotal: number
 //     수량이 비어 있으면 공급가액 0(수량 × 단가 미확정) — 이전 금액으로 되돌아가지 않는다.
 //   · 이미 외주업체인데 직접금액 설정이 남아 있는 행(이전 버전에서 변경된 행, 예: KDI 155 코리아미디어 통역장비)도 같은 규칙으로 정리.
 //   · 단가×수량 행(번역 단가 등)은 이미 단가 의미이므로 유지, 공급가액 폴백값만 현재 금액으로 맞춘다.
-// 과거 CRM 판매수량이 수행수량으로 복사된 행(quantityFromSale) — 수정모드 진입 시 조회화면과 같은 기준으로 '수량 미상(빈 값)'으로 연다.
-//   · 금액 계산에 수량을 쓰지 않는 행(직접금액 통번역사 행·단가 없는 행): 수량만 비움 → 지급액·원천세 불변
-//   · 외주 정산 행(공급가액 = 수량 × 단가): 수량을 비우고 공급가액 0(수량 입력 필요) — 판매수량 44 × 단가로 저장되지 않게
-//   · 개인 단가×수량 행(수량이 지급액 계산에 쓰임): 지급액 보존을 위해 값 유지(경고만)
-//   · 지급완료·지급회차 배정(잠금) 행은 변경하지 않는다.  저장하면 빈 값(null)으로 저장된다.
-export function clearSaleCopiedQty(r: Row): Row {
-  if (!r.quantityFromSale || isPayLocked(r)) return r;
-  const hasPrice = r.contractUnitPrice != null && r.contractUnitPrice !== '';
-  const settleVendor = r.performerCategory === 'vendor' && !!r.vendorSettlementType;
-  if (r.performerCategory !== 'vendor' && hasPrice && !r.isDirectAmount) return r;
-  return { ...r, saleCopiedQty: r.quantity, quantity: '', ...(settleVendor && hasPrice ? { supplyAmount: '0' } : {}) };
-}
-
 // 외주 정산 행(공급가액 = 수량 × 단가)에서 단가가 있는데 수량이 비어 있음 — 저장 차단 대상(0원 자동 저장 방지).
-//   지급완료·지급회차 배정(잠금) 행은 제외. 통번역사 직접금액 행은 수량과 무관하게 기존 금액 유지(대상 아님).
+//   지급완료·지급회차 배정(잠금) 행은 제외. 통번역사 직접금액 행·단가 없는 외주 행(0원 리시버 등)은 대상 아님.
 export function vendorQtyMissing(r: Row): boolean {
   const filled = (v: unknown) => v != null && v !== '';
   return r.performerCategory === 'vendor' && !!r.vendorSettlementType && filled(r.contractUnitPrice) && !filled(r.quantity) && !isPayLocked(r);
