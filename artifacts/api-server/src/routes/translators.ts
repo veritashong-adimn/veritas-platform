@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import { findExcludedTranslatorByEmail, restoreExcludedTranslator, RestoreError } from "../services/translatorExcludedRestore";
 import bcrypt from "bcryptjs";
 import { randomBytes } from "crypto";
 import multer from "multer";
@@ -776,7 +777,15 @@ router.post("/admin/translators", ...adminGuard, async (req, res) => {
   try {
     // 대소문자·공백 무시 중복검사(§TOP4) — 저장값도 정규화되므로 lower() 비교로 기존 mixed-case 데이터까지 포착.
     const existing = await db.select({ id: usersTable.id }).from(usersTable).where(sql`lower(${usersTable.email}) = ${normEmail}`).limit(1);
-    if (existing.length > 0) { res.status(409).json({ error: "이미 등록된 이메일입니다." }); return; }
+    if (existing.length > 0) {
+      // 명부 제외(삭제) 통번역사의 이메일이면 단순 중복 오류 대신 기존 기록 안내 — 화면에서 [기존 기록 복원] 선택(신규 계정 중복 생성 금지)
+      const excluded = await findExcludedTranslatorByEmail(db, normEmail);
+      if (excluded) {
+        res.status(409).json({ error: "명부에서 제외된 기존 통번역사 기록이 이 이메일을 사용하고 있습니다.", code: "EXCLUDED_TRANSLATOR_MATCH", excluded });
+        return;
+      }
+      res.status(409).json({ error: "이미 등록된 이메일입니다." }); return;
+    }
 
     const inviteToken = generateInviteToken();
     const [newUser] = await db.insert(usersTable).values({
@@ -3239,6 +3248,21 @@ router.post("/admin/translators/:id/sensitive", ...adminGuard, requirePermission
   } catch (err) {
     req.log.error({ err }, "Sensitive: failed to save");
     res.status(500).json({ error: "민감정보 저장 실패." });
+  }
+});
+
+// ─── 명부 제외 통번역사 기록 복원 — 확정 이관 규칙(식별정보·수행이력) 충족 시. 동명 Master 병합·이메일 이동 없음 ───────
+router.post("/admin/translators/:id/restore-excluded", ...adminGuard, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "유효하지 않은 통번역사 id." }); return; }
+  const reason = String(req.body?.reason ?? "").trim() || null;
+  try {
+    const out = await db.transaction((tx: any) => restoreExcludedTranslator(tx, id, { userId: req.user?.id ?? null, userEmail: req.user?.email ?? null, reason }));
+    res.json(out);
+  } catch (err: any) {
+    if (err instanceof RestoreError) { res.status(err.status).json({ error: err.message, code: err.code }); return; }
+    req.log.error({ err }, "Translators: restore-excluded failed");
+    res.status(500).json({ error: "복원 중 오류가 발생했습니다(변경 없음)." });
   }
 });
 

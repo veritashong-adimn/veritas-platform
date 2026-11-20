@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { api, normalizeLanguages, LangExpEntry, emptyLangExp } from "../../lib/constants";
 import { formatPhoneNumber } from "../../lib/utils";
-import { Card, PrimaryBtn, GhostBtn, ClickSelect, alertDialog } from "../ui";
+import { Card, PrimaryBtn, GhostBtn, ClickSelect, alertDialog, confirmDialog } from "../ui";
 import { DraggableModal } from "./DraggableModal";
 import { PAYMENT_METHODS, SETTLEMENT_TYPES, BankNameSelect } from "./SensitiveInfoModal";
 import {
@@ -696,6 +696,28 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
       });
       const data = await res.json();
       if (!res.ok) {
+        if (res.status === 409 && data.code === 'EXCLUDED_TRANSLATOR_MATCH' && data.excluded) {
+          // 명부 제외(삭제)된 기존 통번역사 기록의 이메일 — 단순 중복 오류 대신 안내 후 [기존 기록 복원](신규 계정 중복 생성·동명이인 병합 없음)
+          const ex = data.excluded;
+          const basis = `공식 식별정보 ${ex.hasOfficialId ? '있음' : '없음'} · CRM 수행이력 ${ex.crmHistoryCount}건 · 플랫폼 수행/지급 ${ex.platformHistoryCount}건`;
+          setErrors({ email: `명부에서 제외된 기존 기록(${ex.name ?? '이름 없음'})이 이 이메일을 사용 중입니다.` });
+          if (!ex.eligible || ex.emailInUseByOther) {
+            await alertDialog({ title: '기존 기록 확인 필요', message: `${ex.name ?? ''} (${ex.languagePairs ?? '언어 미상'})\n${basis}\n\n${ex.emailInUseByOther ? '다른 활성 계정이 같은 이메일을 사용 중이라 복원할 수 없습니다.' : '식별정보·수행이력이 없어 명부 제외 대상입니다.'} 관리자에게 확인하세요.` });
+            return;
+          }
+          const ok = await confirmDialog({ title: '제외된 기존 통번역사 기록', confirmLabel: '기존 기록 복원', variant: 'warning',
+            message: `이 이메일은 명부에서 제외된 기존 통번역사 기록에 연결되어 있습니다.\n\n${ex.name ?? ''} (${ex.languagePairs ?? '언어 미상'})\n${basis}\n\n신규 계정을 만들지 않고 기존 기록(수행·지급 이력 포함)을 복원합니다. 이름이 같은 다른 통번역사와는 병합하지 않습니다.\n복원 후 상세 화면에서 입력한 정보를 확인·보완하세요.` });
+          if (!ok) return;
+          const rr = await fetch(api(`/api/admin/translators/${ex.translatorId}/restore-excluded`), {
+            method: 'POST', headers: { ...authH, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reason: '신규 등록 요청 — 이메일 일치 기존 기록 복원' }),
+          });
+          const rd = await rr.json().catch(() => ({}));
+          if (!rr.ok) { onToast(`오류: ${rd.error ?? '복원 실패'}`); return; }
+          onToast(`기존 통번역사 "${rd.name ?? ''}" 기록을 복원했습니다. 상세에서 정보를 확인하세요.`);
+          onCreated({ id: rd.id, name: rd.name, email: rd.email, restored: true });
+          return;
+        }
         if (res.status === 409) setErrors({ email: data.error });
         else onToast(`오류: ${data.error}`);
         return;
@@ -1009,7 +1031,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
           <div>
             <label style={labelSt}>이름 <span style={{ color: "#dc2626" }}>*</span></label>
             <input type="text" value={form.name} onChange={e => setF("name", e.target.value)}
-              placeholder="홍길동"
+              placeholder="홍길동" data-testid="translator-create-name" aria-label="이름"
               style={{ ...inputStyle, borderColor: errors.name ? "#dc2626" : "#d1d5db" }} />
             {errors.name && <span style={errStyle}>{errors.name}</span>}
           </div>
@@ -1032,9 +1054,9 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         <div style={{ marginTop: 10 }}>
           <label style={labelSt}>이메일 <span style={{ color: "#dc2626" }}>*</span></label>
           <input type="email" value={form.email} onChange={e => setF("email", e.target.value)}
-            placeholder="example@email.com"
+            placeholder="example@email.com" data-testid="translator-create-email" aria-label="이메일"
             style={{ ...inputStyle, borderColor: errors.email ? "#dc2626" : "#d1d5db" }} />
-          {errors.email && <span style={errStyle}>{errors.email}</span>}
+          {errors.email && <span style={errStyle} data-testid="translator-create-email-error">{errors.email}</span>}
         </div>
 
         {/* 학력 · 전공 · 졸업상태 · 졸업년도 */}
