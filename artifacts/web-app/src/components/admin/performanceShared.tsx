@@ -685,6 +685,32 @@ export function calcRowCostPreview(r: Row): { base: number; expenseTotal: number
   return { base, expenseTotal, deductionTotal, costTotal: round2(base + expenseTotal - deductionTotal) };
 }
 
+// 통번역사(개인) 행 → 외주업체 변경 시 금액 이전(2026-11 KDI School 건).
+//   개인 직접금액 행은 요금(100%)을 contractUnitPrice 에 '총액'으로 담는다. 외주 정산은 공급가액 = 수량 × 단가이므로 그대로 두면
+//   요금 총액 × 수량(예: 600,000 × 44 = 26,400,000)으로 중복 계산된다. → 변경 직전 지급 기준금액(세전 base)을 1식 단가로 옮긴다.
+//   · 직접금액 행: 수량 1 · 단가 = 기존 base · 직접금액 해제 (base 0 이면 단가 공란·공급가액 0)
+//   · 단가×수량 행(번역 단가 등): 이미 단가 의미이므로 유지, 공급가액 폴백값만 현재 base 로 맞춘다(오래된 공급가액 잔존 방지)
+//   이미 외주 행이면 변경 없음.
+export function vendorAmountFromIndividual(r: Row): Partial<Row> {
+  if (r.performerCategory === 'vendor') return {};
+  const base = calcRowCostPreview(r).base;
+  if (r.isDirectAmount) {
+    return base > 0
+      ? { isDirectAmount: false, directAmount: null, contractUnitPrice: String(base), quantity: '1', quantityFromSale: false, supplyAmount: String(base) }
+      : { isDirectAmount: false, directAmount: null, contractUnitPrice: null, supplyAmount: '0' };
+  }
+  return { supplyAmount: String(base) };
+}
+
+// 외주 정산 행에서 수량·단가를 지우면 공급가액 = 0 (저장된 이전 공급가액으로 되돌아가지 않게).
+//   지우기 직전 수량·단가가 모두 있던(= 화면 금액이 수량×단가였던) 경우에만 적용 — 단가 없이 공급가액만 있던 기존 행은 그대로.
+export function vendorClearPatch(r: Row, field: 'quantity' | 'contractUnitPrice', value: string): Partial<Row> {
+  if (r.performerCategory !== 'vendor') return {};
+  const filled = (v: unknown) => v != null && v !== '';
+  const hadQP = filled(r.quantity) && filled(r.contractUnitPrice);
+  return hadQP && !filled(value) ? { supplyAmount: '0', [field]: value } as Partial<Row> : {};
+}
+
 export function calcVendorPreview(r: Row): { supply: number; vat: number; total: number } {
   const supply = round2(num(r.supplyAmount));
   let vat = 0;

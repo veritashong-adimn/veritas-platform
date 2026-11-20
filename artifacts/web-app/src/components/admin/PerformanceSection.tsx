@@ -29,7 +29,7 @@ import {
   CATEGORY_OPTS, TREATMENT_OPTS, normalizeTreatment, effectiveTreatment,
   PERFORMER_TYPE_OPTS, resolvePerformerType, performerTypeLabel, canonicalLineCategory,
   PAYMENT_STATUS_OPTS, PAYMENT_STATUS_SELECTABLE_OPTS,
-  PaymentBadge, LegacyPayoutBadge, unitChangePatch, UNIT_OPTS, payStage,
+  PaymentBadge, LegacyPayoutBadge, unitChangePatch, UNIT_OPTS, payStage, vendorAmountFromIndividual, vendorClearPatch,
 } from './performanceShared';
 import { DateField } from './DatePickerShared';
 import { exportPerformances, type PerformanceExportMeta } from '../../lib/performanceExcel';
@@ -516,6 +516,8 @@ export default function PerformanceSection({ projectId, token, performances, onC
     const r = rows[i];
     // 업체 정보(상호·업체유형·사업자번호)는 검색결과에 포함(비PII) — 로컬 반영만. 저장 시 서버가 스냅샷 재도출.
     patchRow(i, {
+      // 통번역사 → 외주업체 변경 시 기존 금액을 외주 단가(1식)로 이전 — 요금 총액 × 수량 중복 계산 방지(vendorAmountFromIndividual)
+      ...vendorAmountFromIndividual(r),
       performerCategory: 'vendor', vendorCompanyId: c.id, individualUserId: null,
       performerNameSnapshot: c.name, vendorTypeSnapshot: c.vendorType ?? null,
       // 통번역사 행에서 외주업체를 고른 경우(변경 포함) 세부구분도 업체 기준으로 — 업체유형에서 도출, 미상이면 '외주업체'.
@@ -1043,7 +1045,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
             ? (editable
                 ? <input type="number" min={0} inputMode="numeric" data-testid={`perf-qty-${i}`} aria-label="수량" disabled={amtLocked} title={amtLocked ? "금액 변경은 조회화면의 [수정 요청]·[정정 요청]으로 요청하세요(승인 후 반영)" : undefined}
                     style={{ ...inp, textAlign: 'right' }}
-                    value={r.quantity == null || r.quantity === '' ? '' : String(r.quantity)} onChange={e => patchRow(i, { quantity: e.target.value, quantityFromSale: false, _qtyManual: true, ...promoteVendor() })} />
+                    value={r.quantity == null || r.quantity === '' ? '' : String(r.quantity)} onChange={e => patchRow(i, { quantity: e.target.value, quantityFromSale: false, _qtyManual: true, ...promoteVendor(), ...vendorClearPatch(r, 'quantity', e.target.value) })} />
                 : (r.quantityFromSale ? <span title={`판매수량(${r.quantity}) 복사값 — 개별 수행 수량 미상(지급액 계산 미사용)`} data-testid={`perf-qty-from-sale-${i}`}>—</span>
                   : <span>{r.quantity != null && r.quantity !== '' ? num(r.quantity).toLocaleString('ko-KR', { maximumFractionDigits: 2 }) : muted}</span>))
             : muted}
@@ -1063,7 +1065,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
         {/* ⑯ 단가 — 번역/장비 전용(계약단가). */}
         <td style={tdR}>
           {qtyCols
-            ? (editable ? priceCell(r.contractUnitPrice, v => patchRow(i, { contractUnitPrice: v, ...promoteVendor() }), `perf-unitprice-${i}`, '단가', amtLocked) : (r.contractUnitPrice != null && r.contractUnitPrice !== '' ? `${won(r.contractUnitPrice)}원` : muted))
+            ? (editable ? priceCell(r.contractUnitPrice, v => patchRow(i, { contractUnitPrice: v, ...promoteVendor(), ...vendorClearPatch(r, 'contractUnitPrice', v) }), `perf-unitprice-${i}`, '단가', amtLocked) : (r.contractUnitPrice != null && r.contractUnitPrice !== '' ? `${won(r.contractUnitPrice)}원` : muted))
             : muted}
         </td>
         {/* 지급액(세전) — 수행원가(정산·수익률 기준 §3·§6). 기존 지급액값 그대로. */}

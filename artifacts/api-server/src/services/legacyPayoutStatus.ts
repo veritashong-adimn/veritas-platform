@@ -45,10 +45,16 @@ export async function loadPerformanceAnnotations(dbx: Dbx, projectId: number) {
       to_char(pa.actual_payment_date, 'YYYY-MM-DD') AS actual, pa.actual_payment_amount,
       s.status AS lineage_status,
       -- 과거 CRM 진행행에 '수행 수량'이 없어 판매수량이 복사된 직접금액 행(지급액 계산에는 쓰이지 않는 값)
-      (s.id IS NOT NULL AND pa.is_direct_amount AND pa.quantity IS NOT NULL AND pa.quantity > 1
-        AND EXISTS (SELECT 1 FROM quote_items qi WHERE qi.quote_id = pa.quote_id AND qi.quantity = pa.quantity)) AS qty_from_sale
+      --   판정: 판매품목 수량과 같거나, 판매품목이 이후 수정됐으면 원본 진행행의 '수행 수량(통번역수량)'이 비어 있고 저장 수량 = 원본 판매 '수량'.
+      --   외주 정산(공급가액 = 수량 × 단가) 행은 수량이 계산에 쓰이므로 표시를 바꾸지 않는다(값 그대로 노출 → 담당자가 정정).
+      (s.id IS NOT NULL AND pa.is_direct_amount AND pa.performer_category <> 'vendor' AND pa.quantity IS NOT NULL AND pa.quantity > 1
+        AND (EXISTS (SELECT 1 FROM quote_items qi WHERE qi.quote_id = pa.quote_id AND qi.quantity = pa.quantity)
+          OR (coalesce(nullif(replace(src.source_raw->>'통번역수량', ',', ''), ''), '0') ~ '^0+(\\.0+)?$'
+              AND nullif(replace(src.source_raw->>'수량', ',', ''), '') ~ '^[0-9]+(\\.[0-9]+)?$'
+              AND replace(src.source_raw->>'수량', ',', '')::numeric = pa.quantity))) AS qty_from_sale
     FROM performance_assignments pa
     LEFT JOIN import_row_sources s ON s.module = ${ACTIVATION_MODULE} AND s.entity_id = pa.id AND s.row_key LIKE 'progress:%'
+    LEFT JOIN legacy_archive_rows src ON s.id IS NOT NULL AND src.id::text = substring(s.row_key from 10)
     WHERE pa.project_id = ${projectId} AND pa.deleted_at IS NULL`);
   const today = todayKst();
   const map = new Map<number, { legacyPayout: { lineageStatus: string; display: LegacyPayoutDisplay | null; label: string | null } | null; quantityFromSale: boolean }>();

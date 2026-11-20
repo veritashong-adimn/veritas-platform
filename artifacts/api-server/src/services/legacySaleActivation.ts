@@ -129,11 +129,11 @@ async function matchStaff(dbx: Dbx, name: string | null) {
 //   수행비 항목으로 계산한 세전액이 원본 지급액(세전)과 다르면, 원본 지급액을 그대로 원가로 보존한다(금액 추정·변경 금지).
 export function buildLegacyPayload(rr: ReturnType<typeof rawRowFromRecord>, translatorId: number | null) {
   const z = (v: number | null) => (v == null || v === 0 ? null : v);
-  const clean = { ...rr, fee100: z(rr.fee100), fee85: z(rr.fee85), perfUnitPrice: z(rr.perfUnitPrice), perfQuantity: z(rr.perfQuantity), quantity: z(rr.quantity) };
+  // 진행관리 원본의 '수량'은 판매(행사 전체) 수량이 모든 수행행에 반복 기록된 값이다(예: KDI School 2026-11-09-0002 '수량'=44 × 9행).
+  //   개별 수행 수량은 '통번역수량'(perfQuantity)뿐이므로, 판매수량을 수행 수량으로 대신 쓰지 않는다(직접금액·단가 행 공통).
+  //   (2026-11-13 직접금액 행만 막았던 것을 단가 행까지 확대 — 수행 수량이 없으면 수량 공란, 지급액은 아래 원본 지급액 보존 규칙으로 유지)
+  const clean = { ...rr, fee100: z(rr.fee100), fee85: z(rr.fee85), perfUnitPrice: z(rr.perfUnitPrice), perfQuantity: z(rr.perfQuantity), quantity: null };
   let payload: any = buildAssignPayload(clean, translatorId);
-  // 진행관리 '수행 수량'이 없으면 buildAssignPayload 가 판매수량(전체 행사 수량)을 대신 넣는다 — 직접금액(요금) 행은
-  //   지급액 계산에 수량을 쓰지 않으므로 판매수량을 개별 수행 수량으로 복사하지 않는다(2026-11-13, 이후 전환분부터).
-  if (clean.perfQuantity == null && payload.isDirectAmount) payload = { ...payload, quantity: null };
   let gross = computeAssignPreview(payload).gross;
   const original = rr.preTaxPayout != null && rr.preTaxPayout > 0 ? rr.preTaxPayout : null;
   let basis: "breakdown" | "original" = "breakdown";

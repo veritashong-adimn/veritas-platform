@@ -387,7 +387,10 @@ function matchTranslator(name: string, m: Masters): { id: number | null; status:
 export function buildAssignPayload(r: RawRow, translatorId: number | null): RowInput {
   const isInterp = r.category === "interpretation";
   let isDirectAmount = false; let directAmount: number | null = null;
-  let contractUnitPrice: number | null = null; let quantity: number | null = r.perfQuantity ?? r.quantity;
+  // 수행 수량 = 원본 '통번역수량'(수행수량·작업량)만 사용. 결제리스트·과거 CRM 진행관리의 '수량'은 판매(행사 전체) 수량이므로
+  //   수행 수량이 비어 있어도 판매수량으로 대체하지 않는다(2026-11 KDI School '수량 44' 건). 수량 미상이면 단가×수량 계산을 하지 않고
+  //   요금·통역료 직접금액 규칙으로 처리되며, 원본 지급액(세전)과의 차이는 미리보기 차액으로 그대로 표시된다(금액 추정 금지).
+  let contractUnitPrice: number | null = null; let quantity: number | null = r.perfQuantity;
   if (isInterp) {
     // 통역: 요율(85%)=directAmount(지급base ×0.85 규칙), 요금(100%)=참조. 단가×수량 폴백.
     if (r.fee85 != null) { isDirectAmount = true; directAmount = r.fee85; contractUnitPrice = r.fee100; }
@@ -549,7 +552,7 @@ export async function analyzePastWork(buffer: Buffer): Promise<AnalyzeResult> {
         category: r.category, translatorName: r.translatorName, matchedTranslatorId: tm.id,
         language: r.language, fileName: r.fileName, content: r.content,
         deliveryDate: r.deliveryDate, payDate: r.payDate,
-        quantity: r.perfQuantity ?? r.quantity, unit: r.perfUnit, unitPrice: r.perfUnitPrice,
+        quantity: r.perfQuantity, unit: r.perfUnit, unitPrice: r.perfUnitPrice,   // 수행 수량만(판매수량 대체 금지)
         fee100: r.fee100, fee85: r.fee85,
         transportFee: r.transportFee, businessTripFee: r.businessTripFee,
         travelDayCompensation: r.travelDayCompensation, copyrightFee: r.copyrightFee, cancellationCompensation: r.cancellationCompensation,
