@@ -12,7 +12,7 @@ import {
   Row, ExpenseRow, DeductionRow, won, num, commafy, dateVal,
   EXPENSE_TYPE_SELECT_OPTS, CUSTOM_EXPENSE_VALUE, PREDEFINED_EXPENSE_VALUES,
   DEDUCTION_TYPE_OPTS, DEDUCTION_TYPE_SELECT_OPTS, CUSTOM_DEDUCTION_VALUE, PREDEFINED_DEDUCTION_VALUES, EVIDENCE_OPTS, RESIDENCY_OPTS,
-  calcVendorPreview, calcIndivPreview, calcRowCostPreview,
+  calcVendorPreview, calcIndivPreview, calcRowCostPreview, vendorSettlementPreview,
   defaultPayoutRate,
 } from './performanceShared';
 
@@ -337,7 +337,7 @@ export function AdjustmentPopup({ r, patch, onClose, excludeTypes, addDefaultTyp
 export function AmountDetailPopup({ r, patch, onClose }: { r: Row; patch: (p: Partial<Row>) => void; onClose: () => void }) {
   const cat = r.performerCategory;
   if (cat === 'vendor') {
-    const v = calcVendorPreview(r);
+    const v = r.vendorSettlementType ? vendorSettlementPreview(r) : calcVendorPreview(r);   // 정산유형 행은 수량×단가 기준(행 표시와 동일)
     const vatEditable = r.purchaseEvidenceType === 'other' || r.purchaseEvidenceType === 'none';
     return (
       <Modal title="외주 매입 금액상세" onClose={onClose}>
@@ -352,7 +352,10 @@ export function AmountDetailPopup({ r, patch, onClose }: { r: Row; patch: (p: Pa
           </div>
           <div>
             <label style={lbl}>공급가액</label>
-            {numInp(r.supplyAmount, val => patch({ supplyAmount: val }), 'pop-supply', '공급가액')}
+            {/* 정산유형 지정 외주 행 — 공급가액 = 수량 × 단가(행에서 입력). 여기 직접 입력은 저장 시 수량×단가로 덮여 '이전 값이 다시 나타나는' 원인이었으므로 읽기전용 */}
+            {r.vendorSettlementType
+              ? <div data-testid="pop-supply-readonly" title="수량 × 단가 — 행의 수량·단가에서 입력" style={{ ...inp, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', background: C.g50, color: C.textSecondary, fontVariantNumeric: 'tabular-nums' }}>{won(vendorSettlementPreview(r).supply)}원</div>
+              : numInp(r.supplyAmount, val => patch({ supplyAmount: val }), 'pop-supply', '공급가액')}
           </div>
           <div>
             <label style={lbl}>부가세{vatEditable ? '' : ' (자동)'}</label>

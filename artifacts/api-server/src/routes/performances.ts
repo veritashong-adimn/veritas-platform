@@ -985,7 +985,8 @@ export async function applyPerformanceRow(
     contractUnitPrice: r.contractUnitPrice != null ? String(r.contractUnitPrice) : null,
     quantity: r.quantity != null ? String(r.quantity) : null,
     unit: r.unit ?? null,
-    isDirectAmount: category === "expense" ? true : (r.isDirectAmount ?? false),
+    // 외주업체 행은 요금(100%)·통역료(85%) 직접금액을 쓰지 않는다(공급가액 = 수량 × 단가) — 통번역사에서 바뀐 행의 직접금액 설정 잔존 정리(KDI 155)
+    isDirectAmount: category === "expense" ? true : category === "vendor" ? false : (r.isDirectAmount ?? false),
     actualPaymentAmount: r.actualPaymentAmount != null ? String(r.actualPaymentAmount) : null,
     updatedBy: userId,
     updatedAt: new Date(),
@@ -1147,7 +1148,7 @@ export async function applyPerformanceRow(
   await tx.update(performanceAssignmentsTable).set({
     // directAmount(기준금액 입력값)를 basePerformanceFee(확정 base)와 분리 저장(§통역료85) — 재조회 시 입력값 복원.
     //   통역료(85%)는 directAmount×0.85 = basePerformanceFee 이므로 두 값이 다르다. 그 외(번역 요금100·경비)는 동일.
-    directAmount: r.directAmount != null ? String(r.directAmount) : null,
+    directAmount: (r.performerCategory ?? "individual") === "vendor" ? null : (r.directAmount != null ? String(r.directAmount) : null),
     basePerformanceFee: String(totals.basePerformanceFee),
     expenseTotal: String(totals.expenseTotal),
     deductionTotal: String(totals.deductionTotal),

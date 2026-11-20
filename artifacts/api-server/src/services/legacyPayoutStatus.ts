@@ -44,17 +44,22 @@ export async function loadPerformanceAnnotations(dbx: Dbx, projectId: number) {
       to_char(coalesce(pa.delivery_date, pa.delivery_date_auto), 'YYYY-MM-DD') AS delivery,
       to_char(pa.actual_payment_date, 'YYYY-MM-DD') AS actual, pa.actual_payment_amount,
       s.status AS lineage_status,
-      -- 과거 CRM 진행행에 '수행 수량'이 없어 판매수량이 복사된 직접금액 행(지급액 계산에는 쓰이지 않는 값)
-      --   판정: 판매품목 수량과 같거나, 판매품목이 이후 수정됐으면 원본 진행행의 '수행 수량(통번역수량)'이 비어 있고 저장 수량 = 원본 판매 '수량'.
-      --   외주 정산(공급가액 = 수량 × 단가) 행은 수량이 계산에 쓰이므로 표시를 바꾸지 않는다(값 그대로 노출 → 담당자가 정정).
-      (s.id IS NOT NULL AND pa.is_direct_amount AND pa.performer_category <> 'vendor' AND pa.quantity IS NOT NULL AND pa.quantity > 1
-        AND (EXISTS (SELECT 1 FROM quote_items qi WHERE qi.quote_id = pa.quote_id AND qi.quantity = pa.quantity)
-          OR (coalesce(nullif(replace(src.source_raw->>'통번역수량', ',', ''), ''), '0') ~ '^0+(\\.0+)?$'
-              AND nullif(replace(src.source_raw->>'수량', ',', ''), '') ~ '^[0-9]+(\\.[0-9]+)?$'
-              AND replace(src.source_raw->>'수량', ',', '')::numeric = pa.quantity))) AS qty_from_sale
+      -- 과거 CRM 판매수량이 수행 수량으로 복사된 값(개별 수행 수량 미상). 화면에서 '—'(계산 미사용) 또는 경고(계산 사용 중)로 표시 — 데이터 불변.
+      --   ① 이관 직접금액 행: 판매품목 수량과 같음(기존 규칙)
+      --   ② 같은 판매의 이관 원본 진행행 중 '통번역수량'이 비어 있고 원본 판매 '수량' = 이 행 수량인 것이 있음
+      --      (외주업체로 바뀐 행·행 복사로 추가된 행 포함 — 예: KDI 155 수량 44)
+      (pa.quantity IS NOT NULL AND pa.quantity > 1 AND (
+        (s.id IS NOT NULL AND pa.is_direct_amount
+          AND EXISTS (SELECT 1 FROM quote_items qi WHERE qi.quote_id = pa.quote_id AND qi.quantity = pa.quantity))
+        OR EXISTS (SELECT 1 FROM import_row_sources s2
+            JOIN performance_assignments p2 ON p2.id = s2.entity_id AND p2.project_id = pa.project_id
+            JOIN legacy_archive_rows src ON src.id::text = substring(s2.row_key from 10)
+          WHERE s2.module = ${ACTIVATION_MODULE} AND s2.row_key LIKE 'progress:%'
+            AND coalesce(nullif(replace(src.source_raw->>'통번역수량', ',', ''), ''), '0') ~ '^0+(\\.0+)?$'
+            AND nullif(replace(src.source_raw->>'수량', ',', ''), '') ~ '^[0-9]+(\\.[0-9]+)?$'
+            AND replace(src.source_raw->>'수량', ',', '')::numeric = pa.quantity))) AS qty_from_sale
     FROM performance_assignments pa
     LEFT JOIN import_row_sources s ON s.module = ${ACTIVATION_MODULE} AND s.entity_id = pa.id AND s.row_key LIKE 'progress:%'
-    LEFT JOIN legacy_archive_rows src ON s.id IS NOT NULL AND src.id::text = substring(s.row_key from 10)
     WHERE pa.project_id = ${projectId} AND pa.deleted_at IS NULL`);
   const today = todayKst();
   const map = new Map<number, { legacyPayout: { lineageStatus: string; display: LegacyPayoutDisplay | null; label: string | null } | null; quantityFromSale: boolean }>();

@@ -516,7 +516,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
     const r = rows[i];
     // 업체 정보(상호·업체유형·사업자번호)는 검색결과에 포함(비PII) — 로컬 반영만. 저장 시 서버가 스냅샷 재도출.
     patchRow(i, {
-      // 통번역사 → 외주업체 변경 시 기존 금액을 외주 단가(1식)로 이전 — 요금 총액 × 수량 중복 계산 방지(vendorAmountFromIndividual)
+      // 통번역사 → 외주업체 변경 시 요금(100%) 정리·기존 금액을 외주 단가로 이전(수량은 임의 생성 안 함) — 요금 총액 × 수량 중복 계산 방지
       ...vendorAmountFromIndividual(r),
       performerCategory: 'vendor', vendorCompanyId: c.id, individualUserId: null,
       performerNameSnapshot: c.name, vendorTypeSnapshot: c.vendorType ?? null,
@@ -892,6 +892,8 @@ export default function PerformanceSection({ projectId, token, performances, onC
       ? { vendorSettlementType: 'domestic', purchaseEvidenceType: r.purchaseEvidenceType === 'zero_rate_tax_invoice' || r.purchaseEvidenceType === 'invoice' ? r.purchaseEvidenceType : 'tax_invoice' }
       : {};
     const qtyCols = isTrans || isEquip || (editable && isIndiv) || settleVendor;
+    // 수량이 금액 계산에 실제로 쓰이는 행(외주: 수량×단가 / 개인 단가 행) — 판매수량 복사값이면 '—'로 숨기지 않고 경고 표시
+    const qtyInCalc = (settleVendor || !r.isDirectAmount) && r.contractUnitPrice != null && r.contractUnitPrice !== '';
     // 계산 수량·단위 표시(2026-11) — 수량 입력 위치를 우측으로 통합했으므로 조회모드에서도 개인 행(통역 등)의 저장 수량·단위를 우측에 표시.
     //   단가 칸은 기존 조건(qtyCols) 그대로 — 통역 조회모드의 요금(100%) 중복 표시를 만들지 않는다.
     const qtyShown = qtyCols || isIndiv;
@@ -991,6 +993,9 @@ export default function PerformanceSection({ projectId, token, performances, onC
             ? (editable ? priceCell(r.contractUnitPrice, v => setInterpFee100(i, v), `perf-fee100-${i}`, '요금(100%)', amtLocked) : (r.contractUnitPrice != null && r.contractUnitPrice !== '' ? `${won(r.contractUnitPrice)}원` : muted))
             : isTrans
               ? (editable ? priceCell(r.directAmount, v => setTransFee100(i, v), `perf-fee100-${i}`, '요금(100%)', amtLocked) : (r.isDirectAmount && r.directAmount != null && r.directAmount !== '' ? `${won(r.directAmount)}원` : muted))
+              // 외주업체 행: 요금(100%) 없음(정리) — 금액은 수량 × 단가 = 공급가액 칸에서만 표시·입력(이전 공급가액 팝업 입력이 저장 후 무시되던 문제)
+              : settleVendor
+                ? <span data-testid={`perf-fee100-vendor-${i}`} title="외주업체는 요금(100%)을 쓰지 않습니다. 수량 × 단가로 공급가액을 계산합니다.">{muted}</span>
               : isOtherAmt
                 ? (editable ? amtBtn(`${won(cost.base)}원`, () => setAmountPopup(i), `perf-amount-${i}`) : `${won(cost.base)}원`)
                 : muted}
@@ -1043,10 +1048,12 @@ export default function PerformanceSection({ projectId, token, performances, onC
         <td style={tdR}>
           {(editable ? qtyCols : qtyShown)
             ? (editable
-                ? <input type="number" min={0} inputMode="numeric" data-testid={`perf-qty-${i}`} aria-label="수량" disabled={amtLocked} title={amtLocked ? "금액 변경은 조회화면의 [수정 요청]·[정정 요청]으로 요청하세요(승인 후 반영)" : undefined}
-                    style={{ ...inp, textAlign: 'right' }}
+                ? <input type="number" min={0} inputMode="numeric" data-testid={`perf-qty-${i}`} aria-label="수량" disabled={amtLocked} title={amtLocked ? "금액 변경은 조회화면의 [수정 요청]·[정정 요청]으로 요청하세요(승인 후 반영)" : r.quantityFromSale ? `판매수량(${r.quantity}) 복사값 — 실제 수량을 입력하세요` : undefined}
+                    style={{ ...inp, textAlign: 'right', ...(r.quantityFromSale ? { borderColor: C.danger } : {}) }} placeholder={settleVendor ? '수량 입력' : undefined}
                     value={r.quantity == null || r.quantity === '' ? '' : String(r.quantity)} onChange={e => patchRow(i, { quantity: e.target.value, quantityFromSale: false, _qtyManual: true, ...promoteVendor(), ...vendorClearPatch(r, 'quantity', e.target.value) })} />
-                : (r.quantityFromSale ? <span title={`판매수량(${r.quantity}) 복사값 — 개별 수행 수량 미상(지급액 계산 미사용)`} data-testid={`perf-qty-from-sale-${i}`}>—</span>
+                : (r.quantityFromSale && qtyInCalc
+                  ? <span style={{ color: C.danger, fontWeight: 700 }} title={`판매수량(${r.quantity}) 복사값 — 실제 수량 확인 필요(금액 계산에 사용 중)`} data-testid={`perf-qty-from-sale-warn-${i}`}>{num(r.quantity).toLocaleString('ko-KR', { maximumFractionDigits: 2 })} ⚠</span>
+                  : r.quantityFromSale ? <span title={`판매수량(${r.quantity}) 복사값 — 개별 수행 수량 미상(지급액 계산 미사용)`} data-testid={`perf-qty-from-sale-${i}`}>—</span>
                   : <span>{r.quantity != null && r.quantity !== '' ? num(r.quantity).toLocaleString('ko-KR', { maximumFractionDigits: 2 }) : muted}</span>))
             : muted}
         </td>
@@ -1071,7 +1078,11 @@ export default function PerformanceSection({ projectId, token, performances, onC
         {/* 지급액(세전) — 수행원가(정산·수익률 기준 §3·§6). 기존 지급액값 그대로. */}
         {vs ? (vs.type === 'domestic' ? <>
           <td style={{ ...tdR, width: RW.cost, fontWeight: 700, color: C.primaryText }} data-testid={`perf-supply-${i}`} title="공급가액 = 수량 × 단가">
-            <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 400 }}>공급가액</div>{won(vs.supply)}원</td>
+            <div style={{ fontSize: 10, color: C.textMuted, fontWeight: 400 }}>공급가액</div>{won(vs.supply)}원
+            {r.contractUnitPrice != null && r.contractUnitPrice !== '' && (r.quantity == null || r.quantity === '') &&
+              <div data-testid={`perf-supply-needqty-${i}`} style={{ fontSize: 10, color: C.danger, fontWeight: 400 }}>수량 입력 필요</div>}
+            {editable && <button type="button" onClick={() => setAmountPopup(i)} data-testid={`perf-vendor-detail-${i}`} aria-label="매입 증빙 상세"
+              style={{ marginTop: 2, border: `1px solid ${C.g300}`, borderRadius: 5, background: '#fff', cursor: 'pointer', padding: '0 6px', fontSize: 10, fontWeight: 600 }}>증빙상세</button>}</td>
           <td style={{ ...tdR, width: RW.cost }} data-testid={`perf-total-${i}`} title="부가세 = 공급가액 × 부가세율 · 합계 = 공급가액 + 부가세">
             <div data-testid={`perf-vat-${i}`} style={{ fontSize: 12 }}><span style={{ fontSize: 10, color: C.textMuted }}>부가세 </span>{won(vs.vat)}원</div>
             <div style={{ fontWeight: 700 }}><span style={{ fontSize: 10, color: C.textMuted, fontWeight: 400 }}>합계 </span>{won(vs.total)}원</div></td>

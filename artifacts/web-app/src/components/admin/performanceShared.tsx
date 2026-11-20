@@ -685,19 +685,30 @@ export function calcRowCostPreview(r: Row): { base: number; expenseTotal: number
   return { base, expenseTotal, deductionTotal, costTotal: round2(base + expenseTotal - deductionTotal) };
 }
 
-// 통번역사(개인) 행 → 외주업체 변경 시 금액 이전(2026-11 KDI School 건).
+// 통번역사(개인) 행 → 외주업체 변경 시 금액 정리(2026-11 KDI School 건).
 //   개인 직접금액 행은 요금(100%)을 contractUnitPrice 에 '총액'으로 담는다. 외주 정산은 공급가액 = 수량 × 단가이므로 그대로 두면
-//   요금 총액 × 수량(예: 600,000 × 44 = 26,400,000)으로 중복 계산된다. → 변경 직전 지급 기준금액(세전 base)을 1식 단가로 옮긴다.
-//   · 직접금액 행: 수량 1 · 단가 = 기존 base · 직접금액 해제 (base 0 이면 단가 공란·공급가액 0)
-//   · 단가×수량 행(번역 단가 등): 이미 단가 의미이므로 유지, 공급가액 폴백값만 현재 base 로 맞춘다(오래된 공급가액 잔존 방지)
-//   이미 외주 행이면 변경 없음.
+//   요금 총액 × 수량(예: 600,000 × 44 = 26,400,000)으로 중복 계산된다.
+//   · 요금(100%)·통역료(85%)(직접금액)는 정리(해제)하고, 변경 직전 지급 기준금액을 외주 '단가'로 옮긴다.
+//   · 수량은 임의로 만들지 않는다 — 기존 수량이 1(판매수량 복사 아님)일 때만 유지, 그 외(판매수량 44 등·미입력)는 비워 담당자가 실제 수량을 입력.
+//     수량이 비어 있으면 공급가액 0(수량 × 단가 미확정) — 이전 금액으로 되돌아가지 않는다.
+//   · 이미 외주업체인데 직접금액 설정이 남아 있는 행(이전 버전에서 변경된 행, 예: KDI 155 코리아미디어 통역장비)도 같은 규칙으로 정리.
+//   · 단가×수량 행(번역 단가 등)은 이미 단가 의미이므로 유지, 공급가액 폴백값만 현재 금액으로 맞춘다.
+export function isVendorFeeResidue(r: Row): boolean {
+  return r.performerCategory === 'vendor' && !!r.isDirectAmount;
+}
 export function vendorAmountFromIndividual(r: Row): Partial<Row> {
-  if (r.performerCategory === 'vendor') return {};
-  const base = calcRowCostPreview(r).base;
+  const residue = isVendorFeeResidue(r);
+  if (r.performerCategory === 'vendor' && !residue) return {};
+  const asIndiv: Row = { ...r, performerCategory: 'individual', vendorSettlementType: null };
+  const base = calcRowCostPreview(asIndiv).base;
   if (r.isDirectAmount) {
-    return base > 0
-      ? { isDirectAmount: false, directAmount: null, contractUnitPrice: String(base), quantity: '1', quantityFromSale: false, supplyAmount: String(base) }
-      : { isDirectAmount: false, directAmount: null, contractUnitPrice: null, supplyAmount: '0' };
+    const keepQty = !r.quantityFromSale && r.quantity != null && r.quantity !== '' && num(r.quantity) === 1;
+    return {
+      isDirectAmount: false, directAmount: null, quantityFromSale: false,
+      contractUnitPrice: base > 0 ? String(base) : null,
+      quantity: keepQty ? '1' : null,
+      supplyAmount: keepQty && base > 0 ? String(base) : '0',
+    };
   }
   return { supplyAmount: String(base) };
 }
