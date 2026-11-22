@@ -17,6 +17,13 @@ import { sql } from "drizzle-orm";
 import { PROG, CUR } from "../routes/payoutUnified";
 import { checkEligibility } from "./legacyPayoutConversion";
 import { LEGACY_PAID_DELIVERY_CUTOFF, todayKst } from "../lib/legacyPayoutRule";
+import { loadSaleIdentities } from "./saleIdentity";
+
+// 지급상태 표시(2026-11-22) — 화면·엑셀 공통. DB 지급상태(payment_status)·지급보류 안전장치는 바꾸지 않는 표시 전용 판정.
+//   paid 지급완료 / review 지급확인 필요(과거 CRM 지급보류·미확인, 지급보류, 중복 지급 후보)
+//   prep 지급준비 필요(계좌·수행자·세금·금액·날짜 등 필수 지급정보 미비) / scheduled 지급예정(지급 가능한 미지급)
+export type PayDisplay = "paid" | "review" | "prep" | "scheduled";
+export const PAY_DISPLAY_LABEL: Record<PayDisplay, string> = { paid: "지급완료", review: "지급확인 필요", prep: "지급준비 필요", scheduled: "지급예정" };
 
 type Dbx = any;
 const rows = async (dbx: Dbx, q: any) => (await dbx.execute(q)).rows as any[];
@@ -132,6 +139,18 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
   const vAcct = new Map((await rows(dbx, sql`SELECT c.id, (coalesce(cs.bank_account_enc, '') <> '' AND coalesce(cs.bank_name, '') <> '') AS acct
     FROM companies c LEFT JOIN company_sensitive cs ON cs.company_id = c.id WHERE c.id IN (${inList([...vendorIds])})`)).map(r => [Number(r.id), r]));
 
+  // ⑥ 판매금액(판매정보에 저장된 실제 금액) — 판매관리와 같은 대표 견적(saleIdentity)의 판매상품 합계. CRM 원본만 있는 건은 없음(계산 안 함).
+  const projIds = [...new Set([...pa.values()].map(p => Number(p.project_id)).filter(Boolean))];
+  const idn = projIds.length ? await loadSaleIdentities(dbx, projIds) : new Map();
+  const qids = [...new Set([...idn.values()].map((x: any) => x.quoteId).filter((v: any) => v != null))] as number[];
+  const amtByQuote = new Map((await rows(dbx, sql`SELECT quote_id, coalesce(sum(supply_amount), 0) AS supply, coalesce(sum(tax_amount), 0) AS vat, coalesce(sum(total_amount), 0) AS total
+    FROM quote_items WHERE quote_id IN (${inList(qids)}) GROUP BY quote_id`)).map(r => [Number(r.quote_id), { supply: num(r.supply), vat: num(r.vat), total: num(r.total) }]));
+  const saleAmountOf = (projectId: number | null) => {
+    if (!projectId) return null;
+    const q = (idn.get(projectId) as any)?.quoteId;
+    return q != null ? (amtByQuote.get(Number(q)) ?? null) : null;
+  };
+
   const out: any[] = [];
   for (const b of base) {
     const bl: Blocker[] = [];
@@ -220,6 +239,9 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
     const roundEligible = kind === "platform" && !!p && p.payment_status === "unpaid" && p.has_delivery && p.delivery_confirmed && num(p.cost_total) > 0
       && ((p.cat === "individual" && p.individual_user_id != null && !!p.treatment) || (p.cat === "vendor" && p.vendor_company_id != null));
     const cats = new Set(bl.filter(x => x.cat !== "I").map(x => x.cat));
+    const payDisplay: PayDisplay = paid ? "paid"
+      : (kind === "crm_only" || p?.payment_status === "payment_hold" || bl.some(x => x.code.startsWith("dup_"))) ? "review"
+      : (cats.has("B") || cats.has("C")) ? "prep" : "scheduled";
     const state: ReadinessState = cats.has("D") ? "D" : cats.has("C") ? "C" : cats.has("B") ? "B" : "A";
     out.push({
       source: b.source, kind, sourceKey: b.source_key, crmRowId: b.source === "legacy" ? Number(b.id) : (p?.crm_row_id ?? null),
@@ -232,6 +254,8 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
       dateMismatch: b.delivery_mismatch === true || b.payout_mismatch === true || (kind === "platform" && !!p?.crm_delivery && !!dd && p.crm_delivery !== dd),
       pretax: amount, withholding: Math.round(num(b.withholding) * 100) / 100, posttax: Math.round(num(b.posttax) * 100) / 100,
       paymentStatus: p?.payment_status ?? (b.legacy_paid ? "paid" : "unconfirmed"), payoutRoundId: p?.payout_round_id ?? null,
+      payDisplay, payDisplayLabel: PAY_DISPLAY_LABEL[payDisplay],
+      saleAmount: saleAmountOf(p ? Number(p.project_id) : null),   // { supply, vat, total } | null — 판매건 단위 금액(행마다 같은 값, 합산 시 판매건당 1회)
       hasAccount, roundEligible, conversion, candidate,
       // 합계 이중집계 방지 — 플랫폼 수행과 같은 CRM 원본 행은 합계에서 제외(표시는 유지)
       countedInTotals: !(b.source === "legacy" && dupRows.has(Number(b.id))),

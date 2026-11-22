@@ -15,6 +15,9 @@ type Item = {
   projectId: number | null; projectTitle: string | null; saleNo: string | null; quoteNumber: string | null; payee: string | null; client: string | null;
   deliveryDate: string | null; payoutDate: string | null; actualPaymentDate: string | null;
   dateMismatch?: boolean;   // CRM·플랫폼 날짜 불일치(덮어쓰지 않음 — 사유에 상세)
+  // 지급상태 표시(서버 공통 판정 — 화면·엑셀 같은 값) · 판매금액(판매정보 저장값, CRM 원본만 있는 건 null)
+  payDisplay?: 'paid' | 'review' | 'prep' | 'scheduled'; payDisplayLabel?: string;
+  saleAmount?: { supply: number; vat: number; total: number } | null;
   pretax: number; withholding: number; posttax: number;
   paymentStatus: string; payoutRoundId: number | null; hasAccount: boolean; roundEligible: boolean; candidate: string; countedInTotals: boolean;
   state: 'A' | 'B' | 'C' | 'D'; stateLabel: string; blockers: Blocker[]; actions: string[];
@@ -30,6 +33,9 @@ const STATE_LABEL: Record<string, string> = { A: '지급 준비 완료', B: '계
 const KIND_LABEL: Record<string, string> = { platform: '플랫폼', crm_converted: 'CRM 전환', crm_only: 'CRM 원본' };
 const CAND_LABEL: Record<string, string> = { base: '지급 후보(지급일 일치)', delivery_window: '추가: 납품기간 납품', carry_over: '추가: 지급일 경과(이월)', no_payout_date: '추가: 지급예정일 없음', other: '추가: 기타', all: '전체 기간' };
 const STATUS_LABEL: Record<string, string> = { unpaid: '미지급', payment_hold: '지급보류', paid: '지급완료', unconfirmed: '확인 전(CRM)' };
+// 화면·엑셀 지급상태 표시 — 서버 판정(payDisplayLabel) 우선, 없으면(구버전 응답) 기존 표시
+const payLabel = (r: Item) => r.payDisplayLabel ?? STATUS_LABEL[r.paymentStatus] ?? r.paymentStatus;
+const PAY_COLOR: Record<string, string> = { paid: '#15803d', review: '#b45309', prep: '#b91c1c', scheduled: '#1d4ed8' };
 const won = (n: number) => Math.round(n || 0).toLocaleString('ko-KR');
 /** 다음 지급일(1~15일 → 그달 15일 / 16일~ → 그달 말일, KST) — 기본 조회 지급일 */
 export function nextPayoutDate(): string {
@@ -70,19 +76,20 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast }: {
   }, [data, state, kind, cand, q]);
 
   const exportExcel = () => {
+    // 판매금액은 판매건 단위 — 같은 판매건(판매ID)의 첫 행에만 기재해 엑셀 합계에서 중복 합산되지 않게 한다.
+    const firstOfSale = new Set<Item>(); const seen = new Set<number>();
+    for (const r of rows) if (r.projectId != null && r.saleAmount && !seen.has(r.projectId)) { seen.add(r.projectId); firstOfSale.add(r); }
+    const amt = (r: Item, k: 'supply' | 'vat' | 'total') => (firstOfSale.has(r) ? r.saleAmount![k] : '');
     exportDataset<Item>({
       filename: scope === 'date' ? `지급준비점검_${date}.xlsx` : `지급누락점검_전체기간.xlsx`, sheetName: scope === 'date' ? '지급준비점검' : '지급누락점검',
       columns: [
-        { header: '상태', value: (r) => `${r.state} ${r.stateLabel}`, width: 22 },
-        { header: '후보 구분', value: (r) => CAND_LABEL[r.candidate] ?? r.candidate, width: 20 },
         { header: '출처', value: (r) => KIND_LABEL[r.kind] ?? r.kind, width: 9 },
-        { header: '원본키', value: 'sourceKey', width: 15 },
         { header: '거래처', value: (r) => r.client ?? '', width: 22 },
         { header: '판매번호', value: (r) => r.saleNo ?? r.quoteNumber ?? '', width: 16 },
         { header: '프로젝트', value: (r) => r.projectTitle ?? '', width: 22 },
-        { header: '판매ID', value: (r) => r.projectId ?? '', type: 'number', numFmt: '0', width: 8 },
-        { header: '수행정보ID', value: (r) => r.assignmentId ?? '', type: 'number', numFmt: '0', width: 9 },
-        { header: 'CRM행ID', value: (r) => r.crmRowId ?? '', type: 'number', numFmt: '0', width: 9 },
+        { header: '공급가', value: (r) => amt(r, 'supply'), type: 'number', width: 12 },
+        { header: '부가세', value: (r) => amt(r, 'vat'), type: 'number', width: 11 },
+        { header: '총액', value: (r) => amt(r, 'total'), type: 'number', width: 12 },
         { header: '통번역사·외주업체', value: (r) => r.payee ?? '', width: 16 },
         { header: '납품일', value: (r) => r.deliveryDate ?? '', width: 11 },
         { header: '지급예정일', value: (r) => r.payoutDate ?? '', width: 11 },
@@ -92,7 +99,7 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast }: {
         { header: '원천세', value: 'withholding', type: 'number', width: 10 },
         { header: '세후', value: 'posttax', type: 'number', width: 12 },
         { header: '합계 집계', value: (r) => (r.countedInTotals ? '예' : '아니오(중복)'), width: 9 },
-        { header: '지급상태', value: (r) => STATUS_LABEL[r.paymentStatus] ?? r.paymentStatus, width: 11 },
+        { header: '지급상태', value: (r) => payLabel(r), width: 13 },
         { header: '지급회차', value: (r) => r.payoutRoundId ?? '', width: 8 },
         { header: '계좌', value: (r) => (r.hasAccount ? '등록' : '미등록'), width: 7 },
         { header: '공식 회차 자동포함', value: (r) => (r.roundEligible ? '예' : '아니오'), width: 10 },
@@ -189,7 +196,7 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast }: {
                         <td style={td}>{r.actualPaymentDate ?? '—'}</td>
                         <td style={{ ...td, textAlign: 'right' }}>{won(r.pretax)}</td>
                         <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{won(r.posttax)}{!r.countedInTotals && <div style={{ fontSize: 10, color: '#c2410c' }}>합계 제외(중복)</div>}</td>
-                        <td style={td}>{STATUS_LABEL[r.paymentStatus] ?? r.paymentStatus}</td>
+                        <td style={{ ...td, fontWeight: 700, color: PAY_COLOR[r.payDisplay ?? ''] }} data-testid={`ready-pay-${r.sourceKey}`}>{payLabel(r)}</td>
                         <td style={td}>{r.payoutRoundId ? `#${r.payoutRoundId}` : '—'}</td>
                         <td style={{ ...td, color: r.hasAccount ? '#15803d' : '#b91c1c' }}>{r.hasAccount ? '등록' : '미등록'}</td>
                         <td style={{ ...td, whiteSpace: 'normal', minWidth: 260, fontSize: 11.5 }}>
