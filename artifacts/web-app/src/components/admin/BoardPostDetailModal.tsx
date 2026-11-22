@@ -100,7 +100,7 @@ export function BoardPostDetailModal({ post: initial, onClose, onDelete, token, 
           {staffOnly && token && (
             <div>
               <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>대상 직원 *</div>
-              <StaffTargetPicker token={token} value={edit.targets} onChange={ids => setEdit({ ...edit, targets: ids })} />
+              <StaffTargetPicker token={token} value={edit.targets} known={post.targets ?? []} onChange={ids => setEdit({ ...edit, targets: ids })} />
             </div>
           )}
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>

@@ -33,15 +33,23 @@ async function canView(req: Request, post: { id: number; category: string }): Pr
   return !!t;
 }
 
-/** 대상 직원 검증 — 활성 상태의 직원 계정(admin·staff)만. 반환: 정리된 id 목록 또는 오류 문구 */
-async function validateTargets(raw: unknown): Promise<number[] | string> {
+// 대상 직원 명부(2026-11-22): role=staff 인 활성 계정만. 관리자(admin)·게스트 계정 제외.
+//   게스트 = 별도 역할이 없어 계정 표시명 '게스트' 또는 이메일 아이디가 guest 로 시작하는 계정으로 판정.
+const STAFF_DIRECTORY = and(eq(usersTable.role, "staff"), eq(usersTable.isActive, true), isNull(usersTable.deletedAt),
+  sql`coalesce(btrim(${usersTable.name}), '') <> '게스트' AND split_part(${usersTable.email}, '@', 1) !~* '^guest'`);
+
+/** 대상 직원 검증 — 새로 지정하는 계정은 직원 명부(STAFF_DIRECTORY)에 있어야 한다.
+ *  keep: 이미 이 글에 지정돼 있던 계정(수정 시) — 기존 대상 데이터는 바꾸지 않으므로 명부 조건 없이 유지 허용. */
+async function validateTargets(raw: unknown, keep: number[] = []): Promise<number[] | string> {
   if (!Array.isArray(raw)) return "대상 직원을 선택하세요.";
   const ids = [...new Set(raw.map(Number))];
   if (ids.length === 0) return "대상 직원을 1명 이상 선택하세요.";
   if (ids.some(i => !Number.isInteger(i) || i <= 0)) return "대상 직원 정보가 올바르지 않습니다.";
-  const found = await db.select({ id: usersTable.id }).from(usersTable)
-    .where(and(inArray(usersTable.id, ids), inArray(usersTable.role, ["admin", "staff"]), eq(usersTable.isActive, true), isNull(usersTable.deletedAt)));
-  if (found.length !== ids.length) return "직원 명부에 없는(비활성·삭제 포함) 계정이 대상에 포함되어 있습니다.";
+  const added = ids.filter(i => !keep.includes(i));
+  if (added.length) {
+    const found = await db.select({ id: usersTable.id }).from(usersTable).where(and(inArray(usersTable.id, added), STAFF_DIRECTORY));
+    if (found.length !== added.length) return "직원 명부에 없는 계정(관리자·게스트·비활성·삭제 포함)이 대상에 포함되어 있습니다.";
+  }
   return ids;
 }
 
@@ -61,7 +69,7 @@ router.get("/admin/board/staff-directory", ...adminGuard, async (req, res) => {
   try {
     const rows = await db.select({ id: usersTable.id, name: usersTable.name, email: usersTable.email, role: usersTable.role })
       .from(usersTable)
-      .where(and(inArray(usersTable.role, ["admin", "staff"]), eq(usersTable.isActive, true), isNull(usersTable.deletedAt)))
+      .where(STAFF_DIRECTORY)
       .orderBy(usersTable.name);
     res.json(rows);
   } catch (err) {
@@ -212,7 +220,9 @@ router.patch("/admin/board/:id", ...adminGuard, async (req, res) => {
     if (wasStaffOnly !== nowStaffOnly) { res.status(409).json({ error: "직원전용 분류는 다른 분류로(또는 다른 분류에서) 바꿀 수 없습니다. 새 글로 등록하세요." }); return; }
     let targets: number[] | null = null;
     if (nowStaffOnly && targetUserIds !== undefined) {
-      const v = await validateTargets(targetUserIds);
+      const current = (await db.select({ userId: boardPostTargetsTable.userId }).from(boardPostTargetsTable)
+        .where(eq(boardPostTargetsTable.postId, postId))).map(r => r.userId);
+      const v = await validateTargets(targetUserIds, current);
       if (typeof v === "string") { res.status(400).json({ error: v }); return; }
       targets = v;
     }
