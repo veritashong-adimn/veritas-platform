@@ -94,11 +94,19 @@ export async function suggestStaleSaleLinks(dbx: Dbx, projectId: number): Promis
     WHERE pa.project_id = ${projectId} AND pa.deleted_at IS NULL AND pa.sale_item_id IS NOT NULL
       AND NOT EXISTS (SELECT 1 FROM quote_items qi WHERE qi.id = pa.sale_item_id) ORDER BY pa.id`);
   if (!stale.length) return [];
-  const quoteIds = [...new Set(stale.map(s => Number(s.quote_id)).filter(Boolean))];
+  // 수행정보에 견적 id 가 없는 행(회차 밖 직접 등록 등): 이 판매건의 견적 중 저장 감사로그 '저장 전 품목'에 그 품목 id 가 있는 견적이
+  //   정확히 1개일 때만 그 견적으로 추적한다(근거 없음·모호 → 추천 없음).
+  const ownerQuote = new Map<number, number | null>();
+  for (const sid of [...new Set(stale.filter(s => s.quote_id == null).map(s => Number(s.sale_item_id)))]) {
+    const qs = await rows(dbx, sql`SELECT DISTINCT q.id FROM quotes q JOIN logs l ON l.entity_type = 'quote' AND l.entity_id = q.id AND l.action = 'quote_items_updated'
+      WHERE q.project_id = ${projectId} AND l.metadata::jsonb -> 'before' -> 'items' @> ${JSON.stringify([{ id: sid }])}::jsonb`);
+    ownerQuote.set(sid, qs.length === 1 ? Number(qs[0].id) : null);
+  }
+  const quoteIds = [...new Set([...stale.map(s => Number(s.quote_id)), ...ownerQuote.values()].filter(Boolean) as number[])];
   const out: StaleLinkSuggestion[] = [];
   const cache = new Map<string, { id: number | null; basis: string | null }>();
   for (const s of stale) {
-    const qid = s.quote_id != null ? Number(s.quote_id) : null;
+    const qid = s.quote_id != null ? Number(s.quote_id) : (ownerQuote.get(Number(s.sale_item_id)) ?? null);
     const key = `${qid}:${s.sale_item_id}`;
     if (!cache.has(key)) cache.set(key, qid && quoteIds.includes(qid) ? await traceItem(dbx, qid, Number(s.sale_item_id)) : { id: null, basis: null });
     const t = cache.get(key)!;
