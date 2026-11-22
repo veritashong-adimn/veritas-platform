@@ -33,6 +33,7 @@ import '../components/admin/readTableView.css';
 import { PrepaidLedgerTab } from '../components/admin/PrepaidLedgerTab';
 import { ResetPasswordModal } from '../components/admin/ResetPasswordModal';
 import { BoardPostDetailModal } from '../components/admin/BoardPostDetailModal';
+import { StaffTargetPicker, BoardFilePicker, uploadBoardFiles } from '../components/admin/BoardStaffOnly';
 import { ContactMergeModal } from '../components/admin/ContactMergeModal';
 import { ProductListTab } from '../components/admin/product/ProductListTab';
 import { ProductRegisterTab } from '../components/admin/product/ProductRegisterTab';
@@ -325,6 +326,10 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [showBoardForm, setShowBoardForm] = useState(false);
   const [boardForm, setBoardForm] = useState({ category: "notice", title: "", content: "", pinned: false, visibleToAll: false });
   const [savingBoard, setSavingBoard] = useState(false);
+  // 직원전용(2026-11-22): 대상 직원·첨부(관리자만 등록 — 서버도 role=admin 만 허용)
+  const [boardTargets, setBoardTargets] = useState<number[]>([]);
+  const [boardFiles, setBoardFiles] = useState<File[]>([]);
+  const isBoardAdmin = user.role === "admin";
 
   // translator profile modal
   const [translatorProfileModal, setTranslatorProfileModal] = useState<{ userId: number; email: string } | null>(null);
@@ -824,16 +829,20 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
   const handleSaveBoardPost = async () => {
     if (!boardForm.title.trim() || !boardForm.content.trim()) { setToast("제목과 내용을 입력하세요."); return; }
+    const staffOnly = boardForm.category === "staff_only";
+    if (staffOnly && boardTargets.length === 0) { setToast("대상 직원을 1명 이상 선택하세요."); return; }
     setSavingBoard(true);
     try {
       const res = await fetch(api("/api/admin/board"), {
         method: "POST", headers: { ...authHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify(boardForm),
+        body: JSON.stringify(staffOnly ? { ...boardForm, visibleToAll: false, targetUserIds: boardTargets } : boardForm),
       });
       const data = await res.json();
       if (!res.ok) { setToast(`오류: ${data.error}`); return; }
-      setToast("게시물이 등록되었습니다.");
+      const upErr = staffOnly ? await uploadBoardFiles(token, data.id, boardFiles) : null;
+      setToast(upErr ? `게시물은 등록되었으나 첨부 실패: ${upErr} (상세에서 다시 첨부하세요)` : "게시물이 등록되었습니다.");
       setBoardForm({ category: "notice", title: "", content: "", pinned: false, visibleToAll: false });
+      setBoardTargets([]); setBoardFiles([]);
       setShowBoardForm(false);
       await fetchBoard();
     } catch { setToast("오류: 게시물 등록 실패"); }
@@ -1086,6 +1095,10 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           post={boardPostModal}
           onClose={() => setBoardPostModal(null)}
           onDelete={handleDeleteBoardPost}
+          token={token}
+          isAdmin={isBoardAdmin}
+          onToast={setToast}
+          onChanged={() => { void fetchBoard(); }}
         />
       )}
       {resetPwUserId !== null && (
@@ -2247,7 +2260,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                     onChange={v => setBoardForm(p => ({ ...p, category: v }))}
                     style={{ width: "100%" }}
                     triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
-                    options={BOARD_CATEGORIES}
+                    options={BOARD_CATEGORIES.filter(c => c.value !== "staff_only" || isBoardAdmin)}
                   />
                 </div>
                 <div>
@@ -2266,11 +2279,25 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                   <input type="checkbox" checked={boardForm.pinned} onChange={e => setBoardForm(p => ({ ...p, pinned: e.target.checked }))} />
                   상단 고정
                 </label>
+                {boardForm.category !== "staff_only" && (
                 <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
                   <input type="checkbox" checked={boardForm.visibleToAll} onChange={e => setBoardForm(p => ({ ...p, visibleToAll: e.target.checked }))} />
                   통번역사에게 공개
                 </label>
+                )}
               </div>
+              {boardForm.category === "staff_only" && (
+                <div style={{ display: "grid", gap: 10, marginBottom: 12 }} data-testid="board-staff-only-fields">
+                  <div>
+                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 2 }}>대상 직원 * <span style={{ color: "#9ca3af" }}>(지정된 직원만 조회·다운로드)</span></label>
+                    <StaffTargetPicker token={token} value={boardTargets} onChange={setBoardTargets} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 2 }}>파일 첨부</label>
+                    <BoardFilePicker files={boardFiles} onChange={setBoardFiles} />
+                  </div>
+                </div>
+              )}
               <div style={{ display: "flex", gap: 8 }}>
                 <PrimaryBtn onClick={handleSaveBoardPost} disabled={savingBoard} style={{ fontSize: 13, padding: "8px 18px" }}>
                   {savingBoard ? "등록 중..." : "등록"}
@@ -2315,7 +2342,15 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                             {post.visibleToAll && <span style={{ padding: "2px 8px", borderRadius: 10, background: "#f0fdf4", color: "#059669", fontSize: 11, fontWeight: 700 }}>공개</span>}
                           </div>
                         </td>
-                        <td style={{ ...tableTd, fontWeight: 600, color: "#111827" }}>{post.title}</td>
+                        <td style={{ ...tableTd, fontWeight: 600, color: "#111827" }}>
+                          {post.title}
+                          {!!post.fileCount && <span style={{ marginLeft: 6, fontSize: 11, color: "#6b7280", fontWeight: 500 }}>📎{post.fileCount}</span>}
+                          {post.targets && post.targets.length > 0 && (
+                            <div style={{ fontSize: 11, color: "#4338ca", fontWeight: 500, marginTop: 2 }}>
+                              대상: {post.targets.map(t => t.name?.trim() || t.email).slice(0, 3).join(", ")}{post.targets.length > 3 ? ` 외 ${post.targets.length - 3}명` : ""}
+                            </div>
+                          )}
+                        </td>
                         <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{post.authorEmail ?? "-"}</td>
                         <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{formatDisplayDate(post.createdAt)}</td>
                       </tr>

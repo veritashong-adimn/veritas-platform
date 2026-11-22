@@ -483,6 +483,10 @@ export type BoardPost = {
   pinned: boolean; visibleToAll: boolean;
   createdAt: string; updatedAt: string;
   authorId: number; authorEmail: string | null;
+  // 직원전용(2026-11-22): 첨부 수 · 대상 직원(관리자 응답에만) · 상세 조회 시 첨부 목록
+  fileCount?: number;
+  targets?: { id: number; name: string | null; email: string }[];
+  files?: { id: number; originalFileName: string; mimeType: string | null; fileSize: number | null; uploadedAt: string }[];
 };
 export type TranslatorProfile = {
   id?: number; userId: number;
@@ -604,7 +608,8 @@ export const ROLE_LABEL: Record<Role, string> = {
   translator: "통번역사",
 };
 // 게시판 분류 — 저장값(코드)은 유지하고 표시명만 사용: 공지→공지사항, 통역자료→회사자료.
-export const BOARD_CATEGORY_LABEL: Record<string, string> = { notice: "공지사항", reference: "회사자료", manual: "내부매뉴얼", other: "기타" };
+// staff_only(직원전용): 관리자만 등록·수정·삭제, 지정된 직원만 조회·다운로드(서버에서 차단)
+export const BOARD_CATEGORY_LABEL: Record<string, string> = { notice: "공지사항", reference: "회사자료", manual: "내부매뉴얼", staff_only: "직원전용", other: "기타" };
 export const BOARD_CATEGORIES: { value: string; label: string }[] = Object.entries(BOARD_CATEGORY_LABEL).map(([value, label]) => ({ value, label }));
 export const AVAILABILITY_LABEL: Record<string, string> = { available: "가능", busy: "바쁨", unavailable: "불가" };
 export const ALL_PROJECT_STATUSES = ["created","quoted","approved","paid","matched","in_progress","completed","cancelled"] as const;

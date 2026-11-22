@@ -62,6 +62,11 @@ router.get("/storage/objects/*objectPath", requireAuth, async (req: Request, res
     // 회사 자료보관함 파일(archive/)은 ACL 검증 경로(/api/archive/documents/:id/file)로만 제공한다.
     // 이 범용 경로로 우회 접근하지 못하도록 차단(기존 업무 파일 경로 uploads/ 등은 영향 없음).
     const normalized = path.posix.normalize(objectPath).replace(/\/+/g, "/");
+    // 게시판 직원전용 첨부(board-private/)도 동일 — 권한 확인 경로(/api/admin/board/:id/files/:fileId/download)로만 제공.
+    if (/^\/objects\/board-private(\/|$)/i.test(normalized)) {
+      res.status(403).json({ error: "이 파일은 게시판을 통해서만 접근할 수 있습니다." });
+      return;
+    }
     if (/^\/objects\/archive(\/|$)/i.test(normalized) || objectPath.split("/").includes("..")) {
       res.status(403).json({ error: "이 파일은 회사 자료보관함을 통해서만 접근할 수 있습니다." });
       return;
