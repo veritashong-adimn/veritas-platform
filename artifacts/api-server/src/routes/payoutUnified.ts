@@ -80,7 +80,16 @@ export const PROG = sql`
       nullif(btrim(source_raw->>'거래처명'), '') AS client,
       -- 지급일(회차) = CRM 지급일. CRM 지급일이 없고 운영 판매로 전환된 행은 전환 수행정보의 지급예정일(운영 회차) — 지급완료 정리 후 '지급일 미확인'으로 남지 않게.
       coalesce(substring(source_raw->>'통번역사지급일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}'), act.expected_payment_date) AS payout_date,
-      substring(source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') AS delivery_date,
+      -- 납품일(2026-11-22): CRM 납품일 → 없으면 운영 판매로 전환된 수행정보의 납품일(플랫폼, 지급일과 같은 보완 규칙).
+      --   둘 다 있는데 다르면 덮어쓰지 않고 CRM 값을 유지하고 delivery_mismatch 로 표시(점검 화면·엑셀 '납품일 불일치').
+      --   (전환 건 CRM 납품일 공란 → 지급 점검·엑셀 납품일 공란·지급 후보 납품기간 누락되던 오류 수정)
+      coalesce(substring(source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}'), act.delivery_date) AS delivery_date,
+      substring(source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') AS crm_delivery_date,
+      act.delivery_date AS platform_delivery_date,
+      coalesce(substring(source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') <> act.delivery_date, false) AS delivery_mismatch,
+      substring(source_raw->>'통번역사지급일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') AS crm_payout_date,
+      act.expected_payment_date AS platform_payout_date,
+      coalesce(substring(source_raw->>'통번역사지급일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') <> act.expected_payment_date, false) AS payout_mismatch,
       nullif(btrim(source_raw->>'상품명'), '') AS product_name,
       nullif(btrim(source_raw->>'언어'), '') AS language,
       nullif(btrim(source_raw->>'파일명'), '') AS filename,
@@ -124,7 +133,8 @@ export const PROG = sql`
           (xpa.id IS NOT NULL AND xpa.deleted_at IS NULL AND coalesce(xp.status::text, '') <> 'cancelled') AS live,
           EXISTS (SELECT 1 FROM legacy_master_mappings m WHERE m.source_system = 'old_crm' AND m.entity_type = 'sale' AND m.entity_id = xpa.project_id AND m.status = 'active') AS active_sale,
           xpa.payment_status::text AS payment_status, xpa.actual_payment_date, xpa.individual_user_id AS uid,
-          to_char(coalesce(xpa.expected_payment_date, xpa.expected_payment_date_auto), 'YYYY-MM-DD') AS expected_payment_date
+          to_char(coalesce(xpa.expected_payment_date, xpa.expected_payment_date_auto), 'YYYY-MM-DD') AS expected_payment_date,
+          to_char(coalesce(xpa.delivery_date, xpa.delivery_date_auto), 'YYYY-MM-DD') AS delivery_date
         FROM ch JOIN import_row_sources s ON s.module = 'legacy_sale_activation' AND s.row_key = 'progress:' || ch.src
         LEFT JOIN performance_assignments xpa ON xpa.id = s.entity_id LEFT JOIN projects xp ON xp.id = xpa.project_id
       )
@@ -133,6 +143,7 @@ export const PROG = sql`
         (array_agg(payment_status ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS payment_status,
         (array_agg(actual_payment_date ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS actual_payment_date,
         (array_agg(expected_payment_date ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS expected_payment_date,
+        (array_agg(delivery_date ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS delivery_date,
         (array_agg(uid ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS uid
       FROM l GROUP BY row_id
     ) act ON act.row_id = legacy_archive_rows.id

@@ -13,7 +13,9 @@ type Blocker = { cat: 'B' | 'C' | 'D' | 'I'; code: string; text: string; action:
 type Item = {
   source: string; kind: 'platform' | 'crm_converted' | 'crm_only'; sourceKey: string; crmRowId: number | null; assignmentId: number | null;
   projectId: number | null; projectTitle: string | null; saleNo: string | null; quoteNumber: string | null; payee: string | null; client: string | null;
-  deliveryDate: string | null; payoutDate: string | null; actualPaymentDate: string | null; pretax: number; withholding: number; posttax: number;
+  deliveryDate: string | null; payoutDate: string | null; actualPaymentDate: string | null;
+  dateMismatch?: boolean;   // CRM·플랫폼 날짜 불일치(덮어쓰지 않음 — 사유에 상세)
+  pretax: number; withholding: number; posttax: number;
   paymentStatus: string; payoutRoundId: number | null; hasAccount: boolean; roundEligible: boolean; candidate: string; countedInTotals: boolean;
   state: 'A' | 'B' | 'C' | 'D'; stateLabel: string; blockers: Blocker[]; actions: string[];
 };
@@ -85,6 +87,7 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast }: {
         { header: '납품일', value: (r) => r.deliveryDate ?? '', width: 11 },
         { header: '지급예정일', value: (r) => r.payoutDate ?? '', width: 11 },
         { header: '실제 지급일', value: (r) => r.actualPaymentDate ?? '', width: 11 },
+        { header: '날짜 불일치', value: (r) => (r.dateMismatch ? 'CRM·플랫폼 불일치' : ''), width: 14 },
         { header: '세전', value: 'pretax', type: 'number', width: 12 },
         { header: '원천세', value: 'withholding', type: 'number', width: 10 },
         { header: '세후', value: 'posttax', type: 'number', width: 12 },
@@ -180,7 +183,8 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast }: {
                         <td style={{ ...td, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.projectTitle ?? ''}>{r.saleNo ?? r.quoteNumber ?? (r.projectId ? `#${r.projectId}` : '—')}{r.projectTitle ? <div style={{ fontSize: 10.5, color: '#94a3b8' }}>{r.projectTitle}</div> : null}</td>
                         <td style={{ ...td, color: '#64748b' }}>{r.crmRowId ?? '—'}</td>
                         <td style={{ ...td, fontWeight: 700 }}>{r.payee ?? '—'}</td>
-                        <td style={{ ...td, color: r.deliveryDate ? undefined : '#b91c1c' }}>{r.deliveryDate ?? '공란'}</td>
+                        <td style={{ ...td, color: r.deliveryDate ? undefined : '#b91c1c' }}>{r.deliveryDate ?? '공란'}
+                          {r.dateMismatch && <span title="CRM·플랫폼 날짜 불일치 — 사유 참고" aria-label="날짜 불일치" data-testid={`ready-date-mismatch-${r.sourceKey}`} style={{ marginLeft: 4, color: '#c2410c', fontWeight: 700 }}>⚠</span>}</td>
                         <td style={{ ...td, color: r.payoutDate ? undefined : '#b91c1c' }}>{r.payoutDate ?? '공란'}</td>
                         <td style={td}>{r.actualPaymentDate ?? '—'}</td>
                         <td style={{ ...td, textAlign: 'right' }}>{won(r.pretax)}</td>

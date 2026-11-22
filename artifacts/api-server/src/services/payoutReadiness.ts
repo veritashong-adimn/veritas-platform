@@ -59,11 +59,13 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
     : sql`(cur.payment_status <> 'paid' OR cur.actual_payment_date IS NULL OR cur.delivery_date IS NULL OR cur.payout_date IS NULL)`;
   const base = await rows(dbx, sql`WITH ${PROG}, ${CUR}
     SELECT 'legacy' AS source, prog.id, prog.source_key, prog.translator, prog.client, prog.delivery_date, prog.payout_date,
-      prog.actual_payment_date, prog.pretax, prog.posttax, (prog.pretax - prog.posttax) AS withholding, prog.legacy_paid, prog.act_user_id
+      prog.actual_payment_date, prog.pretax, prog.posttax, (prog.pretax - prog.posttax) AS withholding, prog.legacy_paid, prog.act_user_id,
+      prog.crm_delivery_date, prog.platform_delivery_date, prog.delivery_mismatch, prog.crm_payout_date, prog.platform_payout_date, prog.payout_mismatch
     FROM prog WHERE ${legacyWhere}
     UNION ALL
     SELECT 'current', cur.id, cur.source_key, cur.translator, cur.client, cur.delivery_date, cur.payout_date,
-      cur.actual_payment_date, cur.pretax, cur.posttax, cur.withholding_tax, false, NULL::int
+      cur.actual_payment_date, cur.pretax, cur.posttax, cur.withholding_tax, false, NULL::int,
+      NULL, NULL, false, NULL, NULL, false
     FROM cur WHERE ${curWhere}`);
   const legacyIds = base.filter(b => b.source === "legacy").map(b => Number(b.id));
   const curIds = base.filter(b => b.source === "current").map(b => Number(b.id));
@@ -186,7 +188,10 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
     if (!dd) add("C", "no_delivery", "납품일 누락", "납품일 입력(원본 확인 — 추정 입력 금지)");
     if (!pd && !paid) add("C", "no_payout_date", amount > 0 ? "지급예정일 누락(지급액 있음)" : "지급예정일 누락", "지급예정일 확인·입력");
     if (dd && pd && pd < dd) add("C", "date_order", `지급일(${pd})이 납품일(${dd})보다 이름`, "날짜 확인");
-    if (p?.crm_delivery && dd && p.crm_delivery !== dd) add("C", "date_mismatch", `납품일 불일치(플랫폼 ${dd} ≠ CRM ${p.crm_delivery})`, "실제 납품일 확인");
+    // 날짜 불일치(덮어쓰지 않고 표시): 플랫폼 행 = 연결 CRM 원본 납품일 비교 / CRM 전환 행 = PROG 의 CRM·플랫폼 납품일·지급일 비교(같은 기준)
+    if (kind === "platform" && p?.crm_delivery && dd && p.crm_delivery !== dd) add("C", "date_mismatch", `납품일 불일치(플랫폼 ${dd} ≠ CRM ${p.crm_delivery})`, "실제 납품일 확인");
+    if (b.source === "legacy" && b.delivery_mismatch) add("C", "date_mismatch", `납품일 불일치(CRM ${b.crm_delivery_date} ≠ 플랫폼 ${b.platform_delivery_date})`, "실제 납품일 확인");
+    if (b.source === "legacy" && b.payout_mismatch) add("C", "payout_date_mismatch", `지급예정일 불일치(CRM ${b.crm_payout_date} ≠ 플랫폼 ${b.platform_payout_date})`, "실제 지급예정일 확인");
     if (scope === "date" && candidate === "delivery_window" && pd && pd !== d) add("C", "window_mismatch", `${win!.from}~${win!.to} 납품인데 지급일 ${pd}`, "지급예정일 확인");
     if (kind === "platform" && p && !paid) {
       if (!p.delivery_confirmed) add("C", "no_confirm", "납품확인 미완료", "담당 PM 납품확인");
@@ -221,6 +226,10 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
       assignmentId: p ? Number(p.id) : null, projectId: p ? Number(p.project_id) : null, projectTitle: p?.project_title ?? null,
       saleNo, quoteNumber: p?.quote_number ?? null, payee: b.translator, masterId, vendorId, client: b.client,
       deliveryDate: dd, payoutDate: pd, actualPaymentDate: b.actual_payment_date ?? null,
+      // 날짜 출처(추가 필드): CRM 원본·플랫폼 값과 불일치 여부 — 화면·엑셀 공통
+      dateSource: b.source === "legacy" ? { crmDelivery: b.crm_delivery_date ?? null, platformDelivery: b.platform_delivery_date ?? null,
+        crmPayout: b.crm_payout_date ?? null, platformPayout: b.platform_payout_date ?? null } : null,
+      dateMismatch: b.delivery_mismatch === true || b.payout_mismatch === true || (kind === "platform" && !!p?.crm_delivery && !!dd && p.crm_delivery !== dd),
       pretax: amount, withholding: Math.round(num(b.withholding) * 100) / 100, posttax: Math.round(num(b.posttax) * 100) / 100,
       paymentStatus: p?.payment_status ?? (b.legacy_paid ? "paid" : "unconfirmed"), payoutRoundId: p?.payout_round_id ?? null,
       hasAccount, roundEligible, conversion, candidate,
