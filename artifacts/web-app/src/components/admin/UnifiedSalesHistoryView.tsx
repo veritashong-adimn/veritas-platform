@@ -72,11 +72,16 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
 
   const adminName = (id: number | null) => (id == null ? null : adminUsers.find(u => u.id === id)?.name || null);
 
+  // lastLoad = 마지막으로 '조회한' 조건(적용된 검색어). 페이지 이동·뒤로가기 재조회는 입력창 값이 아니라 이 조건을 쓴다.
   const lastLoad = useRef<{ page: number; keyword: string; size: number }>({ page: 1, keyword: q, size: pageSize });
   const tableScrollRef = useRef<HTMLDivElement>(null);
   const tableScrollTop = useRef(0);
-  const load = useCallback(async (page = 1, keyword = q, size = pageSize) => {
+  const reqSeq = useRef(0);                                    // 최신 요청 번호 — 늦게 도착한 이전 응답은 버린다
+  const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const load = useCallback(async (page = 1, keyword = lastLoad.current.keyword, size = pageSize) => {
+    if (debounce.current) { clearTimeout(debounce.current); debounce.current = null; }
     lastLoad.current = { page, keyword, size };
+    const seq = ++reqSeq.current;
     setLoading(true);
     try {
       const p = new URLSearchParams();
@@ -85,13 +90,23 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
       p.set('page', String(page)); p.set('pageSize', String(size));
       const res = await fetch(api(`/api/admin/sales-history?${p.toString()}`), { headers: authHeaders });
       const data = await res.json();
+      if (seq !== reqSeq.current) return;                      // 더 최근 요청이 있음 — 이 응답은 반영하지 않음
       if (!res.ok) throw new Error(data?.error || '조회 실패');
       setResult(data); setRows(data.rows);
-    } catch (e: any) { setToast(e?.message || '판매이력 조회 실패'); }
-    finally { setLoading(false); }
-  }, [range, q, pageSize, authHeaders]);
+    } catch (e: any) { if (seq === reqSeq.current) setToast(e?.message || '판매이력 조회 실패'); }
+    finally { if (seq === reqSeq.current) setLoading(false); }
+  }, [range, pageSize, authHeaders]);
+  // 검색 실행(자동 검색·[검색]·Enter 공통) — 항상 첫 페이지부터. 빈 검색어 = 전체 목록.
+  const runSearch = (keyword: string) => load(1, keyword);
 
-  useEffect(() => { load(1, q); /* range 변경 시 재조회 */ }, [range]); // eslint-disable-line
+  useEffect(() => { load(1, lastLoad.current.keyword); /* range 변경 시 같은 검색어로 첫 페이지 재조회 */ }, [range]); // eslint-disable-line
+  // 자동 검색: 입력이 멈추고 300ms 후 조회(적용된 검색어와 같으면 생략). [검색]·Enter 는 즉시 같은 runSearch.
+  useEffect(() => {
+    if (q.trim() === lastLoad.current.keyword.trim()) return;
+    if (debounce.current) clearTimeout(debounce.current);
+    debounce.current = setTimeout(() => { debounce.current = null; runSearch(q); }, 300);
+    return () => { if (debounce.current) { clearTimeout(debounce.current); debounce.current = null; } };
+  }, [q]); // eslint-disable-line react-hooks/exhaustive-deps
   // 판매 상세 → 뒤로가기: 숨겨 두었던 목록 그대로 표 스크롤 복원 → 같은 조건 재조회(행은 비우지 않음 → 위치 유지, 수정된 값만 바뀜)
   useLayoutEffect(() => {
     if (returnTick <= 0) return;
@@ -110,10 +125,10 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
     <div data-testid="unified-sales-history">
       {/* 검색 */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
-        <input value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') load(1, q); }}
+        <input value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') runSearch(q); }}
                placeholder="판매번호 · 프로젝트명 · 거래처 · 담당자 · 상품 통합검색 (현재 + 과거 CRM)" aria-label="통합 판매이력 검색" data-testid="sales-history-search"
                style={{ padding: '8px 11px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13, flex: '1 1 320px', maxWidth: 420 }} />
-        <button style={btn(loading, true)} disabled={loading} onClick={() => load(1, q)} data-testid="sales-history-search-btn">{loading ? '검색 중…' : '검색'}</button>
+        <button style={btn(loading, true)} disabled={loading} onClick={() => runSearch(q)} data-testid="sales-history-search-btn" aria-label="판매이력 검색">{loading ? '검색 중…' : '검색'}</button>
         <span style={{ fontSize: 12, color: '#6b7280' }}>총 {(p?.total ?? 0).toLocaleString()}건{range === 'all' ? ' (현재+과거)' : ' (과거 CRM)'}</span>
         <button style={{ ...btn(false), marginLeft: 'auto', background: '#fef2f2', color: '#b91c1c' }} onClick={() => setShowParty(true)} data-testid="btn-legacy-party-manager" aria-label="미연결 관리">미연결 관리</button>
         <button style={btn(false)} onClick={() => setShowReview(true)} data-testid="btn-contact-review-open" aria-label="고객 담당자 확인 필요 목록">고객 담당자 확인 필요 목록</button>
@@ -224,13 +239,13 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
           onPick={id => { setShowReview(false); setContactEdit({ source: 'legacy', id }); }} />
       )}
       {showParty && (
-        <LegacyPartyManager authHeaders={authHeaders} onClose={() => { setShowParty(false); load(p?.page ?? 1, q); }}
+        <LegacyPartyManager authHeaders={authHeaders} onClose={() => { setShowParty(false); load(p?.page ?? 1, lastLoad.current.keyword); }}
           onOpenSale={r => { setShowParty(false); if (r.source === 'legacy' && r.saleRowId) onOpenLegacyDetail(r.saleRowId); else if (r.projectId) onOpenSalesDetail(r.projectId); }} />
       )}
       {contactEdit && (
         <SaleContactPicker source={contactEdit.source} id={contactEdit.id} authHeaders={authHeaders}
           onClose={() => setContactEdit(null)}
-          onSaved={msg => { setContactEdit(null); setToast(msg); load(p?.page ?? 1, q); }} />
+          onSaved={msg => { setContactEdit(null); setToast(msg); load(p?.page ?? 1, lastLoad.current.keyword); }} />
       )}
 
       {/* (표준화) 거래처 등과 동일한 공통 Pagination — 좌: 범위/전체/페이지당, 우: 처음/이전/1~5/다음/마지막 */}
@@ -242,8 +257,8 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
           total={p.total}
           unit="건"
           disabled={loading}
-          onPageChange={(pg) => load(pg, q)}
-          onPageSizeChange={(s) => { setPageSize(s); load(1, q, s); }}
+          onPageChange={(pg) => load(pg, lastLoad.current.keyword)}
+          onPageSizeChange={(s) => { setPageSize(s); load(1, lastLoad.current.keyword, s); }}
         />
       )}
     </div>

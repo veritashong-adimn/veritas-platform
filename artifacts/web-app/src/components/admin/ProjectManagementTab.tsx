@@ -251,6 +251,10 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
   // ── 필터 state ────────────────────────────────────────────────────────────
   const [projectFilter, setProjectFilter] = useState<string>("all");
   const [projectSearch, setProjectSearch] = useState("");
+  // 검색(2026-11-22): 자동 검색·[검색]·Enter 공통 — 요청 번호(늦은 응답 무시)·마지막 조회 검색어·자동 검색 대기 타이머
+  const projectReqSeq = useRef(0);
+  const appliedProjectSearch = useRef("");
+  const projectSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [assignedAdminFilter, setAssignedAdminFilter] = useState<string>("all");
@@ -376,6 +380,8 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
   //  silent: 상세에서 복귀 시 재조회 — '불러오는 중' 으로 표를 비우지 않아 페이지·스크롤 유지, 선택도 유지
   const fetchProjects = useCallback(async (opts?: { silent?: boolean }) => {
     const silent = opts?.silent === true;
+    const seq = ++projectReqSeq.current;          // 최신 요청 번호 — 늦게 도착한 이전 응답은 버린다
+    appliedProjectSearch.current = projectSearch;
     if (!silent) { setLoading(true); setSelectedIds(new Set()); } // 재조회(필터/작업 후) 시 선택 초기화
     try {
       const params = new URLSearchParams();
@@ -393,9 +399,10 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
       if (projectCompanyIdFilter) params.set("companyId", projectCompanyIdFilter);
       const res = await fetch(api(`/api/admin/projects${params.toString() ? "?" + params.toString() : ""}`), { headers: authHeaders });
       const data = await res.json();
+      if (seq !== projectReqSeq.current) return;  // 더 최근 요청이 있음
       if (res.ok) setProjects(Array.isArray(data) ? data : []);
-    } catch { setToast("오류: 판매 조회 실패"); }
-    finally { if (!silent) setLoading(false); }
+    } catch { if (seq === projectReqSeq.current) setToast("오류: 판매 조회 실패"); }
+    finally { if (!silent && seq === projectReqSeq.current) setLoading(false); }
   }, [token, projectSearch, projectFilter, dateFrom, dateTo, assignedAdminFilter, projectFinancialFilter, projectQuickFilter, projectBillingTypeFilter, projectPaymentDueDateFrom, projectPaymentDueDateTo, projectCompanyIdFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 거래처/담당자/고객 데이터 로드 (모달용) ──────────────────────────────
@@ -418,6 +425,22 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
     fetchProjects();
     fetchModalData();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // [현재] 검색 실행 — 자동 검색·[검색]·Enter 공통: 첫 페이지부터 같은 fetchProjects(빈 검색어 = 전체)
+  const runProjectSearch = () => {
+    if (projectSearchTimer.current) { clearTimeout(projectSearchTimer.current); projectSearchTimer.current = null; }
+    setProjectPage(1);
+    fetchProjects();
+  };
+  const runProjectSearchRef = useRef(runProjectSearch);
+  runProjectSearchRef.current = runProjectSearch;
+  // 자동 검색: 입력이 멈추고 300ms 후(마지막 조회 검색어와 같으면 생략). [현재] 목록에서만 — 전체자료·과거 CRM 은 UnifiedSalesHistoryView 가 처리.
+  useEffect(() => {
+    if (salesRange !== "current" || projectSearch.trim() === appliedProjectSearch.current.trim()) return;
+    if (projectSearchTimer.current) clearTimeout(projectSearchTimer.current);
+    projectSearchTimer.current = setTimeout(() => { projectSearchTimer.current = null; runProjectSearchRef.current(); }, 300);
+    return () => { if (projectSearchTimer.current) { clearTimeout(projectSearchTimer.current); projectSearchTimer.current = null; } };
+  }, [projectSearch, salesRange]);
 
   // applyAdvancedFilter / resetAdvancedFilter 에서 증가 → 최신 fetchProjects(새 클로저) 호출
   useEffect(() => {
@@ -875,9 +898,10 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
               value={projectSearch} onChange={e => setProjectSearch(e.target.value)}
               placeholder="판매번호 · 판매명 · 거래처 · 고객명 · 담당PM 검색"
               style={{ ...inputStyle, maxWidth: 320, flex: "1 1 180px", padding: "7px 11px", fontSize: 13 }}
-              onKeyDown={e => e.key === "Enter" && fetchProjects()}
+              onKeyDown={e => e.key === "Enter" && runProjectSearch()}
+              data-testid="project-search" aria-label="판매 검색"
             />
-            <PrimaryBtn onClick={() => fetchProjects()} disabled={loading} style={{ padding: "7px 14px", fontSize: 13 }}>
+            <PrimaryBtn onClick={() => runProjectSearch()} disabled={loading} style={{ padding: "7px 14px", fontSize: 13 }} data-testid="project-search-btn" aria-label="판매 검색 실행">
               {loading ? "검색 중..." : "검색"}
             </PrimaryBtn>
             {(projectSearch || dateFrom || dateTo || assignedAdminFilter !== "all" || projectFilter !== "all" || projectFinancialFilter !== "all" || projectQuickFilter !== "all" || projectBillingTypeFilter !== "all" || projectPaymentDueDateFrom || projectPaymentDueDateTo || projectCompanyIdFilter) && (
