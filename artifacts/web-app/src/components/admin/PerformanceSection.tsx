@@ -912,13 +912,16 @@ export default function PerformanceSection({ projectId, token, performances, onC
     // 지급 단계(2026-11) — 지급확정·지급완료 행은 금액 입력(수량·단가·요금)을 잠근다. 서버도 동일 기준으로 차단.
     const stage = payStage(r);
     //   (2026-11) 일반 저장과 요청을 분리 — 지급확정·지급완료·해외송금 완료 행은 수정모드에서 금액 입력을 잠그고,
-    //   조회화면의 [수정 요청]·[정정 요청] 버튼(요청 전용 화면)으로만 금액 변경을 요청한다.
+    //   [수정 요청](조회화면)·[정정 요청](지급완료 행은 수정모드) 버튼(요청 전용 화면)으로만 금액 변경을 요청한다.
     const overseasRemitted = r.performerCategory === 'vendor' && r.vendorSettlementType === 'overseas' && Number(r.remittanceSummary?.completedCount ?? 0) > 0;
     const corrMode: CorrectionMode | null = stage === 'confirmed' ? 'confirmed' : stage === 'paid' ? 'paid' : overseasRemitted ? 'overseas' : null;
     const amtLocked = editable && corrMode != null;
     const lastAdj = r.id != null ? adjByAssign.get(r.id) : undefined;
     const adjPending = lastAdj?.status === 'requested';
-    const adjBadge = !lastAdj ? null
+    // (2026-11-22) 지급완료 행: 지급 전 단계의 처리 끝난 수정 요청(지급확정 수정 — 반영·반려)은 지급완료로 종결된 이력 → 배지 숨김.
+    //   승인 대기 요청·지급완료 이후 정정(paid_correction)은 실제 처리 대상이므로 그대로 표시. 지급상태 판정과 무관(표시만).
+    const adjResolvedBeforePaid = stage === 'paid' && lastAdj?.kind === 'confirmed_change' && (lastAdj.status === 'approved' || lastAdj.status === 'rejected');
+    const adjBadge = !lastAdj || adjResolvedBeforePaid ? null
       : lastAdj.status === 'requested' ? { label: lastAdj.kind === 'confirmed_change' ? '수정 요청 대기' : '정정 요청 대기', color: C.warningTextDeep, bg: C.warningBg }
       : lastAdj.status === 'rejected' ? { label: '요청 반려', color: C.dangerText, bg: C.dangerBg }
       : lastAdj.status === 'cancelled' ? null
@@ -1053,7 +1056,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
         <td style={tdR}>
           {(editable ? qtyCols : qtyShown)
             ? (editable
-                ? <><input type="number" min={0} inputMode="numeric" data-testid={`perf-qty-${i}`} aria-label="수량" disabled={amtLocked} title={amtLocked ? "금액 변경은 조회화면의 [수정 요청]·[정정 요청]으로 요청하세요(승인 후 반영)" : r.quantityFromSale ? (qtyInCalc ? `판매수량(${r.quantity}) 복사값 — 현재 금액 계산에 사용 중. 실제 수량을 입력하세요` : `판매수량(${r.quantity}) 복사값 — 지급액 계산에 쓰이지 않음(실제 수행수량 아님)`) : undefined}
+                ? <><input type="number" min={0} inputMode="numeric" data-testid={`perf-qty-${i}`} aria-label="수량" disabled={amtLocked} title={amtLocked ? "금액 변경은 [수정 요청](지급확정: 조회화면)·[정정 요청](지급완료: 수정모드 지급상태 칸)으로 요청하세요(승인 후 반영)" : r.quantityFromSale ? (qtyInCalc ? `판매수량(${r.quantity}) 복사값 — 현재 금액 계산에 사용 중. 실제 수량을 입력하세요` : `판매수량(${r.quantity}) 복사값 — 지급액 계산에 쓰이지 않음(실제 수행수량 아님)`) : undefined}
                     style={{ ...inp, textAlign: 'right', ...(r.quantityFromSale ? (qtyInCalc ? { borderColor: C.danger, color: C.danger } : { borderStyle: 'dashed', color: C.textMuted }) : {}) }} placeholder={settleVendor ? '수량 입력' : undefined}
                     data-sale-copied={r.quantityFromSale ? (qtyInCalc ? 'in-calc' : 'unused') : undefined}
                     value={r.quantity == null || r.quantity === '' ? '' : String(r.quantity)} onChange={e => patchRow(i, { quantity: e.target.value, quantityFromSale: false, _qtyManual: true, ...promoteVendor(), ...vendorClearPatch(r, 'quantity', e.target.value) })} />
@@ -1168,8 +1171,10 @@ export default function PerformanceSection({ projectId, token, performances, onC
               <span data-testid={`perf-adj-status-${i}`} aria-label={`정정 요청 상태: ${adjBadge.label}`} title={`정정 #${lastAdj.id} · ${lastAdj.reason ?? ''}`}
                 style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4, color: adjBadge.color, background: adjBadge.bg, whiteSpace: 'nowrap' }}>{adjBadge.label}</span>
             )}
-            {/* [수정 요청]·[정정 요청] — 요청 전용 화면(일반 저장과 분리). 승인 대기 중이면 중복 요청 불가. */}
-            {!editable && corrMode && r.id != null && !r.legacyPayout?.display && (
+            {/* [수정 요청]·[정정 요청] — 요청 전용 화면(일반 저장과 분리). 승인 대기 중이면 중복 요청 불가.
+                (2026-11-22) 지급완료 행의 [정정 요청]은 조회화면에서 지급완료 배지와 함께 상태처럼 보이므로 수정모드(금액 잠금 행)에서만 노출.
+                지급확정 [수정 요청]·해외송금 완료 [정정 요청]은 기존대로 조회화면. */}
+            {(corrMode === 'paid' ? editable : !editable) && corrMode && r.id != null && !r.legacyPayout?.display && (
               <GhostBtn onClick={() => setCorrModal({ row: r, mode: corrMode })} disabled={busy || adjPending}
                 title={adjPending ? '승인 대기 중인 요청이 있습니다(처리·취소 후 다시 요청)' : undefined}
                 style={{ fontSize: 11, padding: '2px 7px' }} data-testid={`btn-perf-correction-${i}`} aria-label={corrMode === 'confirmed' ? '수정 요청' : '정정 요청'}>
