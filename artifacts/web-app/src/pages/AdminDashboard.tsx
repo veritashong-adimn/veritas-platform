@@ -330,6 +330,22 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [boardTargets, setBoardTargets] = useState<number[]>([]);
   const [boardFiles, setBoardFiles] = useState<File[]>([]);
   const isBoardAdmin = user.role === "admin";
+  // 글 작성은 현재 분류 탭 기준으로 연다(직원전용 탭 → 직원전용 등록 화면). 직원전용은 관리자만 작성.
+  const canWriteBoard = (cat: string) => cat !== "staff_only" || isBoardAdmin;
+  const toggleBoardForm = () => {
+    if (showBoardForm) { setShowBoardForm(false); return; }
+    if (!canWriteBoard(boardCategory)) return;
+    setBoardForm(p => ({ ...p, category: boardCategory, ...(boardCategory === "staff_only" ? { visibleToAll: false } : {}) }));
+    setShowBoardForm(true);
+  };
+  const selectBoardCategory = (cat: string) => {
+    setBoardCategory(cat);
+    // 작성 중 탭을 바꾸면 작성 분류도 그 탭으로(작성 권한 없는 분류면 작성창 닫음)
+    if (showBoardForm) {
+      if (canWriteBoard(cat)) setBoardForm(p => ({ ...p, category: cat, ...(cat === "staff_only" ? { visibleToAll: false } : {}) }));
+      else setShowBoardForm(false);
+    }
+  };
 
   // translator profile modal
   const [translatorProfileModal, setTranslatorProfileModal] = useState<{ userId: number; email: string } | null>(null);
@@ -2245,13 +2261,16 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       {/* ── 게시판 탭 ── */}
       {adminTab === "board" && (
         <Section title={`게시판 (${boardPosts.length})`} action={
-          <PrimaryBtn onClick={() => setShowBoardForm(v => !v)} style={{ fontSize: 13, padding: "7px 14px" }}>
+          canWriteBoard(boardCategory) || showBoardForm ? (
+          <PrimaryBtn onClick={toggleBoardForm} style={{ fontSize: 13, padding: "7px 14px" }}
+            data-testid="board-write-toggle" aria-label={showBoardForm ? "글 작성 취소" : "글 작성"}>
             {showBoardForm ? "취소" : "+ 글 작성"}
           </PrimaryBtn>
+          ) : undefined
         }>
           {showBoardForm && (
             <Card style={{ marginBottom: 16, padding: "16px 20px" }}>
-              <p style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700, color: "#111827" }}>게시물 작성</p>
+              <p style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700, color: "#111827" }} data-testid="board-form-title">{boardForm.category === "staff_only" ? "직원전용 자료 등록" : "게시물 작성"}</p>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px", marginBottom: 10 }}>
                 <div>
                   <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 2 }}>카테고리</label>
@@ -2309,7 +2328,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
           <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
             {BOARD_CATEGORIES.map(({ value: v, label: l }) => (
-              <button key={v} onClick={() => setBoardCategory(v)} data-testid={`board-filter-${v}`} aria-label={`${l} 분류 보기`}
+              <button key={v} onClick={() => selectBoardCategory(v)} data-testid={`board-filter-${v}`} aria-label={`${l} 분류 보기`}
                 style={{ padding: "6px 14px", borderRadius: 20, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600,
                   background: boardCategory === v ? "#2563eb" : "#f3f4f6", color: boardCategory === v ? "#fff" : "#374151" }}>
                 {l}
