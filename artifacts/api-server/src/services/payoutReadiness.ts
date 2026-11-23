@@ -135,6 +135,9 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
       (SELECT m.legacy_id FROM legacy_master_mappings m WHERE m.source_system = 'old_crm' AND m.entity_type = 'sale' AND m.entity_id = pa.project_id AND m.status = 'active' LIMIT 1) AS legacy_sale_no,
       (SELECT substring(r.source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') FROM import_row_sources s JOIN legacy_archive_rows r ON r.id::text = substring(s.row_key from 10)
         WHERE s.module = 'legacy_sale_activation' AND s.entity_id = pa.id AND s.row_key LIKE 'progress:%' ORDER BY s.id DESC LIMIT 1) AS crm_delivery,
+      -- 연결 CRM 원본의 통번역사명(외주업체 지급 건의 실제 수행자 표시용 — 표시 전용, 연결·지급 판정에 사용하지 않음)
+      (SELECT nullif(btrim(r.source_raw->>'통번역사명'), '') FROM import_row_sources s JOIN legacy_archive_rows r ON r.id::text = substring(s.row_key from 10)
+        WHERE s.module = 'legacy_sale_activation' AND s.entity_id = pa.id AND s.row_key LIKE 'progress:%' ORDER BY s.id DESC LIMIT 1) AS crm_translator,
       (SELECT substring(s.row_key from 10)::int FROM import_row_sources s WHERE s.module = 'legacy_sale_activation' AND s.entity_id = pa.id AND s.row_key LIKE 'progress:%' ORDER BY s.id DESC LIMIT 1) AS crm_row_id
     FROM performance_assignments pa LEFT JOIN projects p ON p.id = pa.project_id WHERE pa.id IN (${inList(paIds)})`)).map(r => [Number(r.id), r]));
 
@@ -298,7 +301,14 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
     out.push({
       source: b.source, kind, sourceKey: b.source_key, crmRowId: b.source === "legacy" ? Number(b.id) : (p?.crm_row_id ?? null),
       assignmentId: p ? Number(p.id) : null, projectId: p ? Number(p.project_id) : null, projectTitle: p?.project_title ?? null,
-      saleNo, quoteNumber: p?.quote_number ?? null, payee: b.translator, masterId, vendorId, client: b.client,
+      saleNo, quoteNumber: p?.quote_number ?? null, masterId, vendorId, client: b.client,
+      // 지급 대상(payee): 외주업체 지급 건은 외주업체 Master 명으로 통일(판매건·출처 무관). 실제 수행자(performerName)는 따로 표시 —
+      //   CRM 전환·원본 = CRM 통번역사명, 플랫폼 = 연결 CRM 원본 통번역사명 › 수행자명 스냅샷. 업체명과 같으면 공란.
+      payee: payeeType === "vendor" && p?.vendor_name ? p.vendor_name : b.translator,
+      performerName: payeeType === "vendor" ? (() => {
+        const n = String((b.source === "legacy" ? b.translator : (p?.crm_translator ?? b.translator)) ?? "").trim();
+        return n && normName(n) !== normName(p?.vendor_name) ? n : null;
+      })() : null,
       deliveryDate: dd, payoutDate: pd, actualPaymentDate: b.actual_payment_date ?? null,
       // 날짜 출처(추가 필드): CRM 원본·플랫폼 값과 불일치 여부 — 화면·엑셀 공통
       dateSource: b.source === "legacy" ? { crmDelivery: b.crm_delivery_date ?? null, platformDelivery: b.platform_delivery_date ?? null,
@@ -330,14 +340,21 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
   // 주민등록번호(마스킹만) — 개인 수행자(Master 연결)만. 외주업체·미연결은 공란. 전체번호는 별도 관리자 전용 API.
   const rrnMasked = await loadResidentNumbers(dbx, out.filter(o => o.vendorId == null && o.masterId != null).map(o => o.masterId), false);
   for (const o of out) o.residentNumberMasked = o.vendorId == null && o.masterId != null ? (rrnMasked.get(o.masterId) ?? null) : null;
-  // 연락처·이메일(엑셀 전용) — 명부 ID 기준만(이름 매칭 없음): 개인 = 통번역사 프로필 연락처·계정 이메일, 외주업체 = 업체 전화(없으면 휴대폰)·이메일.
+  // 연락처·이메일 — 명부 ID 기준만(이름 매칭 없음).
+  //   개인 = 통번역사 프로필 연락처·계정 이메일. 통합(translator_merges active)된 Master 는 대표 Master 의 최신 정보.
+  //   외주업체 = 업체 전화(없으면 휴대폰)·이메일, 업체에 없으면 그 업체 담당자(contacts, 대표 담당자 우선)의 휴대폰·전화·이메일.
   //   과거 CRM 이관 임시 이메일(@crm-migrated.invalid)·미등록은 null(공란).
   const uIds = [...new Set(out.filter(o => o.vendorId == null && o.masterId != null).map(o => o.masterId as number))];
   const vIds = [...new Set(out.filter(o => o.vendorId != null).map(o => o.vendorId as number))];
-  const uContact = new Map((await rows(dbx, sql`SELECT u.id, nullif(btrim((SELECT tp.phone FROM translator_profiles tp WHERE tp.user_id = u.id LIMIT 1)), '') AS phone, u.email
-    FROM users u WHERE u.id IN (${inList(uIds)})`)).map(r => [Number(r.id), r]));
-  const vContact = new Map((await rows(dbx, sql`SELECT c.id, coalesce(nullif(btrim(c.phone), ''), nullif(btrim(c.mobile), '')) AS phone, c.email
-    FROM companies c WHERE c.id IN (${inList(vIds)})`)).map(r => [Number(r.id), r]));
+  const uContact = new Map((await rows(dbx, sql`SELECT x.id, nullif(btrim((SELECT tp.phone FROM translator_profiles tp WHERE tp.user_id = u.id LIMIT 1)), '') AS phone, u.email
+    FROM (SELECT i AS id, coalesce((SELECT m.representative_master_id FROM translator_merges m WHERE m.merged_master_id = i AND m.status = 'active' LIMIT 1), i) AS cid
+          FROM unnest(ARRAY[${inList(uIds)}]::int[]) AS i) x JOIN users u ON u.id = x.cid`)).map(r => [Number(r.id), r]));
+  const vContact = new Map((await rows(dbx, sql`SELECT c.id,
+      coalesce(nullif(btrim(c.phone), ''), nullif(btrim(c.mobile), ''), nullif(btrim(k.mobile), ''), nullif(btrim(k.phone), ''), nullif(btrim(k.office_phone), '')) AS phone,
+      coalesce(nullif(btrim(c.email), ''), nullif(btrim(k.email), '')) AS email
+    FROM companies c LEFT JOIN LATERAL (SELECT * FROM contacts t WHERE t.company_id = c.id AND t.deleted_at IS NULL
+      ORDER BY t.is_primary DESC, (coalesce(btrim(t.email), '') <> '' OR coalesce(btrim(t.mobile), '') <> '' OR coalesce(btrim(t.phone), '') <> '') DESC, t.id LIMIT 1) k ON true
+    WHERE c.id IN (${inList(vIds)})`)).map(r => [Number(r.id), r]));
   const cleanEmail = (e: unknown) => { const s = String(e ?? "").trim(); return s && !isLegacyPlaceholderEmail(s) ? s : null; };
   for (const o of out) {
     const c = o.vendorId != null ? vContact.get(o.vendorId) : o.masterId != null ? uContact.get(o.masterId) : null;
