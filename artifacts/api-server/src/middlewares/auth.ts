@@ -128,7 +128,8 @@ export function requirePermission(key: string) {
     }
 
     if (!req.user.roleId) {
-      res.status(403).json({ error: "역할이 지정되지 않았습니다." });
+      // 역할 미지정 직원 — 원인과 조치를 함께 안내(응답 형태 {error} 유지, code·permission 은 추가 필드).
+      res.status(403).json({ error: `권한이 없습니다: ${key} (이 계정에 역할이 지정되지 않았습니다. 관리자에게 사용자관리에서 역할 지정을 요청하세요)`, code: "ROLE_NOT_ASSIGNED", permission: key });
       return;
     }
 

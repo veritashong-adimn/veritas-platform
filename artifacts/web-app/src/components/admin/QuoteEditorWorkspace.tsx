@@ -3439,7 +3439,7 @@ export function QuoteEditorWorkspace({
         const convertLabel = converted
           ? (isAccumulated ? '판매 연결됨' : '전환완료')
           : converting ? '전환 중…' : '판매전환';
-        const convertTitle = !canConvert ? '판매전환 권한이 없습니다.'
+        const convertTitle = !canConvert ? '판매전환 권한(견적 생성·판매전환)이 없습니다. 관리자에게 사용자관리에서 해당 권한이 있는 역할(예: pm) 지정을 요청하세요.'
           : isDerived ? '분할견적은 판매전환 대신 [분할 승인]으로 배분 확정됩니다(원 계약금액을 청구주체별로 배분).'
           : isPendingRevision ? '변경견적은 [변경견적 승인]으로 확정됩니다(승인 시 현재 유효견적으로 전환).'
           : isSuperseded ? '과거(대체된) 견적입니다. 현재 유효견적을 사용하세요.'

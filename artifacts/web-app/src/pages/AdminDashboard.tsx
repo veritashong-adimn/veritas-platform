@@ -939,7 +939,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     }
   }, [adminTab]);
   useEffect(() => {
-    if (adminTab !== "roles") return;
+    // 역할관리 탭뿐 아니라 사용자관리 탭의 시스템 권한(RBAC) 선택 목록에도 역할 목록이 필요하다.
+    if (adminTab !== "roles" && adminTab !== "users") return;
     const authH = { Authorization: `Bearer ${token}` };
     Promise.all([
       fetch(api("/api/admin/roles"), { headers: authH }).then(r => r.ok ? r.json() : []),
