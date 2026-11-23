@@ -346,7 +346,8 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
   //   과거 CRM 이관 임시 이메일(@crm-migrated.invalid)·미등록은 null(공란).
   const uIds = [...new Set(out.filter(o => o.vendorId == null && o.masterId != null).map(o => o.masterId as number))];
   const vIds = [...new Set(out.filter(o => o.vendorId != null).map(o => o.vendorId as number))];
-  const uContact = new Map((await rows(dbx, sql`SELECT x.id, nullif(btrim((SELECT tp.phone FROM translator_profiles tp WHERE tp.user_id = u.id LIMIT 1)), '') AS phone, u.email
+  const uContact = new Map((await rows(dbx, sql`SELECT x.id, nullif(btrim((SELECT tp.phone FROM translator_profiles tp WHERE tp.user_id = u.id LIMIT 1)), '') AS phone, u.email,
+      nullif(btrim(u.name), '') AS name, u.deleted_at IS NOT NULL AS deleted
     FROM (SELECT i AS id, coalesce((SELECT m.representative_master_id FROM translator_merges m WHERE m.merged_master_id = i AND m.status = 'active' LIMIT 1), i) AS cid
           FROM unnest(ARRAY[${inList(uIds)}]::int[]) AS i) x JOIN users u ON u.id = x.cid`)).map(r => [Number(r.id), r]));
   const vContact = new Map((await rows(dbx, sql`SELECT c.id,
@@ -359,6 +360,9 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
   for (const o of out) {
     const c = o.vendorId != null ? vContact.get(o.vendorId) : o.masterId != null ? uContact.get(o.masterId) : null;
     o.payeePhone = c?.phone ?? null; o.payeeEmail = cleanEmail(c?.email);
+    // 이름: 개인 수행자가 Master(삭제되지 않은, 통합 시 대표)에 연결돼 있으면 현재 명부 이름 우선. CRM 원본·수행정보 스냅샷 이름은 이력(sourcePayeeName)으로 보존.
+    o.sourcePayeeName = null;
+    if (o.vendorId == null && c?.name && !c.deleted && c.name !== String(o.payee ?? "").trim()) { o.sourcePayeeName = o.payee ?? null; o.payee = c.name; }
   }
   const order: Record<string, number> = { base: 0, delivery_window: 1, carry_over: 2, no_payout_date: 3, other: 4, all: 0 };
   out.sort((a, b) => (order[a.candidate] - order[b.candidate]) || a.state.localeCompare(b.state) || String(a.payee ?? "").localeCompare(String(b.payee ?? "")));

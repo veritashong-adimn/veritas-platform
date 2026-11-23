@@ -24,7 +24,8 @@ type Item = {
   pretax: number; withholding: number; posttax: number;
   // 지급금액 구분(서버 lib/payoutAmount — 지급명세서와 같은 기준): 개인 세전/원천세/세후 · 외주업체 공급가/부가세/지급합계
   payeeType?: 'individual' | 'vendor'; payeeTypeLabel?: string; vendorName?: string | null;
-  performerName?: string | null;   // 외주업체 지급 건의 실제 수행자(CRM 통번역사명 등), 없으면 null
+  performerName?: string | null;
+  sourcePayeeName?: string | null;   // 명부 최신 이름과 다른 원본 이름(CRM·수행정보 스냅샷) — 이력 표시·검색용   // 외주업체 지급 건의 실제 수행자(CRM 통번역사명 등), 없으면 null
   payAmount?: { withholding: number; supply: number | null; vat: number | null; payTotal: number }; taxConflict?: string | null;
   paymentStatus: string; payoutRoundId: number | null; hasAccount: boolean; roundEligible: boolean; candidate: string; countedInTotals: boolean;
   state: 'A' | 'B' | 'C' | 'D'; stateLabel: string; blockers: Blocker[]; actions: string[];
@@ -83,7 +84,7 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast }: {
   const rows = useMemo(() => {
     const s = q.trim().toLowerCase();
     return (data?.items ?? []).filter(i => (state === 'all' || i.state === state) && (kind === 'all' || i.kind === kind) && (cand === 'all' || i.candidate === cand)
-      && (!s || [i.payee, i.performerName, i.client, i.saleNo, i.quoteNumber, i.projectTitle, i.sourceKey, String(i.crmRowId ?? ''), String(i.projectId ?? '')].some(v => String(v ?? '').toLowerCase().includes(s))));
+      && (!s || [i.payee, i.performerName, i.sourcePayeeName, i.client, i.saleNo, i.quoteNumber, i.projectTitle, i.sourceKey, String(i.crmRowId ?? ''), String(i.projectId ?? '')].some(v => String(v ?? '').toLowerCase().includes(s))));
   }, [data, state, kind, cand, q]);
 
   const [fullBusy, setFullBusy] = useState(false);
@@ -236,7 +237,7 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast }: {
                         <td style={{ ...td, color: '#64748b' }}>{r.crmRowId ?? '—'}</td>
                         <td style={{ ...td, fontWeight: 700 }}>{r.payee ?? '—'}
                           <div data-testid={`ready-payee-type-${r.sourceKey}`} style={{ fontSize: 10.5, fontWeight: 700, color: isVendor(r) ? '#7c3aed' : '#64748b' }}>
-                            {isVendor(r) ? `외주업체${r.vendorName && r.vendorName !== r.payee ? ` · ${r.vendorName}` : ''}${r.performerName ? ` · 수행 ${r.performerName}` : ''}` : '개인'}</div></td>
+                            {isVendor(r) ? `외주업체${r.vendorName && r.vendorName !== r.payee ? ` · ${r.vendorName}` : ''}${r.performerName ? ` · 수행 ${r.performerName}` : ''}` : `개인${r.sourcePayeeName ? ` · 원본명 ${r.sourcePayeeName}` : ''}`}</div></td>
                         <td style={{ ...td, color: r.deliveryDate ? undefined : '#b91c1c' }}>{r.deliveryDate ?? '공란'}
                           {r.dateMismatch && <span title="CRM·플랫폼 날짜 불일치 — 사유 참고" aria-label="날짜 불일치" data-testid={`ready-date-mismatch-${r.sourceKey}`} style={{ marginLeft: 4, color: '#c2410c', fontWeight: 700 }}>⚠</span>}</td>
                         <td style={{ ...td, color: r.payoutDate ? undefined : '#b91c1c' }}>{r.payoutDate ?? '공란'}</td>
