@@ -18,6 +18,25 @@ import { PROG, CUR } from "../routes/payoutUnified";
 import { checkEligibility } from "./legacyPayoutConversion";
 import { LEGACY_PAID_DELIVERY_CUTOFF, todayKst } from "../lib/legacyPayoutRule";
 import { loadSaleIdentities } from "./saleIdentity";
+import { decrypt } from "../lib/encrypt";
+
+// 주민등록번호(통번역사 명부 translator_sensitive, AES-256-GCM) — 수행자 ID(users.id) 기준.
+//   full=false: '900101-*******'(생년월일만) / full=true: '900101-1234567'(관리자 전용 경로에서만 호출).
+//   번호 없음·복호화 실패·13자리 아님 → 결과에서 제외(엑셀 공란). 평문을 로그에 남기지 않는다.
+export async function loadResidentNumbers(dbx: Dbx, ids: number[], full: boolean): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  const uniq = [...new Set(ids.filter(n => Number.isInteger(n) && n > 0))];
+  if (!uniq.length) return out;
+  const rs = await rows(dbx, sql`SELECT translator_id, resident_number FROM translator_sensitive
+    WHERE translator_id IN (${sql.join(uniq.map(i => sql`${i}`), sql`, `)}) AND coalesce(resident_number, '') <> ''`);
+  for (const r of rs) {
+    let digits = "";
+    try { digits = decrypt(String(r.resident_number)).replace(/[^0-9]/g, ""); } catch { continue; }
+    if (digits.length !== 13) continue;
+    out.set(Number(r.translator_id), full ? `${digits.slice(0, 6)}-${digits.slice(6)}` : `${digits.slice(0, 6)}-*******`);
+  }
+  return out;
+}
 
 // 지급상태 표시(2026-11-22) — 화면·엑셀 공통. DB 지급상태(payment_status)·지급보류 안전장치는 바꾸지 않는 표시 전용 판정.
 //   paid 지급완료 / review 지급확인 필요(과거 CRM 지급보류·미확인, 지급보류, 중복 지급 후보)
@@ -263,6 +282,9 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
       state, stateLabel: READINESS_LABEL[state],
     });
   }
+  // 주민등록번호(마스킹만) — 개인 수행자(Master 연결)만. 외주업체·미연결은 공란. 전체번호는 별도 관리자 전용 API.
+  const rrnMasked = await loadResidentNumbers(dbx, out.filter(o => o.vendorId == null && o.masterId != null).map(o => o.masterId), false);
+  for (const o of out) o.residentNumberMasked = o.vendorId == null && o.masterId != null ? (rrnMasked.get(o.masterId) ?? null) : null;
   const order: Record<string, number> = { base: 0, delivery_window: 1, carry_over: 2, no_payout_date: 3, other: 4, all: 0 };
   out.sort((a, b) => (order[a.candidate] - order[b.candidate]) || a.state.localeCompare(b.state) || String(a.payee ?? "").localeCompare(String(b.payee ?? "")));
   const sum = (arr: any[]) => { const c = arr.filter(x => x.countedInTotals); return { count: arr.length, counted: c.length, pretax: c.reduce((s, x) => s + x.pretax, 0), posttax: Math.round(c.reduce((s, x) => s + x.posttax, 0)) }; };

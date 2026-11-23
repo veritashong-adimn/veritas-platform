@@ -13,6 +13,8 @@ type Blocker = { cat: 'B' | 'C' | 'D' | 'I'; code: string; text: string; action:
 type Item = {
   source: string; kind: 'platform' | 'crm_converted' | 'crm_only'; sourceKey: string; crmRowId: number | null; assignmentId: number | null;
   projectId: number | null; projectTitle: string | null; saleNo: string | null; quoteNumber: string | null; payee: string | null; client: string | null;
+  masterId?: number | null; vendorId?: number | null;
+  residentNumberMasked?: string | null;   // 통번역사 명부 주민번호(마스킹 '900101-*******'), 없으면 null
   deliveryDate: string | null; payoutDate: string | null; actualPaymentDate: string | null;
   dateMismatch?: boolean;   // CRM·플랫폼 날짜 불일치(덮어쓰지 않음 — 사유에 상세)
   // 지급상태 표시(서버 공통 판정 — 화면·엑셀 같은 값) · 판매금액(판매정보 저장값, CRM 원본만 있는 건 null)
@@ -23,7 +25,7 @@ type Item = {
   state: 'A' | 'B' | 'C' | 'D'; stateLabel: string; blockers: Blocker[]; actions: string[];
 };
 type Sum = { count: number; counted: number; pretax: number; posttax: number };
-type Resp = { scope: 'date' | 'all'; payoutDate: string | null; deliveryWindow: { from: string; to: string } | null; items: Item[];
+type Resp = { canRevealResidentNumber?: boolean; scope: 'date' | 'all'; payoutDate: string | null; deliveryWindow: { from: string; to: string } | null; items: Item[];
   summary: { total: Sum; byState: Record<string, Sum>; byKind: Record<string, Sum>; byCandidate: Record<string, Sum>; roundEligible: Sum; duplicates: number; issueCounts: Record<string, number> } };
 
 const STATE_STYLE: Record<string, { bg: string; c: string }> = {
@@ -75,13 +77,19 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast }: {
       && (!s || [i.payee, i.client, i.saleNo, i.quoteNumber, i.projectTitle, i.sourceKey, String(i.crmRowId ?? ''), String(i.projectId ?? '')].some(v => String(v ?? '').toLowerCase().includes(s))));
   }, [data, state, kind, cand, q]);
 
-  const exportExcel = () => {
+  const [fullBusy, setFullBusy] = useState(false);
+  // full: 관리자 전용 전체번호 엑셀 — 수행자 ID → 전체 주민번호(별도 API, 메모리에서만 사용·저장 안 함)
+  const exportExcel = (full?: Map<number, string>) => {
+    const rrn = (r: Item) => {
+      if (r.vendorId != null || r.masterId == null) return '';
+      return full ? (full.get(r.masterId) ?? '') : (r.residentNumberMasked ?? '');
+    };
     // 판매금액은 판매건 단위 — 같은 판매건(판매ID)의 첫 행에만 기재해 엑셀 합계에서 중복 합산되지 않게 한다.
     const firstOfSale = new Set<Item>(); const seen = new Set<number>();
     for (const r of rows) if (r.projectId != null && r.saleAmount && !seen.has(r.projectId)) { seen.add(r.projectId); firstOfSale.add(r); }
     const amt = (r: Item, k: 'supply' | 'vat' | 'total') => (firstOfSale.has(r) ? r.saleAmount![k] : '');
     exportDataset<Item>({
-      filename: scope === 'date' ? `지급준비점검_${date}.xlsx` : `지급누락점검_전체기간.xlsx`, sheetName: scope === 'date' ? '지급준비점검' : '지급누락점검',
+      filename: (scope === 'date' ? `지급준비점검_${date}` : `지급누락점검_전체기간`) + (full ? '_주민번호전체' : '') + '.xlsx', sheetName: scope === 'date' ? '지급준비점검' : '지급누락점검',
       columns: [
         { header: '출처', value: (r) => KIND_LABEL[r.kind] ?? r.kind, width: 9 },
         { header: '거래처', value: (r) => r.client ?? '', width: 22 },
@@ -91,6 +99,7 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast }: {
         { header: '부가세', value: (r) => amt(r, 'vat'), type: 'number', width: 11 },
         { header: '총액', value: (r) => amt(r, 'total'), type: 'number', width: 12 },
         { header: '통번역사·외주업체', value: (r) => r.payee ?? '', width: 16 },
+        { header: '주민등록번호', value: (r) => rrn(r), width: 16 },
         { header: '납품일', value: (r) => r.deliveryDate ?? '', width: 11 },
         { header: '지급예정일', value: (r) => r.payoutDate ?? '', width: 11 },
         { header: '실제 지급일', value: (r) => r.actualPaymentDate ?? '', width: 11 },
@@ -108,7 +117,20 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast }: {
       ],
       rows,
     });
-    onToast(`${rows.length}건을 Excel로 내보냈습니다.`);
+    onToast(`${rows.length}건을 Excel로 내보냈습니다.${full ? ' (주민번호 전체 — 외부 유출 주의)' : ''}`);
+  };
+  const exportFullExcel = async () => {
+    const ids = [...new Set(rows.filter(r => r.vendorId == null && r.masterId != null).map(r => r.masterId as number))];
+    if (!ids.length) { exportExcel(new Map()); return; }
+    setFullBusy(true);
+    try {
+      const r = await fetch(api('/api/admin/payout-unified/readiness/resident-numbers'), {
+        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ translatorIds: ids }) });
+      const d = await r.json().catch(() => null);
+      if (!r.ok) throw new Error(d?.error || `HTTP ${r.status}`);
+      exportExcel(new Map(Object.entries(d?.residentNumbers ?? {}).map(([k, v]) => [Number(k), String(v)])));
+    } catch (e) { onToast((e as Error).message || '주민번호 전체 엑셀 출력 실패'); }
+    finally { setFullBusy(false); }
   };
 
   const chip = (k: string, s?: Sum) => (
@@ -136,8 +158,11 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast }: {
           {open && tabBtn('date', '① 지급일 기준 후보')}
           {open && tabBtn('all', '② 전체 기간 누락·공란')}
           {open && scope === 'date' && <DateField value={date} onChange={v => v && setDate(v)} style={{ fontSize: 12, padding: '4px 6px', width: 130, border: '1px solid #cbd5e1', borderRadius: 6 }} testid="ready-date" ariaLabel="지급일" allowClear={false} />}
-          {open && data && <button type="button" onClick={exportExcel} data-testid="ready-excel" aria-label="지급 준비 점검 Excel"
+          {open && data && <button type="button" onClick={() => exportExcel()} data-testid="ready-excel" aria-label="지급 준비 점검 Excel"
             style={{ border: 'none', borderRadius: 7, padding: '5px 10px', background: '#059669', color: '#fff', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>Excel</button>}
+          {open && data?.canRevealResidentNumber && <button type="button" onClick={exportFullExcel} disabled={fullBusy} data-testid="ready-excel-full-rrn" aria-label="주민번호 전체 Excel(관리자 전용)"
+            title="관리자 전용 — 주민등록번호 전체가 포함됩니다. 외부 유출에 주의하세요."
+            style={{ border: '1px solid #b91c1c', borderRadius: 7, padding: '5px 10px', background: '#fff', color: '#b91c1c', fontWeight: 700, fontSize: 12, cursor: fullBusy ? 'wait' : 'pointer' }}>{fullBusy ? '출력 중…' : '전체번호 Excel'}</button>}
           <button type="button" onClick={() => setOpen(o => !o)} data-testid="ready-toggle" aria-expanded={open} aria-label="지급 준비 점검 열기"
             style={{ border: '1px solid #cbd5e1', borderRadius: 7, padding: '5px 10px', background: open ? '#0369a1' : '#fff', color: open ? '#fff' : '#334155', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
             {open ? '접기' : '점검 열기'}</button>
