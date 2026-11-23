@@ -9,13 +9,19 @@
  *   5. 서버 사이드 페이지 계산
  *   6. Preview 반환 (DB 저장 없음)
  */
-import { Router, type IRouter } from "express";
+import express, { Router, type IRouter } from "express";
 import { db, productsTable } from "@workspace/db";
 import { eq, and, isNull } from "drizzle-orm";
 import multer from "multer";
 import path from "node:path";
 import { requireAuth, requireRole } from "../middlewares/auth";
 import { extractText, type TextStats } from "../lib/textExtractor";
+import { randomUUID } from "node:crypto";
+import {
+  CreateMultipartUploadCommand, UploadPartCommand, CompleteMultipartUploadCommand, AbortMultipartUploadCommand,
+  HeadObjectCommand, GetObjectCommand,
+} from "@aws-sdk/client-s3";
+import { getR2Client, bucketName, isR2Configured, deleteFromR2 } from "../lib/r2";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -94,6 +100,29 @@ function decodeName(f: Express.Multer.File): string {
   try { return Buffer.from(f.originalname, "latin1").toString("utf8"); }
   catch { return f.originalname; }
 }
+
+// ─── 대용량·다중 파일 업로드(R2 분할 업로드) ─────────────────────────────────
+// 여러 파일을 한 요청 본문(multipart)으로 보내면 운영(autoscale) 요청 본문 한도(32MiB)를 넘어 HTTP 413 이 난다.
+// → 파일마다 8MB 조각으로 나눠 API 를 거쳐 기존 R2 버킷(임시 접두어 ai-draft-tmp/)에 S3 멀티파트로 올리고,
+//   파일별로 텍스트를 추출(기존 extractText 그대로)한 뒤 임시 객체는 즉시 삭제한다. AI 요청에는 수치·샘플만 보낸다.
+//   (R2 버킷에 브라우저 직접 업로드용 CORS 가 없어 presigned PUT 은 쓰지 않는다.)
+export const AI_FILE_MAX_BYTES = 50 * 1024 * 1024;   // 파일당 상한(무제한 아님)
+const AI_PART_BYTES = 8 * 1024 * 1024;                // 조각 크기(S3 멀티파트 최소 5MB 이상, 한 요청 ≪ 32MiB)
+const TMP_KEY_RE = /^ai-draft-tmp\/[0-9a-f-]{36}\.(pdf|jpe?g|png|docx?|txt|pptx?|xlsx?|hwpx?)$/;
+const ALL_EXTS = new Set(SOURCE_EXTS);
+
+async function readTmpObject(key: string): Promise<Buffer> {
+  if (!TMP_KEY_RE.test(key)) throw Object.assign(new Error("잘못된 파일 키입니다."), { status: 400 });
+  const client = getR2Client() as any;
+  const head = await client.send(new HeadObjectCommand({ Bucket: bucketName, Key: key }));
+  if ((head.ContentLength ?? 0) > AI_FILE_MAX_BYTES) throw Object.assign(new Error(`파일 용량이 ${AI_FILE_MAX_BYTES / 1024 / 1024}MB 를 초과합니다.`), { status: 413 });
+  const obj = await client.send(new GetObjectCommand({ Bucket: bucketName, Key: key }));
+  return Buffer.from(await obj.Body!.transformToByteArray());
+}
+const r2Guard = (_req: any, res: any, next: any) => {
+  if (!isR2Configured()) { res.status(503).json({ error: "파일 저장소(R2)가 설정되지 않았습니다." }); return; }
+  next();
+};
 
 // ─── Mock 초안 생성 (OpenAI 미설정 시) ──────────────────────────────────────
 
@@ -255,7 +284,81 @@ ${JSON.stringify(productList, null, 2)}`;
   };
 }
 
+// ─── 분할 업로드: 시작 → 조각 → 완료 → 파일별 추출 ─────────────────────────────
+router.post("/quotes/ai-draft/uploads", ...adminGuard, r2Guard, async (req, res) => {
+  const name = String(req.body?.name ?? ""); const size = Number(req.body?.size ?? 0);
+  const ext = path.extname(name).toLowerCase();
+  if (!ALL_EXTS.has(ext)) { res.status(400).json({ error: `지원하지 않는 형식: ${ext || "(없음)"}` }); return; }
+  if (!(size > 0)) { res.status(400).json({ error: "빈 파일입니다." }); return; }
+  if (size > AI_FILE_MAX_BYTES) { res.status(413).json({ error: `파일 용량이 ${AI_FILE_MAX_BYTES / 1024 / 1024}MB 를 초과합니다.` }); return; }
+  try {
+    const key = `ai-draft-tmp/${randomUUID()}${ext}`;
+    const r = await (getR2Client() as any).send(new CreateMultipartUploadCommand({ Bucket: bucketName, Key: key }));
+    res.json({ key, uploadId: r.UploadId, partSize: AI_PART_BYTES });
+  } catch (err) { req.log.error({ err }, "AI-DRAFT 업로드 시작 실패"); res.status(500).json({ error: "업로드 시작 실패" }); }
+});
+
+router.put("/quotes/ai-draft/uploads/part", ...adminGuard, r2Guard,
+  express.raw({ type: "application/octet-stream", limit: AI_PART_BYTES + 1024 }),
+  async (req, res) => {
+    const key = String(req.query.key ?? ""), uploadId = String(req.query.uploadId ?? ""), partNumber = Number(req.query.partNumber);
+    const maxParts = Math.ceil(AI_FILE_MAX_BYTES / AI_PART_BYTES);
+    if (!TMP_KEY_RE.test(key) || !uploadId || !Number.isInteger(partNumber) || partNumber < 1 || partNumber > maxParts) { res.status(400).json({ error: "잘못된 조각 요청입니다." }); return; }
+    const body = req.body as Buffer;
+    if (!Buffer.isBuffer(body) || body.length === 0) { res.status(400).json({ error: "조각 데이터가 없습니다." }); return; }
+    try {
+      const r = await (getR2Client() as any).send(new UploadPartCommand({ Bucket: bucketName, Key: key, UploadId: uploadId, PartNumber: partNumber, Body: body }));
+      res.json({ partNumber, etag: r.ETag });
+    } catch (err) { req.log.error({ err }, "AI-DRAFT 조각 업로드 실패"); res.status(500).json({ error: "조각 업로드 실패" }); }
+  });
+
+router.post("/quotes/ai-draft/uploads/complete", ...adminGuard, r2Guard, async (req, res) => {
+  const key = String(req.body?.key ?? ""), uploadId = String(req.body?.uploadId ?? "");
+  const parts = Array.isArray(req.body?.parts) ? req.body.parts : [];
+  if (!TMP_KEY_RE.test(key) || !uploadId || !parts.length) { res.status(400).json({ error: "잘못된 완료 요청입니다." }); return; }
+  const client = getR2Client() as any;
+  try {
+    await client.send(new CompleteMultipartUploadCommand({ Bucket: bucketName, Key: key, UploadId: uploadId,
+      MultipartUpload: { Parts: parts.map((p: any) => ({ PartNumber: Number(p.partNumber), ETag: String(p.etag) })).sort((a: any, b: any) => a.PartNumber - b.PartNumber) } }));
+    res.json({ key });
+  } catch (err) {
+    req.log.error({ err }, "AI-DRAFT 업로드 완료 실패");
+    await client.send(new AbortMultipartUploadCommand({ Bucket: bucketName, Key: key, UploadId: uploadId })).catch(() => undefined);
+    res.status(500).json({ error: "업로드 완료 실패" });
+  }
+});
+
+// 번역 원문 1개 → 기존 extractText 로 단어수·글자수 산정. 응답 text 는 AI 컨텍스트용 앞 500자만. 임시 객체는 항상 삭제.
+router.post("/quotes/ai-draft/extract", ...adminGuard, r2Guard, async (req, res) => {
+  const key = String(req.body?.key ?? ""); const name = String(req.body?.name ?? "").slice(0, 255);
+  try {
+    const buf = await readTmpObject(key);
+    const st = await extractText(buf, name || key, process.env.AI_INTEGRATIONS_OPENAI_API_KEY, process.env.AI_INTEGRATIONS_OPENAI_BASE_URL);
+    console.log(`[AI-DRAFT] extract ${name} (${buf.length} bytes) → ${st.method} words=${st.wordCount} chars=${st.charCountNoSpace}`);
+    res.json({ name, stats: { ...st, text: st.text.slice(0, 500) } });
+  } catch (err: any) {
+    req.log.error({ err: err?.message }, "AI-DRAFT 파일 추출 실패");
+    res.status(err?.status ?? 500).json({ error: err?.status ? err.message : "파일 분석 실패" });
+  } finally {
+    if (TMP_KEY_RE.test(key)) await deleteFromR2(key).catch(() => undefined);
+  }
+});
+
+// 클라이언트가 보낸 파일별 추출 수치 정리(숫자·문자열만, 텍스트는 샘플 500자)
+function sanitizeStats(raw: any): TextStats {
+  const n = (v: unknown) => { const x = Number(v); return Number.isFinite(x) && x >= 0 ? Math.round(x) : 0; };
+  const s = (v: unknown, max = 200) => (typeof v === "string" ? v.slice(0, max) : "");
+  return {
+    text: s(raw?.text, 500), wordCount: n(raw?.wordCount), charCountWithSpace: n(raw?.charCountWithSpace), charCountNoSpace: n(raw?.charCountNoSpace),
+    detectedLanguage: s(raw?.detectedLanguage, 20) || "unknown", method: s(raw?.method, 60), countBasis: s(raw?.countBasis, 60) || "Text Extraction",
+    ...(raw?.pageCount != null && n(raw.pageCount) > 0 ? { pageCount: n(raw.pageCount) } : {}),
+    ...(raw?.warning ? { warning: s(raw.warning, 300) } : {}),
+  };
+}
+
 // ─── POST /api/quotes/ai-draft ───────────────────────────────────────────────
+// 두 가지 입력: ① 기존 multipart(파일 본문 포함 — 하위 호환)  ② JSON(파일은 위 분할 업로드로 처리 완료):
+//   { requestText, sourceStats: [{ name, stats }], requestObjects: [{ key, name, size }] }
 
 router.post(
   "/quotes/ai-draft",
@@ -272,14 +375,24 @@ router.post(
   async (req, res) => {
     console.log("[AI-DRAFT] POST /api/quotes/ai-draft");
 
+    const jsonMode     = !!req.is("application/json");
     const requestText  = (req.body?.requestText as string) ?? "";
     const allFiles     = (req.files ?? {}) as Record<string, Express.Multer.File[]>;
-    const requestFiles = allFiles["requestFiles"] ?? [];
     const sourceFiles  = allFiles["sourceFiles"]  ?? [];
+    // 고객 요청자료 — multipart 파일 또는 R2 임시 객체(필요할 때 1개씩 읽고 처리 후 삭제)
+    type ReqInput = { name: string; size: number; load: () => Promise<Buffer> };
+    const requestObjects = jsonMode && Array.isArray(req.body?.requestObjects)
+      ? (req.body.requestObjects as any[]).filter(o => TMP_KEY_RE.test(String(o?.key ?? ""))).slice(0, 10) : [];
+    const requestFiles: ReqInput[] = jsonMode
+      ? requestObjects.map(o => ({ name: String(o.name ?? "").slice(0, 255), size: Number(o.size) || 0, load: () => readTmpObject(String(o.key)) }))
+      : (allFiles["requestFiles"] ?? []).map(f => ({ name: decodeName(f), size: f.size, load: async () => f.buffer }));
+    const preStats: Array<{ name: string; stats: TextStats }> = jsonMode && Array.isArray(req.body?.sourceStats)
+      ? (req.body.sourceStats as any[]).slice(0, 50).map(x => ({ name: String(x?.name ?? "").slice(0, 255), stats: sanitizeStats(x?.stats) })) : [];
+    res.on("finish", () => { for (const o of requestObjects) deleteFromR2(String(o.key)).catch(() => undefined); });
 
-    console.log(`[AI-DRAFT] text=${requestText.length}ch reqFiles=${requestFiles.length} srcFiles=${sourceFiles.length}`);
+    console.log(`[AI-DRAFT] mode=${jsonMode ? "json" : "multipart"} text=${requestText.length}ch reqFiles=${requestFiles.length} srcFiles=${sourceFiles.length + preStats.length}`);
 
-    if (!requestText.trim() && requestFiles.length === 0 && sourceFiles.length === 0) {
+    if (!requestText.trim() && requestFiles.length === 0 && sourceFiles.length === 0 && preStats.length === 0) {
       res.status(400).json({ error: "요청내용을 입력하거나 파일을 업로드해 주세요." });
       return;
     }
@@ -290,8 +403,8 @@ router.post(
     // ── Step 1: 번역 원문 텍스트 추출 ─────────────────────────────────────────
     // 각 파일에 서버 할당 고유 ID(source-0, source-1, …) 부여.
     // 이 ID는 GPT 컨텍스트에 포함되고 GPT 응답에 그대로 반환되어 파일명 불일치 없이 매핑된다.
-    const sourceFileStats: SourceFileStat[] = [];
-    const extractWarnings: string[] = [];
+    const sourceFileStats: SourceFileStat[] = preStats.map((p, idx) => ({ fileId: `source-${idx}`, name: p.name, stats: p.stats }));
+    const extractWarnings: string[] = preStats.filter(p => p.stats.warning).map(p => `${p.name}: ${p.stats.warning}`);
 
     // 진단용: 업로드된 소스 파일을 /tmp/에 저장 (분석 후 삭제 가능)
     for (const file of sourceFiles) {
@@ -369,14 +482,16 @@ router.post(
       const reqCtxParts:    string[]    = [];
 
       for (const file of requestFiles) {
-        const name = decodeName(file);
+        const name = file.name;
         const ext  = path.extname(name).toLowerCase();
         reqCtxParts.push(`- ${name} (${ext.toUpperCase().replace(".", "")}, ${Math.round(file.size / 1024)}KB)`);
         if ([".pdf", ".jpg", ".jpeg", ".png"].includes(ext)) {
           try {
-            let buf = file.buffer;
+            let buf = await file.load();
             let imgExt = ext;
             if (ext === ".pdf") { buf = await renderPdfFirstPageAsPng(buf); imgExt = ".png"; }
+            // AI 요청 본문 보호 — 이미지가 20MB 를 넘으면 시각 참고에서 제외(기존 업로드 상한과 동일 기준)
+            if (buf.length > 20 * 1024 * 1024) { extractWarnings.push(`${name}: 이미지가 커서 AI 시각 참고에서 제외했습니다.`); continue; }
             visionContents.push({ type: "image_url", image_url: { url: buildImageDataUrl(buf, imgExt) } });
           } catch { extractWarnings.push(`${name}: 이미지 변환 실패`); }
         }

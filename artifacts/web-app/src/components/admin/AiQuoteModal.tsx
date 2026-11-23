@@ -61,6 +61,33 @@ interface Props {
   onClose: () => void;
 }
 
+// ─── 파일 업로드(R2 분할) · 파일별 분석 ────────────────────────────────────────
+// 여러 파일을 한 요청 본문으로 보내면 운영 요청 본문 한도(32MiB)를 넘어 HTTP 413 이 난다.
+// 파일마다 8MB 조각으로 R2 임시 영역에 올린 뒤(서버 경유), 번역 원문은 파일별로 단어수·글자수를 산정한다.
+const AI_FILE_MAX_BYTES = 50 * 1024 * 1024;
+async function aiJson(path: string, init: RequestInit): Promise<any> {
+  const token = localStorage.getItem('auth_token');
+  const r = await fetch(api(path), { ...init, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(init.headers ?? {}) } });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d?.error ?? `HTTP ${r.status}`);
+  return d;
+}
+async function uploadAiFile(file: File, onPart?: (done: number, total: number) => void): Promise<string> {
+  if (file.size > AI_FILE_MAX_BYTES) throw new Error(`파일 용량이 ${AI_FILE_MAX_BYTES / 1024 / 1024}MB 를 초과합니다.`);
+  const init = await aiJson('/api/quotes/ai-draft/uploads', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: file.name, size: file.size }) });
+  const { key, uploadId, partSize } = init as { key: string; uploadId: string; partSize: number };
+  const total = Math.max(1, Math.ceil(file.size / partSize));
+  const parts: Array<{ partNumber: number; etag: string }> = [];
+  for (let i = 0; i < total; i++) {
+    const q = `key=${encodeURIComponent(key)}&uploadId=${encodeURIComponent(uploadId)}&partNumber=${i + 1}`;
+    const p = await aiJson(`/api/quotes/ai-draft/uploads/part?${q}`, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: file.slice(i * partSize, (i + 1) * partSize) });
+    parts.push({ partNumber: p.partNumber, etag: p.etag });
+    onPart?.(i + 1, total);
+  }
+  await aiJson('/api/quotes/ai-draft/uploads/complete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, uploadId, parts }) });
+  return key;
+}
+
 // ─── 서비스 유형 설정 ─────────────────────────────────────────────────────────
 
 const SVC_CFG: Record<ServiceType, { label: string; color: string; bg: string }> = {
@@ -307,6 +334,7 @@ export default function AiQuoteModal({ onApply, onClose }: Props) {
   const [reqFiles,     setReqFiles]     = useState<File[]>([]);
   const [srcFiles,     setSrcFiles]     = useState<File[]>([]);
   const [loading,      setLoading]      = useState(false);
+  const [progress,     setProgress]     = useState('');
   const [error,        setError]        = useState('');
   const [result,       setResult]       = useState<AiDraftResult | null>(null);
 
@@ -375,16 +403,35 @@ export default function AiQuoteModal({ onApply, onClose }: Props) {
     setResult(null);
 
     try {
-      const fd = new FormData();
-      fd.append('requestText', requestText);
-      reqFiles.forEach(f => fd.append('requestFiles', f));
-      srcFiles.forEach(f => fd.append('sourceFiles',  f));
+      // ① 파일별 업로드·분석 — 한 파일이 실패해도 나머지 파일 결과는 유지(실패 파일은 경고로 표시)
+      const failed: string[] = [];
+      const all = [...srcFiles.map(f => ({ f, kind: 'source' as const })), ...reqFiles.map(f => ({ f, kind: 'request' as const }))];
+      const sourceStats: Array<{ name: string; stats: unknown }> = [];
+      const requestObjects: Array<{ key: string; name: string; size: number }> = [];
+      for (const [i, { f, kind }] of all.entries()) {
+        const label = `파일 ${i + 1}/${all.length} · ${f.name}`;
+        try {
+          setProgress(`${label} 업로드 중…`);
+          const key = await uploadAiFile(f, (d, t) => t > 1 && setProgress(`${label} 업로드 중… (${d}/${t})`));
+          if (kind === 'source') {
+            setProgress(`${label} 단어수·글자수 분석 중…`);
+            const ex = await aiJson('/api/quotes/ai-draft/extract', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, name: f.name }) });
+            sourceStats.push({ name: f.name, stats: ex.stats });
+          } else requestObjects.push({ key, name: f.name, size: f.size });
+        } catch (e) {
+          failed.push(`${f.name}: ${e instanceof Error ? e.message : '분석 실패'}`);
+        }
+      }
+      if (all.length > 0 && sourceStats.length === 0 && requestObjects.length === 0 && !requestText.trim()) {
+        throw new Error(`모든 파일 분석에 실패했습니다 — ${failed.join(' / ')}`);
+      }
 
-      const token = localStorage.getItem('auth_token');
-      const resp  = await fetch(api('/api/quotes/ai-draft'), {
+      // ② AI 견적 초안 — 파일 본문 없이 파일별 수치·샘플만 전송
+      setProgress('AI 견적 초안 생성 중…');
+      const resp = await fetch(api('/api/quotes/ai-draft'), {
         method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        body: fd,
+        headers: { ...(localStorage.getItem('auth_token') ? { Authorization: `Bearer ${localStorage.getItem('auth_token')}` } : {}), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requestText, sourceStats, requestObjects }),
       });
 
       if (!resp.ok) {
@@ -393,6 +440,7 @@ export default function AiQuoteModal({ onApply, onClose }: Props) {
       }
 
       const data = (await resp.json()) as AiDraftResult;
+      if (failed.length) data.warnings = [...failed.map(m => `분석 실패 — ${m}`), ...(data.warnings ?? [])];
       console.log("[AI-DRAFT] Client received — rows:", data.draftRows.length, "confidence:", data.confidence);
       data.draftRows.forEach((r, i) => {
         console.log(
@@ -409,6 +457,7 @@ export default function AiQuoteModal({ onApply, onClose }: Props) {
       setError(e instanceof Error ? e.message : 'AI 견적 생성 중 오류가 발생했습니다. 다시 시도해 주세요.');
     } finally {
       setLoading(false);
+      setProgress('');
     }
   };
 
@@ -528,9 +577,9 @@ export default function AiQuoteModal({ onApply, onClose }: Props) {
                 : { background: C.ai, color: '#ffffff' }),
               width: '100%', justifyContent: 'center',
             }}
-            data-testid="ai-analyze-btn"
+            data-testid="ai-analyze-btn" aria-label="AI 분석하기" aria-busy={loading}
           >
-            {loading ? '⏳ AI 분석 중…' : `🤖 AI 분석하기${hasAnyFile ? ` (파일 ${reqFiles.length + srcFiles.length}개)` : ''}`}
+            {loading ? `⏳ ${progress || 'AI 분석 중…'}` : `🤖 AI 분석하기${hasAnyFile ? ` (파일 ${reqFiles.length + srcFiles.length}개)` : ''}`}
           </button>
 
           {/* 5. Preview */}

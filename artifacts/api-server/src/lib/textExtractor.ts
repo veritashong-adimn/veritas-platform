@@ -53,16 +53,26 @@ export function detectLanguage(text: string): string {
 // ─── 통계 계산 ───────────────────────────────────────────────────────────────
 
 function stats(raw: string, method: string, countBasis = "Text Extraction", warning?: string): TextStats {
-  const text = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim().slice(0, 50_000);
-  // Word 호환 단어수: 공백 분리, 순수 특수문자 토큰 제외
-  const words = text.split(/\s+/).filter(w =>
-    w.length > 0 && w.replace(/[^a-zA-Z\d-￿]/g, "").length > 0
-  );
+  const full = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  const text = full.slice(0, 50_000);   // 반환 원문(샘플·AI 컨텍스트용)만 5만 자로 제한
+  // 단어수·글자수는 전체 원문 기준 — 5만 자에서 자른 뒤 세면 대용량 문서가 과소 산정된다.
+  //  공백 경계에서 조각으로 나눠 같은 규칙(Word 호환: 공백 분리, 순수 특수문자 토큰 제외)으로 세고 합산(전체를 한 번에 센 값과 동일).
+  let wordCount = 0, charNoSpace = 0;
+  for (let i = 0; i < full.length;) {
+    let end = Math.min(full.length, i + 200_000);
+    if (end < full.length) { const re = /\s/g; re.lastIndex = end; const m = re.exec(full); end = m ? m.index : full.length; }
+    const chunk = full.slice(i, end);
+    wordCount += chunk.split(/\s+/).filter(w =>
+      w.length > 0 && w.replace(/[^a-zA-Z\d-￿]/g, "").length > 0
+    ).length;
+    charNoSpace += chunk.replace(/\s/g, "").length;
+    i = end;
+  }
   return {
     text,
-    wordCount:          words.length,
-    charCountWithSpace: text.length,
-    charCountNoSpace:   text.replace(/\s/g, "").length,
+    wordCount,
+    charCountWithSpace: full.length,
+    charCountNoSpace:   charNoSpace,
     detectedLanguage:   detectLanguage(text),
     method,
     countBasis,
