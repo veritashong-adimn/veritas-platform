@@ -302,6 +302,8 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
       source: b.source, kind, sourceKey: b.source_key, crmRowId: b.source === "legacy" ? Number(b.id) : (p?.crm_row_id ?? null),
       assignmentId: p ? Number(p.id) : null, projectId: p ? Number(p.project_id) : null, projectTitle: p?.project_title ?? null,
       saleNo, quoteNumber: p?.quote_number ?? null, masterId, vendorId, client: b.client,
+      // 실제 수행자 통번역사 Master(언어·상세정보 조회용) — 외주업체 지급 건도 수행자 Master 가 연결돼 있으면 사용
+      performerMasterId: p?.cat === "vendor" ? (p.individual_user_id != null ? Number(p.individual_user_id) : masterId) : masterId,
       // 지급 대상(payee): 외주업체 지급 건은 외주업체 Master 명으로 통일(판매건·출처 무관). 실제 수행자(performerName)는 따로 표시 —
       //   CRM 전환·원본 = CRM 통번역사명, 플랫폼 = 연결 CRM 원본 통번역사명 › 수행자명 스냅샷. 업체명과 같으면 공란.
       payee: payeeType === "vendor" && p?.vendor_name ? p.vendor_name : b.translator,
@@ -356,10 +358,19 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
     FROM companies c LEFT JOIN LATERAL (SELECT * FROM contacts t WHERE t.company_id = c.id AND t.deleted_at IS NULL
       ORDER BY t.is_primary DESC, (coalesce(btrim(t.email), '') <> '' OR coalesce(btrim(t.mobile), '') <> '' OR coalesce(btrim(t.phone), '') <> '') DESC, t.id LIMIT 1) k ON true
     WHERE c.id IN (${inList(vIds)})`)).map(r => [Number(r.id), r]));
+  // 언어·상세정보(엑셀 전용) — 실제 수행자 통번역사 Master 의 최신 명부 가능언어(language_pairs)·상세정보(bio) 원문 그대로.
+  //   개인·외주업체 지급 구분 없음: performerMasterId(개인 = 수행자 Master / 외주업체 = 수행정보 수행자 › CRM 확정 Master 연결).
+  //   통합(translator_merges active)된 Master 는 대표 Master 정보. Master 없음·미등록은 null(공란). 외주업체 주요업무로 대체하지 않음.
+  const pIds = [...new Set(out.map(o => o.performerMasterId).filter((v: unknown) => v != null))] as number[];
+  const pRoster = new Map((await rows(dbx, sql`SELECT x.id, nullif(btrim(tp.language_pairs), '') AS langs, nullif(btrim(tp.bio), '') AS detail
+    FROM (SELECT i AS id, coalesce((SELECT m.representative_master_id FROM translator_merges m WHERE m.merged_master_id = i AND m.status = 'active' LIMIT 1), i) AS cid
+          FROM unnest(ARRAY[${inList(pIds)}]::int[]) AS i) x JOIN translator_profiles tp ON tp.user_id = x.cid`)).map(r => [Number(r.id), r]));
   const cleanEmail = (e: unknown) => { const s = String(e ?? "").trim(); return s && !isLegacyPlaceholderEmail(s) ? s : null; };
   for (const o of out) {
     const c = o.vendorId != null ? vContact.get(o.vendorId) : o.masterId != null ? uContact.get(o.masterId) : null;
     o.payeePhone = c?.phone ?? null; o.payeeEmail = cleanEmail(c?.email);
+    const pr = o.performerMasterId != null ? pRoster.get(o.performerMasterId) : null;
+    o.payeeLanguages = pr?.langs ?? null; o.payeeDetail = pr?.detail ?? null;
     // 이름: 개인 수행자가 Master(삭제되지 않은, 통합 시 대표)에 연결돼 있으면 현재 명부 이름 우선. CRM 원본·수행정보 스냅샷 이름은 이력(sourcePayeeName)으로 보존.
     o.sourcePayeeName = null;
     if (o.vendorId == null && c?.name && !c.deleted && c.name !== String(o.payee ?? "").trim()) { o.sourcePayeeName = o.payee ?? null; o.payee = c.name; }
