@@ -48,6 +48,10 @@ export interface AiDraftRow {
   expenseType:      string;
   warnings:         string[];
   needsReview:      boolean;
+  // 표시 전용(견적에 저장되지 않음)
+  actualPages?:     number | null;
+  actualPageUnit?:  string;
+  quotePageBasis?:  string;
 }
 
 export interface AiDraftResult {
@@ -61,16 +65,37 @@ interface Props {
   onClose: () => void;
 }
 
+// 서버 파일별 분석 결과(표시용 필드만)
+interface FileStats {
+  wordCount: number; charCountWithSpace: number; charCountNoSpace: number;
+  countBasis?: string; physicalPages?: number; pageUnit?: string;
+  warning?: string; notices?: string[];
+}
+interface FileResult { name: string; size: number; ok: boolean; stats?: FileStats; error?: string }
+
 // ─── 파일 업로드(R2 분할) · 파일별 분석 ────────────────────────────────────────
 // 여러 파일을 한 요청 본문으로 보내면 운영 요청 본문 한도(32MiB)를 넘어 HTTP 413 이 난다.
 // 파일마다 8MB 조각으로 R2 임시 영역에 올린 뒤(서버 경유), 번역 원문은 파일별로 단어수·글자수를 산정한다.
-const AI_FILE_MAX_BYTES = 50 * 1024 * 1024;
+// 형식별 상한은 서버가 판정(DOCX·PPTX 500MB / PDF 200MB / 그 외 50MB) — 여기서는 전체 최대만 미리 거른다.
+const AI_FILE_MAX_BYTES = 500 * 1024 * 1024;
 async function aiJson(path: string, init: RequestInit): Promise<any> {
   const token = localStorage.getItem('auth_token');
   const r = await fetch(api(path), { ...init, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(init.headers ?? {}) } });
   const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(d?.error ?? `HTTP ${r.status}`);
+  if (!r.ok) throw Object.assign(new Error(d?.error ?? `HTTP ${r.status}`), { status: r.status });
   return d;
+}
+const jsonPost = (body: unknown): RequestInit => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+// 번역 원문 분석 — 서버가 다른 대용량 파일 분석 중(429)이면 같은 임시 파일로 잠시 뒤 재시도
+async function extractAiFile(key: string, name: string, onWait?: (n: number) => void): Promise<FileStats> {
+  for (let attempt = 1; ; attempt++) {
+    try { return (await aiJson('/api/quotes/ai-draft/extract', jsonPost({ key, name }))).stats as FileStats; }
+    catch (e: any) {
+      if (e?.status !== 429 || attempt >= 12) throw e;
+      onWait?.(attempt);
+      await new Promise(r => setTimeout(r, 10_000));
+    }
+  }
 }
 async function uploadAiFile(file: File, onPart?: (done: number, total: number) => void): Promise<string> {
   if (file.size > AI_FILE_MAX_BYTES) throw new Error(`파일 용량이 ${AI_FILE_MAX_BYTES / 1024 / 1024}MB 를 초과합니다.`);
@@ -78,13 +103,25 @@ async function uploadAiFile(file: File, onPart?: (done: number, total: number) =
   const { key, uploadId, partSize } = init as { key: string; uploadId: string; partSize: number };
   const total = Math.max(1, Math.ceil(file.size / partSize));
   const parts: Array<{ partNumber: number; etag: string }> = [];
-  for (let i = 0; i < total; i++) {
-    const q = `key=${encodeURIComponent(key)}&uploadId=${encodeURIComponent(uploadId)}&partNumber=${i + 1}`;
-    const p = await aiJson(`/api/quotes/ai-draft/uploads/part?${q}`, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: file.slice(i * partSize, (i + 1) * partSize) });
-    parts.push({ partNumber: p.partNumber, etag: p.etag });
-    onPart?.(i + 1, total);
+  try {
+    for (let i = 0; i < total; i++) {
+      const q = `key=${encodeURIComponent(key)}&uploadId=${encodeURIComponent(uploadId)}&partNumber=${i + 1}`;
+      const body = file.slice(i * partSize, (i + 1) * partSize);
+      let p: any;
+      // 조각 단위 재시도(네트워크 순간 오류) — 2회
+      for (let t = 0; ; t++) {
+        try { p = await aiJson(`/api/quotes/ai-draft/uploads/part?${q}`, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body }); break; }
+        catch (e: any) { if (t >= 2 || (e?.status && e.status < 500)) throw e; await new Promise(r => setTimeout(r, 1500)); }
+      }
+      parts.push({ partNumber: p.partNumber, etag: p.etag });
+      onPart?.(i + 1, total);
+    }
+    await aiJson('/api/quotes/ai-draft/uploads/complete', jsonPost({ key, uploadId, parts }));
+  } catch (e) {
+    // 중단된 업로드 조각은 R2 에서 정리
+    aiJson('/api/quotes/ai-draft/uploads/abort', jsonPost({ key, uploadId })).catch(() => undefined);
+    throw e;
   }
-  await aiJson('/api/quotes/ai-draft/uploads/complete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, uploadId, parts }) });
   return key;
 }
 
@@ -185,10 +222,19 @@ function TranslationDetail({ row }: { row: AiDraftRow }) {
               <td style={VAL}>{row.charCount.toLocaleString()}</td>
             </tr>
           )}
+          {row.productType === 'translation' && row.fileName && (
+            <tr>
+              <td style={LBL}>실제 {row.actualPageUnit ?? '페이지'}</td>
+              <td style={VAL}>{row.actualPages ? row.actualPages.toLocaleString() : '확인 불가'}</td>
+            </tr>
+          )}
           {row.quantity > 0 && (
             <tr>
-              <td style={LBL}>페이지</td>
-              <td style={{ ...VAL, fontWeight: 700, color: '#2563eb' }}>{row.quantity.toLocaleString()}</td>
+              <td style={LBL}>{row.productType === 'translation' && row.fileName ? '견적 환산 페이지' : '페이지'}</td>
+              <td style={{ ...VAL, fontWeight: 700, color: '#2563eb' }}>
+                {row.quantity.toLocaleString()}
+                {row.quotePageBasis && <span style={{ fontWeight: 400, color: C.textMuted, marginLeft: 6 }}>({row.quotePageBasis})</span>}
+              </td>
             </tr>
           )}
         </tbody>
@@ -337,6 +383,9 @@ export default function AiQuoteModal({ onApply, onClose }: Props) {
   const [progress,     setProgress]     = useState('');
   const [error,        setError]        = useState('');
   const [result,       setResult]       = useState<AiDraftResult | null>(null);
+  const [fileResults,  setFileResults]  = useState<FileResult[]>([]);
+  // 분석에 성공한 번역 원문 결과 — 재시도 시 다시 올리지 않는다(실패 파일만 재처리)
+  const statsCache = useRef(new Map<File, FileStats>());
 
   // ── 드래그 이동 ───────────────────────────────────────────────────────────
   // pos=null → 화면 중앙 (초기·리셋). pos 설정 후 → fixed 절대 좌표
@@ -408,20 +457,28 @@ export default function AiQuoteModal({ onApply, onClose }: Props) {
       const all = [...srcFiles.map(f => ({ f, kind: 'source' as const })), ...reqFiles.map(f => ({ f, kind: 'request' as const }))];
       const sourceStats: Array<{ name: string; stats: unknown }> = [];
       const requestObjects: Array<{ key: string; name: string; size: number }> = [];
+      const perFile: FileResult[] = [];
       for (const [i, { f, kind }] of all.entries()) {
         const label = `파일 ${i + 1}/${all.length} · ${f.name}`;
+        const cached = kind === 'source' ? statsCache.current.get(f) : undefined;
+        if (cached) { sourceStats.push({ name: f.name, stats: cached }); perFile.push({ name: f.name, size: f.size, ok: true, stats: cached }); continue; }
         try {
           setProgress(`${label} 업로드 중…`);
           const key = await uploadAiFile(f, (d, t) => t > 1 && setProgress(`${label} 업로드 중… (${d}/${t})`));
           if (kind === 'source') {
             setProgress(`${label} 단어수·글자수 분석 중…`);
-            const ex = await aiJson('/api/quotes/ai-draft/extract', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, name: f.name }) });
-            sourceStats.push({ name: f.name, stats: ex.stats });
+            const st = await extractAiFile(key, f.name, n => setProgress(`${label} 다른 대용량 파일 분석 대기 중… (${n})`));
+            statsCache.current.set(f, st);
+            sourceStats.push({ name: f.name, stats: st });
+            perFile.push({ name: f.name, size: f.size, ok: true, stats: st });
           } else requestObjects.push({ key, name: f.name, size: f.size });
         } catch (e) {
-          failed.push(`${f.name}: ${e instanceof Error ? e.message : '분석 실패'}`);
+          const msg = e instanceof Error ? e.message : '분석 실패';
+          failed.push(`${f.name}: ${msg}`);
+          if (kind === 'source') perFile.push({ name: f.name, size: f.size, ok: false, error: msg });
         }
       }
+      setFileResults(perFile);
       if (all.length > 0 && sourceStats.length === 0 && requestObjects.length === 0 && !requestText.trim()) {
         throw new Error(`모든 파일 분석에 실패했습니다 — ${failed.join(' / ')}`);
       }
@@ -581,6 +638,85 @@ export default function AiQuoteModal({ onApply, onClose }: Props) {
           >
             {loading ? `⏳ ${progress || 'AI 분석 중…'}` : `🤖 AI 분석하기${hasAnyFile ? ` (파일 ${reqFiles.length + srcFiles.length}개)` : ''}`}
           </button>
+
+          {/* 4-1. 번역 원문 파일별 분석 결과 + 합계 + 실패 파일 재시도 */}
+          {!loading && fileResults.length > 0 && (() => {
+            const ok = fileResults.filter(r => r.ok && r.stats);
+            const failedCnt = fileResults.length - ok.length;
+            const sum = (k: 'wordCount' | 'charCountNoSpace' | 'charCountWithSpace') => ok.reduce((a, r) => a + (r.stats![k] ?? 0), 0);
+            const pageUnits = new Set(ok.filter(r => r.stats!.physicalPages).map(r => r.stats!.pageUnit ?? '페이지'));
+            const pagesKnown = ok.every(r => r.stats!.physicalPages);
+            const pageSum = ok.reduce((a, r) => a + (r.stats!.physicalPages ?? 0), 0);
+            const fmt = (n: number) => n.toLocaleString();
+            const mb = (b: number) => `${(b / 1048576).toFixed(b < 10 * 1048576 ? 1 : 0)}MB`;
+            return (
+              <div data-testid="ai-file-results" style={{ border: BD.card, borderRadius: BD.radius.lg, overflow: 'hidden' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: C.g50 }}>
+                  <div style={{ ...TYPO.fieldLabel }}>번역 원문 파일별 분석</div>
+                  <span style={{ ...TYPO.helper }}>성공 {ok.length} / 전체 {fileResults.length}</span>
+                  {failedCnt > 0 && (
+                    <button
+                      onClick={handleAnalyze}
+                      style={{ ...BTN.base, ...BTN.size.sm, marginLeft: 'auto', background: C.ai, color: '#ffffff' }}
+                      data-testid="ai-retry-failed-btn" aria-label="실패한 파일만 재시도"
+                    >
+                      ↻ 실패한 파일 {failedCnt}개만 재시도
+                    </button>
+                  )}
+                </div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                    <thead>
+                      <tr>
+                        <th style={THEAD_CELL()}>파일</th>
+                        <th style={THEAD_CELL('right')}>단어수</th>
+                        <th style={THEAD_CELL('right')}>글자수(공백 제외)</th>
+                        <th style={THEAD_CELL('right')}>글자수(공백 포함)</th>
+                        <th style={THEAD_CELL('right')}>실제 페이지/슬라이드</th>
+                        <th style={THEAD_CELL()}>분석 기준 · 미분석 안내</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {fileResults.map((r, i) => (
+                        <tr key={i} data-testid={`ai-file-result-${i}`}>
+                          <td style={TD()}>
+                            <div style={{ fontWeight: 600, wordBreak: 'break-all' }}>{r.name}</div>
+                            <div style={{ ...TYPO.helper }}>{mb(r.size)}</div>
+                          </td>
+                          {r.ok && r.stats ? (<>
+                            <td style={TD('right')}>{fmt(r.stats.wordCount)}</td>
+                            <td style={TD('right')}>{fmt(r.stats.charCountNoSpace)}</td>
+                            <td style={TD('right')}>{fmt(r.stats.charCountWithSpace)}</td>
+                            <td style={TD('right')}>{r.stats.physicalPages ? `${fmt(r.stats.physicalPages)} ${r.stats.pageUnit ?? '페이지'}` : '–'}</td>
+                            <td style={TD()}>
+                              <div style={{ ...TYPO.helper }}>{r.stats.countBasis ?? 'Text Extraction'}</div>
+                              {[...(r.stats.warning ? [r.stats.warning] : []), ...(r.stats.notices ?? [])].map((n, ni) => (
+                                <div key={ni} style={{ ...TYPO.helper, color: C.warningText }}>⚠ {n}</div>
+                              ))}
+                            </td>
+                          </>) : (
+                            <td colSpan={5} style={{ ...TD(), color: C.dangerText }}>✕ 분석 실패 — {r.error}</td>
+                          )}
+                        </tr>
+                      ))}
+                      {ok.length > 1 && (
+                        <tr data-testid="ai-file-result-total" style={{ background: C.g50, fontWeight: 700 }}>
+                          <td style={TD()}>합계 ({ok.length}개 파일{failedCnt ? `, 실패 ${failedCnt}개 제외` : ''})</td>
+                          <td style={TD('right')}>{fmt(sum('wordCount'))}</td>
+                          <td style={TD('right')}>{fmt(sum('charCountNoSpace'))}</td>
+                          <td style={TD('right')}>{fmt(sum('charCountWithSpace'))}</td>
+                          <td style={TD('right')}>
+                            {pageSum > 0 ? `${fmt(pageSum)}${pageUnits.size === 1 ? ` ${[...pageUnits][0]}` : ' (페이지+슬라이드)'}${pagesKnown ? '' : ' *'}` : '–'}
+                          </td>
+                          <td style={{ ...TD(), ...TYPO.helper }}>{!pagesKnown && pageSum > 0 ? '* 페이지 정보가 없는 파일 제외' : ''}</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* 5. Preview */}
           {result && (

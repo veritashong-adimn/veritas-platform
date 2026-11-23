@@ -15,7 +15,8 @@ import { eq, and, isNull } from "drizzle-orm";
 import multer from "multer";
 import path from "node:path";
 import { requireAuth, requireRole } from "../middlewares/auth";
-import { extractText, type TextStats } from "../lib/textExtractor";
+import { extractText, extractTextFromZipSource, RANGED_ZIP_EXTS, type TextStats } from "../lib/textExtractor";
+import { PassThrough } from "node:stream";
 import { randomUUID } from "node:crypto";
 import {
   CreateMultipartUploadCommand, UploadPartCommand, CompleteMultipartUploadCommand, AbortMultipartUploadCommand,
@@ -37,6 +38,17 @@ function calcPages(st: { wordCount: number; charCountNoSpace: number; detectedLa
   }
   return Math.max(1, Math.ceil(st.wordCount / 250));
 }
+
+// HWP/HWPX 견적 수량 — 추출 글자수(공백 제외) 700자당 1페이지, 올림.
+//   (kordoc pageCount 는 섹션 수라 페이지가 아니다 — 견적 수량에 쓰지 않는다. 다른 형식은 기존 규칙 그대로)
+const HWP_CHARS_PER_PAGE = 700;
+const isHwpName = (name: string) => /\.hwpx?$/i.test(name);
+function quotePages(name: string, st: { wordCount: number; charCountNoSpace: number; detectedLanguage: string; pageCount?: number }, lang: string): number {
+  if (isHwpName(name)) return Math.max(1, Math.ceil(st.charCountNoSpace / HWP_CHARS_PER_PAGE));
+  return st.pageCount ?? calcPages(st, lang);   // 기존 규칙 그대로
+}
+const quotePageBasis = (name: string, st: { pageCount?: number }) =>
+  isHwpName(name) ? `글자수 ${HWP_CHARS_PER_PAGE}자당 1페이지(올림)` : st.pageCount ? "문서 공식 페이지 수" : "언어 정책 환산(한·중·일 700자 / 그 외 250단어)";
 
 // ─── multer ─────────────────────────────────────────────────────────────────
 
@@ -85,6 +97,10 @@ interface DraftRow {
   expenseType:      string;
   warnings:         string[];
   needsReview:      boolean;
+  // 표시 전용(저장 안 함)
+  actualPages?:     number | null;   // 실제 문서 페이지/슬라이드 수(알 수 없으면 null)
+  actualPageUnit?:  string;
+  quotePageBasis?:  string;          // 견적 환산 페이지(=quantity) 산정 근거
 }
 
 // 파일별 추출 결과 + 서버 할당 ID
@@ -106,19 +122,60 @@ function decodeName(f: Express.Multer.File): string {
 // → 파일마다 8MB 조각으로 나눠 API 를 거쳐 기존 R2 버킷(임시 접두어 ai-draft-tmp/)에 S3 멀티파트로 올리고,
 //   파일별로 텍스트를 추출(기존 extractText 그대로)한 뒤 임시 객체는 즉시 삭제한다. AI 요청에는 수치·샘플만 보낸다.
 //   (R2 버킷에 브라우저 직접 업로드용 CORS 가 없어 presigned PUT 은 쓰지 않는다.)
-export const AI_FILE_MAX_BYTES = 50 * 1024 * 1024;   // 파일당 상한(무제한 아님)
-const AI_PART_BYTES = 8 * 1024 * 1024;                // 조각 크기(S3 멀티파트 최소 5MB 이상, 한 요청 ≪ 32MiB)
+// 형식별 파일당 상한 — 서버 메모리 사용량 실측 기준(무제한 아님)
+//   DOCX/PPTX : 500MB — R2 범위 읽기로 텍스트 XML 파트만 압축 해제(파일 크기와 무관하게 메모리 사용 작음)
+//   PDF       : 200MB — pdf.js 가 파일 전체를 메모리에 올림(실측 RSS ≈ 파일 크기 × 1.2). 대용량은 동시 1건으로 제한
+//   그 외(DOC·HWP·HWPX·XLS·XLSX·TXT·PPT·이미지) : 50MB — 파서가 파일 전체를 메모리에 올리며 대용량 실측 전(기존 유지)
+const MB = 1024 * 1024;
+export const AI_FILE_MAX_BYTES = 500 * MB;            // 전체 최대(DOCX/PPTX)
+const AI_EXT_MAX_BYTES: Record<string, number> = { ".docx": 500 * MB, ".pptx": 500 * MB, ".pdf": 200 * MB };
+const AI_DEFAULT_MAX_BYTES = 50 * MB;
+const maxBytesFor = (ext: string) => AI_EXT_MAX_BYTES[ext] ?? AI_DEFAULT_MAX_BYTES;
+const tooLargeMsg = (ext: string) => `${ext.replace(".", "").toUpperCase()} 파일은 ${maxBytesFor(ext) / MB}MB 까지 분석할 수 있습니다.`;
+const AI_PART_BYTES = 8 * MB;                         // 조각 크기(S3 멀티파트 최소 5MB 이상, 한 요청 ≪ 32MiB)
 const TMP_KEY_RE = /^ai-draft-tmp\/[0-9a-f-]{36}\.(pdf|jpe?g|png|docx?|txt|pptx?|xlsx?|hwpx?)$/;
 const ALL_EXTS = new Set(SOURCE_EXTS);
+const keyExt = (key: string) => path.extname(key).toLowerCase();
 
-async function readTmpObject(key: string): Promise<Buffer> {
+async function headTmpObject(key: string): Promise<number> {
   if (!TMP_KEY_RE.test(key)) throw Object.assign(new Error("잘못된 파일 키입니다."), { status: 400 });
-  const client = getR2Client() as any;
-  const head = await client.send(new HeadObjectCommand({ Bucket: bucketName, Key: key }));
-  if ((head.ContentLength ?? 0) > AI_FILE_MAX_BYTES) throw Object.assign(new Error(`파일 용량이 ${AI_FILE_MAX_BYTES / 1024 / 1024}MB 를 초과합니다.`), { status: 413 });
-  const obj = await client.send(new GetObjectCommand({ Bucket: bucketName, Key: key }));
-  return Buffer.from(await obj.Body!.transformToByteArray());
+  const head = await (getR2Client() as any).send(new HeadObjectCommand({ Bucket: bucketName, Key: key }));
+  const size = Number(head.ContentLength ?? 0);
+  if (size > maxBytesFor(keyExt(key))) throw Object.assign(new Error(tooLargeMsg(keyExt(key))), { status: 413 });
+  return size;
 }
+
+// R2 객체를 크기만큼 미리 잡은 Buffer 하나에 스트리밍으로 채운다(transformToByteArray + Buffer.from 이중 복사 제거)
+async function readTmpObject(key: string): Promise<Buffer> {
+  const size = await headTmpObject(key);
+  const obj = await (getR2Client() as any).send(new GetObjectCommand({ Bucket: bucketName, Key: key }));
+  const out = Buffer.allocUnsafe(size);
+  let off = 0;
+  for await (const chunk of obj.Body as AsyncIterable<Uint8Array>) {
+    if (off + chunk.length > size) throw Object.assign(new Error("파일 크기가 업로드 정보와 다릅니다."), { status: 400 });
+    out.set(chunk, off); off += chunk.length;
+  }
+  return off === size ? out : out.subarray(0, off);
+}
+
+// DOCX/PPTX 용 R2 범위 읽기 소스(unzipper Open.custom) — 파일 전체를 받지 않는다
+function r2ZipSource(key: string, size: number) {
+  return {
+    size: async () => size,
+    stream: (offset: number, length?: number) => {
+      const pt = new PassThrough();
+      const end = length ? Math.min(size - 1, offset + length - 1) : size - 1;
+      (getR2Client() as any).send(new GetObjectCommand({ Bucket: bucketName, Key: key, Range: `bytes=${offset}-${end}` }))
+        .then((r: any) => { r.Body.on("error", (e: Error) => pt.destroy(e)); pt.on("close", () => r.Body.destroy?.()); r.Body.pipe(pt); })
+        .catch((e: Error) => pt.destroy(e));
+      return pt;
+    },
+  };
+}
+
+// 파일 전체를 메모리에 올리는 대용량(>50MB) 추출은 인스턴스당 동시 1건 — 메모리 급증 방지
+const LARGE_EXTRACT_BYTES = 50 * MB;
+let largeExtractBusy = false;
 const r2Guard = (_req: any, res: any, next: any) => {
   if (!isR2Configured()) { res.status(503).json({ error: "파일 저장소(R2)가 설정되지 않았습니다." }); return; }
   next();
@@ -134,7 +191,7 @@ function buildMockRows(
 
   for (const { fileId, name, stats } of sourceFiles) {
     const ext   = path.extname(name).replace(".", "").toUpperCase();
-    const pages = stats.pageCount ?? calcPages(stats, stats.detectedLanguage);
+    const pages = quotePages(name, stats, stats.detectedLanguage);
     rows.push({
       sourceFileId:     fileId,
       productId:        null,
@@ -164,6 +221,8 @@ function buildMockRows(
         "Mock 응답 — OpenAI API 키 설정 후 실제 분석 활성화",
       ],
       needsReview: true,
+      actualPages: stats.physicalPages ?? null, actualPageUnit: stats.pageUnit ?? "페이지",
+      quotePageBasis: quotePageBasis(name, stats),
     });
   }
 
@@ -290,7 +349,7 @@ router.post("/quotes/ai-draft/uploads", ...adminGuard, r2Guard, async (req, res)
   const ext = path.extname(name).toLowerCase();
   if (!ALL_EXTS.has(ext)) { res.status(400).json({ error: `지원하지 않는 형식: ${ext || "(없음)"}` }); return; }
   if (!(size > 0)) { res.status(400).json({ error: "빈 파일입니다." }); return; }
-  if (size > AI_FILE_MAX_BYTES) { res.status(413).json({ error: `파일 용량이 ${AI_FILE_MAX_BYTES / 1024 / 1024}MB 를 초과합니다.` }); return; }
+  if (size > maxBytesFor(ext)) { res.status(413).json({ error: tooLargeMsg(ext) }); return; }
   try {
     const key = `ai-draft-tmp/${randomUUID()}${ext}`;
     const r = await (getR2Client() as any).send(new CreateMultipartUploadCommand({ Bucket: bucketName, Key: key }));
@@ -302,9 +361,10 @@ router.put("/quotes/ai-draft/uploads/part", ...adminGuard, r2Guard,
   express.raw({ type: "application/octet-stream", limit: AI_PART_BYTES + 1024 }),
   async (req, res) => {
     const key = String(req.query.key ?? ""), uploadId = String(req.query.uploadId ?? ""), partNumber = Number(req.query.partNumber);
-    const maxParts = Math.ceil(AI_FILE_MAX_BYTES / AI_PART_BYTES);
+    const maxParts = Math.ceil(maxBytesFor(keyExt(key)) / AI_PART_BYTES);
     if (!TMP_KEY_RE.test(key) || !uploadId || !Number.isInteger(partNumber) || partNumber < 1 || partNumber > maxParts) { res.status(400).json({ error: "잘못된 조각 요청입니다." }); return; }
     const body = req.body as Buffer;
+    if (Buffer.isBuffer(body) && body.length > AI_PART_BYTES) { res.status(413).json({ error: "조각 크기가 너무 큽니다." }); return; }
     if (!Buffer.isBuffer(body) || body.length === 0) { res.status(400).json({ error: "조각 데이터가 없습니다." }); return; }
     try {
       const r = await (getR2Client() as any).send(new UploadPartCommand({ Bucket: bucketName, Key: key, UploadId: uploadId, PartNumber: partNumber, Body: body }));
@@ -328,19 +388,45 @@ router.post("/quotes/ai-draft/uploads/complete", ...adminGuard, r2Guard, async (
   }
 });
 
-// 번역 원문 1개 → 기존 extractText 로 단어수·글자수 산정. 응답 text 는 AI 컨텍스트용 앞 500자만. 임시 객체는 항상 삭제.
+// 업로드 중단 — 미완료 멀티파트(조각)를 R2 에서 정리
+router.post("/quotes/ai-draft/uploads/abort", ...adminGuard, r2Guard, async (req, res) => {
+  const key = String(req.body?.key ?? ""), uploadId = String(req.body?.uploadId ?? "");
+  if (!TMP_KEY_RE.test(key) || !uploadId) { res.status(400).json({ error: "잘못된 요청입니다." }); return; }
+  await (getR2Client() as any).send(new AbortMultipartUploadCommand({ Bucket: bucketName, Key: key, UploadId: uploadId })).catch(() => undefined);
+  await deleteFromR2(key).catch(() => undefined);
+  res.json({ ok: true });
+});
+
+// 번역 원문 1개 → 단어수·글자수 산정. 응답 text 는 AI 컨텍스트용 앞 500자만. 임시 객체는 항상 삭제.
+//   DOCX/PPTX: R2 범위 읽기(텍스트 파트만) / 그 외: 기존 extractText(파일 전체 메모리, 형식별 상한)
+//   대용량 동시 처리 중이면 429 → 임시 객체는 지우지 않고 클라이언트가 같은 key 로 재시도
 router.post("/quotes/ai-draft/extract", ...adminGuard, r2Guard, async (req, res) => {
   const key = String(req.body?.key ?? ""); const name = String(req.body?.name ?? "").slice(0, 255);
+  const ext = keyExt(key);
+  let keep = false, holdsGate = false;
+  const t0 = Date.now();
   try {
-    const buf = await readTmpObject(key);
-    const st = await extractText(buf, name || key, process.env.AI_INTEGRATIONS_OPENAI_API_KEY, process.env.AI_INTEGRATIONS_OPENAI_BASE_URL);
-    console.log(`[AI-DRAFT] extract ${name} (${buf.length} bytes) → ${st.method} words=${st.wordCount} chars=${st.charCountNoSpace}`);
+    const size = await headTmpObject(key);
+    let st: TextStats;
+    if (RANGED_ZIP_EXTS.has(ext)) {
+      st = await extractTextFromZipSource(r2ZipSource(key, size), name || key);
+    } else {
+      if (size > LARGE_EXTRACT_BYTES) {
+        if (largeExtractBusy) { keep = true; res.status(429).json({ error: "다른 대용량 파일을 분석 중입니다. 잠시 후 다시 시도해 주세요.", retryable: true }); return; }
+        largeExtractBusy = holdsGate = true;
+      }
+      const buf = await readTmpObject(key);
+      st = await extractText(buf, name || key, process.env.AI_INTEGRATIONS_OPENAI_API_KEY, process.env.AI_INTEGRATIONS_OPENAI_BASE_URL);
+    }
+    console.log(`[AI-DRAFT] extract ${name} (${size} bytes, ${Date.now() - t0}ms) → ${st.method} words=${st.wordCount} chars=${st.charCountNoSpace} pages=${st.physicalPages ?? "-"}`);
+    if (st.method.endsWith("-error")) { res.status(422).json({ error: st.warning ?? "파일 분석 실패" }); return; }
     res.json({ name, stats: { ...st, text: st.text.slice(0, 500) } });
   } catch (err: any) {
     req.log.error({ err: err?.message }, "AI-DRAFT 파일 추출 실패");
     res.status(err?.status ?? 500).json({ error: err?.status ? err.message : "파일 분석 실패" });
   } finally {
-    if (TMP_KEY_RE.test(key)) await deleteFromR2(key).catch(() => undefined);
+    if (holdsGate) largeExtractBusy = false;
+    if (!keep && TMP_KEY_RE.test(key)) await deleteFromR2(key).catch(() => undefined);
   }
 });
 
@@ -353,6 +439,7 @@ function sanitizeStats(raw: any): TextStats {
     detectedLanguage: s(raw?.detectedLanguage, 20) || "unknown", method: s(raw?.method, 60), countBasis: s(raw?.countBasis, 60) || "Text Extraction",
     ...(raw?.pageCount != null && n(raw.pageCount) > 0 ? { pageCount: n(raw.pageCount) } : {}),
     ...(raw?.warning ? { warning: s(raw.warning, 300) } : {}),
+    ...(raw?.physicalPages != null && n(raw.physicalPages) > 0 ? { physicalPages: n(raw.physicalPages), pageUnit: s(raw?.pageUnit, 10) || "페이지" } : {}),
   };
 }
 
@@ -406,17 +493,7 @@ router.post(
     const sourceFileStats: SourceFileStat[] = preStats.map((p, idx) => ({ fileId: `source-${idx}`, name: p.name, stats: p.stats }));
     const extractWarnings: string[] = preStats.filter(p => p.stats.warning).map(p => `${p.name}: ${p.stats.warning}`);
 
-    // 진단용: 업로드된 소스 파일을 /tmp/에 저장 (분석 후 삭제 가능)
-    for (const file of sourceFiles) {
-      try {
-        const safeName = decodeName(file).replace(/[^\w.-]/g, "_");
-        const savePath = `/tmp/ai-draft-upload-${safeName}`;
-        await import("node:fs").then(fs => fs.promises.writeFile(savePath, file.buffer));
-        console.log(`[AI-DRAFT] 진단용 파일 저장: ${savePath} (${file.buffer.length} bytes)`);
-      } catch (e) {
-        console.warn("[AI-DRAFT] 진단용 파일 저장 실패:", e);
-      }
-    }
+    // (구) 진단용 /tmp 원문 저장은 제거 — 고객 원문이 삭제되지 않고 남는 문제
 
     for (let idx = 0; idx < sourceFiles.length; idx++) {
       const file   = sourceFiles[idx];
@@ -502,7 +579,7 @@ router.post(
       const srcCtxParts: string[] = [];
       for (const { fileId, name, stats } of sourceFileStats) {
         const fmt   = path.extname(name).replace(".", "").toUpperCase();
-        const pages = stats.pageCount ?? calcPages(stats, stats.detectedLanguage);
+        const pages = quotePages(name, stats, stats.detectedLanguage);
         srcCtxParts.push(
           `### [${fileId}] 원본 파일명: ${name}\n` +
           `fileId: ${fileId}\n` +
@@ -595,12 +672,18 @@ router.post(
 
         // 페이지 계산: 공식 pageCount 우선, 없으면 언어 정책 계산
         if (row.productType === "translation") {
-          if (st?.pageCount) {
+          const srcName = (row.sourceFileId && sourceFileStats.find(f => f.fileId === row.sourceFileId)?.name) || row.fileName || "";
+          if (st && isHwpName(srcName)) {
+            row.quantity = quotePages(srcName, st, row.sourceLanguage);
+          } else if (st?.pageCount) {
             row.quantity = st.pageCount;
           } else {
             const ps = st ?? { wordCount: row.wordCount, charCountNoSpace: row.charCount, detectedLanguage: row.sourceLanguage };
             row.quantity = calcPages(ps as TextStats, row.sourceLanguage);
           }
+          row.actualPages    = st?.physicalPages ?? null;
+          row.actualPageUnit = st?.pageUnit ?? "페이지";
+          row.quotePageBasis = st ? quotePageBasis(srcName, st) : undefined;
         }
 
         // 경고 추가

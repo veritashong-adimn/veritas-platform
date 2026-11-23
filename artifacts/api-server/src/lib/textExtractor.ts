@@ -27,8 +27,52 @@ export interface TextStats {
   detectedLanguage:   string;   // 'ko' | 'ja' | 'zh-hans' | 'zh-hant' | 'en' | 'unknown'
   method:             string;   // 추출 방식 (로그/디버그용)
   countBasis:         string;   // UI 표시용 분석 기준 레이블
-  pageCount?:         number;   // 공식 문서 페이지수 (app.xml 등에서 추출)
+  pageCount?:         number;   // 공식 문서 페이지수 (app.xml 등에서 추출) — 견적 수량에 쓰인다
   warning?:           string;
+  // ── 표시 전용(견적 수량 계산에는 쓰지 않음) ──
+  physicalPages?:     number;   // 실제 페이지/슬라이드 수(PDF 페이지, PPTX 슬라이드, DOCX app.xml Pages)
+  pageUnit?:          string;   // '페이지' | '슬라이드'
+  notices?:           string[]; // 분석하지 못한 부분 안내(이미지 속 문자, 삽입 개체, 텍스트 없는 페이지 등)
+}
+
+/**
+ * ZIP(OOXML) 파일을 통째로 메모리에 올리지 않고 범위 읽기로 여는 소스.
+ * (unzipper Open.custom 형식 — R2 Range GET 등으로 구현)
+ */
+export interface ZipRangeSource {
+  size(): Promise<number>;
+  stream(offset: number, length?: number): NodeJS.ReadableStream;
+}
+
+// ZIP 폭탄 방지 — 텍스트 파트(XML)만 압축 해제하며, 해제 후 크기 상한
+const ZIP_TEXT_PART_MAX  = 100 * 1024 * 1024;   // 파트 1개
+const ZIP_TEXT_TOTAL_MAX = 200 * 1024 * 1024;   // 파트 합계
+
+async function openZip(input: Buffer | ZipRangeSource): Promise<import("unzipper").CentralDirectory> {
+  const unzipper = await import("unzipper");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return Buffer.isBuffer(input) ? unzipper.Open.buffer(input) : (unzipper.Open as any).custom(input);
+}
+
+type ZipEntry = import("unzipper").File;
+function guardZipParts(files: ZipEntry[]): void {
+  let total = 0;
+  for (const f of files) {
+    const sz = Number(f.uncompressedSize ?? 0);
+    if (sz > ZIP_TEXT_PART_MAX) throw new Error(`문서 내부 텍스트 파트(${f.path})가 비정상적으로 큽니다(${Math.round(sz / 1048576)}MB).`);
+    total += sz;
+  }
+  if (total > ZIP_TEXT_TOTAL_MAX) throw new Error(`문서 내부 텍스트 파트 합계가 비정상적으로 큽니다(${Math.round(total / 1048576)}MB).`);
+}
+
+function zipAssetNotices(files: ZipEntry[], mediaDir: RegExp, embedDir: RegExp): string[] {
+  const out: string[] = [];
+  const IMG = /\.(png|jpe?g|gif|bmp|tiff?|emf|wmf|svg|webp)$/i;
+  const imgs = files.filter(f => mediaDir.test(f.path) && IMG.test(f.path)).length;
+  const embeds = files.filter(f => embedDir.test(f.path)).length;
+  if (imgs > 0)   out.push(`이미지 ${imgs}개 포함 — 이미지 속 문자는 단어수·글자수에 포함되지 않았습니다(별도 확인 필요).`);
+  if (embeds > 0) out.push(`삽입 개체(엑셀·OLE 등) ${embeds}개 포함 — 개체 내부 텍스트는 산정되지 않았습니다(별도 확인 필요).`);
+  return out;
 }
 
 // ─── 언어 감지 (유니코드 블록 비율) ──────────────────────────────────────────
@@ -253,9 +297,8 @@ function calcWordCount(text: string): number {
  *
  * 파트별 단어수 로그로 누락 영역 진단 지원.
  */
-async function extractDocx(buf: Buffer): Promise<TextStats> {
-  const unzipper = await import("unzipper");
-  const zip = await unzipper.Open.buffer(buf);
+async function extractDocx(input: Buffer | ZipRangeSource): Promise<TextStats> {
+  const zip = await openZip(input);
 
   // ── 1. docProps/app.xml — Word 공식 통계 (1순위) ─────────────────────────────
   // <Words>/<Characters>/<Pages> = Word "검토 → 단어 개수" 대화상자와 동일한 값.
@@ -274,6 +317,7 @@ async function extractDocx(buf: Buffer): Promise<TextStats> {
   console.log(`[DOCX-XML] app.xml found: ${appXmlFile ? appXmlFile.path : "NO — fallback to xml-parse"}`);
 
   if (appXmlFile) {
+    guardZipParts([appXmlFile]);
     const appXml = (await appXmlFile.buffer()).toString("utf8");
     // 네임스페이스 접두사 허용: <Words>, <ep:Words>, <app:Words> 등
     const wm  = appXml.match(/<(?:\w+:)?Words>\s*(\d+)\s*<\/(?:\w+:)?Words>/i);
@@ -326,6 +370,8 @@ async function extractDocx(buf: Buffer): Promise<TextStats> {
     console.log(`[DOCX-XML] UNCOVERED_PARTS: ${uncovered.join(", ")}`);
   }
 
+  guardZipParts(zip.files.filter((f: ZipEntry) => COUNT_PATTERNS.some(({ pat }) => pat.test(f.path))));
+
   const segments: string[] = [];
   let xmlCalcWords = 0;
 
@@ -374,6 +420,12 @@ async function extractDocx(buf: Buffer): Promise<TextStats> {
     countBasis,
     pageCount:          appXmlPages ?? undefined,
     warning:            segments.length === 0 ? "DOCX에서 텍스트를 찾을 수 없습니다." : undefined,
+    physicalPages:      appXmlPages ?? undefined,
+    pageUnit:           "페이지",
+    notices:            [
+      ...zipAssetNotices(zip.files, /^word\/media\//i, /^word\/embeddings\//i),
+      ...(appXmlPages == null ? ["실제 페이지 수 정보(app.xml)가 없어 페이지 수는 단어수·글자수 기준으로 환산됩니다."] : []),
+    ],
   };
 }
 
@@ -421,7 +473,12 @@ async function extractHwp(buf: Buffer, ext: string): Promise<TextStats> {
   console.log(`[HWP-KORDOC] ${ext} 추출 완료 — 마크다운 ${markdown.length}자 → 순수텍스트 ${plainText.length}자 (sections=${kordocPages ?? "N/A"})`);
 
   const st = stats(plainText, method, "Text Extraction");
-  st.pageCount = kordocPages;
+  // kordoc pageCount 는 섹션 수(페이지 아님) — 견적 수량(pageCount)·실제 페이지로 쓰지 않는다.
+  //  견적 환산 페이지는 aiQuoteDraft 에서 글자수 700자당 1페이지로 산정.
+  st.notices = [
+    `실제 페이지 수는 HWP 파일에서 확인할 수 없습니다${kordocPages ? `(구역 ${kordocPages}개)` : ""} — 견적은 글자수 700자당 1페이지로 환산합니다.`,
+    "HWP/HWPX 안의 이미지 속 문자는 산정되지 않습니다(별도 확인 필요).",
+  ];
   return st;
 }
 
@@ -439,7 +496,13 @@ async function extractDoc(buf: Buffer): Promise<TextStats> {
     const WordExtractor = weModule.default ?? weModule;
     const ext = new WordExtractor();
     const doc = await ext.extract(tmp);
-    return stats(doc.getBody(), "word-extractor-doc", "Text Extraction");
+    // 본문 + 각주·미주·텍스트상자(Word 단어 개수 기본 포함 항목). 머리글·바닥글은 Word 와 같이 제외.
+    const opt = { filterUnicode: true };
+    const extra = [doc.getFootnotes?.(opt), doc.getEndnotes?.(opt), doc.getTextboxes?.({ ...opt, includeHeadersAndFooters: false, includeBody: true })]
+      .filter((t: unknown) => typeof t === "string" && t.trim()).join("\n");
+    const st = stats(`${doc.getBody()}\n${extra}`, "word-extractor-doc", "Text Extraction");
+    st.notices = ["DOC(구형) 형식은 이미지 포함 여부를 확인할 수 없습니다 — 이미지 속 문자는 산정되지 않았습니다(별도 확인 필요)."];
+    return st;
   } finally {
     await (await import("node:fs/promises")).unlink(tmp).catch(() => undefined);
   }
@@ -454,24 +517,38 @@ async function extractPdf(buf: Buffer): Promise<TextStats> {
   const mod = (await import("pdf-parse")) as any;
   const PDFParse = mod.PDFParse ?? mod.default?.PDFParse;
   if (typeof PDFParse !== "function") throw new Error("PDF 텍스트 추출 모듈(pdf-parse) 로드 실패 — PDFParse 클래스를 찾을 수 없습니다.");
-  const parser = new PDFParse({ data: buf });
+  // Buffer 를 넘기면 pdf-parse 가 Uint8Array 로 한 번 더 복사한다(대용량에서 메모리 2배) → 같은 메모리를 가리키는 뷰로 전달
+  const parser = new PDFParse({ data: new Uint8Array(buf.buffer, buf.byteOffset, buf.length) });
   let raw = "";
-  try { raw = (await parser.getText()).text ?? ""; }
+  let pageTexts: Array<{ num: number; text: string }> = [];
+  try { const r = await parser.getText(); raw = r.text ?? ""; pageTexts = Array.isArray(r.pages) ? r.pages : []; }
   finally { await parser.destroy().catch(() => undefined); }
   // pdf-parse v2 가 페이지 사이에 넣는 "-- 1 of 2 --" 표시는 문서 내용이 아니다(값으로 읽히지 않게 제거)
   const pages = Math.max(0, ...[...raw.matchAll(/^--\s*\d+\s+of\s+(\d+)\s*--\s*$/gm)].map(m => +m[1]));
   const text = raw.replace(/^--\s*\d+\s+of\s+\d+\s*--\s*$/gm, "").replace(/\n{3,}/g, "\n\n").trim();
   const warn = text.length === 0 ? `이미지(스캔) PDF — 텍스트 레이어가 없습니다${pages > 1 ? `(총 ${pages}페이지)` : ""}.` : undefined;
-  return stats(text, "pdf-parse", "Text Extraction", warn);
+  const st = stats(text, "pdf-parse", "Text Extraction", warn);
+  const total = pageTexts.length || pages;
+  if (total > 0) { st.physicalPages = total; st.pageUnit = "페이지"; }
+  const blank = pageTexts.filter(p => !String(p.text ?? "").trim()).map(p => p.num);
+  st.notices = [];
+  if (blank.length > 0 && text.length > 0) {
+    const list = blank.length > 30 ? `${blank.slice(0, 30).join(", ")} 외 ${blank.length - 30}쪽` : blank.join(", ");
+    st.notices.push(`텍스트가 없는(이미지·스캔) 페이지 ${blank.length}쪽 — 단어수·글자수에 포함되지 않았습니다: ${list}쪽`);
+  }
+  st.notices.push("PDF 안에 삽입된 이미지 속 문자(도표·캡처 등)는 산정되지 않습니다(별도 확인 필요).");
+  return st;
 }
 
 // ─── PPTX ────────────────────────────────────────────────────────────────────
 // 1순위: docProps/app.xml <Slides>/<Words>/<Characters>/<CharactersWithSpaces>
 // 2순위: ppt/slides/slide*.xml <a:t> 텍스트 추출
 
-async function extractPptx(buf: Buffer): Promise<TextStats> {
-  const unzipper = await import("unzipper");
-  const zip      = await unzipper.Open.buffer(buf);
+async function extractPptx(input: Buffer | ZipRangeSource): Promise<TextStats> {
+  const zip      = await openZip(input);
+  const slideNo = (p: string) => parseInt(p.match(/(\d+)\.xml$/i)?.[1] ?? "0", 10);
+  const TEXT_PARTS = [/^ppt\/slides\/slide\d+\.xml$/i, /^ppt\/charts\/chart\d+\.xml$/i, /^ppt\/diagrams\/data\d+\.xml$/i];
+  guardZipParts(zip.files.filter((f: ZipEntry) => TEXT_PARTS.some(r => r.test(f.path)) || /^docProps\/app\.xml$/i.test(f.path)));
 
   // ── 1. docProps/app.xml — PowerPoint 공식 통계 ───────────────────────────
   let appWords:  number | null = null;
@@ -495,18 +572,27 @@ async function extractPptx(buf: Buffer): Promise<TextStats> {
   // ── 2. 슬라이드 텍스트 추출 (AI 분석용 + 폴백 계산) ────────────────────
   const parts: string[] = [];
   const slideFiles = zip.files
-    .filter(f => /^ppt\/slides\/slide\d+\.xml$/i.test(f.path))
-    .sort((a, b) => a.path.localeCompare(b.path));
+    .filter((f: ZipEntry) => /^ppt\/slides\/slide\d+\.xml$/i.test(f.path))
+    .sort((a: ZipEntry, b: ZipEntry) => slideNo(a.path) - slideNo(b.path));   // slide10 이 slide2 앞에 오지 않도록 숫자 정렬
 
   for (const file of slideFiles) {
     const xml = (await file.buffer()).toString("utf8");
-    const matches = xml.match(/<a:t[^>]*>([^<]*)<\/a:t>/g) ?? [];
+    const matches = xml.match(/<a:t[^>]*>([^<]*)<\/a:t>/g) ?? [];   // 본문·표 셀·도형 텍스트
     for (const m of matches) {
-      const t = m.replace(/<[^>]+>/g, "").trim();
+      const t = decodeXmlEntities(m.replace(/<[^>]+>/g, "")).trim();
       if (t) parts.push(t);
     }
   }
+  // 차트 레이블·SmartArt 텍스트(슬라이드 XML 밖에 저장됨) — 폴백 계산에 포함
+  for (const file of zip.files.filter((f: ZipEntry) => TEXT_PARTS.slice(1).some(r => r.test(f.path)))) {
+    const t = parseDmlXml((await file.buffer()).toString("utf8")).trim();
+    if (t) parts.push(t);
+  }
   const extractedText = parts.join(" ");
+  const slideTotal = appSlides ?? (slideFiles.length > 0 ? slideFiles.length : undefined);
+  const notices = zipAssetNotices(zip.files, /^ppt\/media\//i, /^ppt\/embeddings\//i);
+  const notesCount = zip.files.filter((f: ZipEntry) => /^ppt\/notesSlides\/notesSlide\d+\.xml$/i.test(f.path)).length;
+  if (notesCount > 0) notices.push(`슬라이드 노트 ${notesCount}개 — 노트 텍스트는 산정에 포함되지 않았습니다.`);
 
   // ── 3. 최종값 결정 ───────────────────────────────────────────────────────
   if (appWords != null) {
@@ -524,6 +610,9 @@ async function extractPptx(buf: Buffer): Promise<TextStats> {
       countBasis:         "PowerPoint 공식 통계",
       pageCount:          appSlides ?? undefined,
       warning:            warn,
+      physicalPages:      slideTotal,
+      pageUnit:           "슬라이드",
+      notices,
     };
   }
 
@@ -534,6 +623,7 @@ async function extractPptx(buf: Buffer): Promise<TextStats> {
   console.log(`[PPTX] 분석 기준: Text Extraction (app.xml 없음)`);
   const st = stats(extractedText, "unzipper-pptx-xml", "Text Extraction", warn);
   st.pageCount = slideFiles.length > 0 ? slideFiles.length : undefined;
+  st.physicalPages = slideTotal; st.pageUnit = "슬라이드"; st.notices = notices;
   return st;
 }
 
@@ -591,6 +681,21 @@ async function extractImageOcr(
 
 // ─── 공개 진입점 ─────────────────────────────────────────────────────────────
 
+/** 대용량 DOCX/PPTX — 파일 전체를 메모리에 올리지 않고 범위 읽기로 텍스트 파트만 분석 */
+export const RANGED_ZIP_EXTS = new Set([".docx", ".pptx"]);
+export async function extractTextFromZipSource(src: ZipRangeSource, filename: string): Promise<TextStats> {
+  const ext = path.extname(filename).toLowerCase();
+  try {
+    if (ext === ".docx") return await extractDocx(src);
+    if (ext === ".pptx") return await extractPptx(src);
+    return empty("unsupported", `범위 읽기 미지원 형식: ${ext}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[TEXT-EXTRACT] ${filename} (ranged) failed:`, msg);
+    return empty(`${ext}-error`, `텍스트 추출 실패: ${msg.slice(0, 160)}`);
+  }
+}
+
 export async function extractText(
   buf:          Buffer,
   filename:     string,
@@ -609,9 +714,9 @@ export async function extractText(
       case ".pdf":            return await extractPdf(buf);
       case ".pptx":           return await extractPptx(buf);
       case ".ppt":
-        // PPT binary — word-extractor가 부분 지원, 실패 시 빈 텍스트
+        // PPT(구형 바이너리) — word-extractor 는 Word 전용이라 대부분 실패한다. 실패 시 빈 텍스트 + 안내
         try { return await extractDoc(buf); } catch {
-          return empty("ppt-fallback", "PPT 형식 추출 실패. PPTX 변환 후 업로드를 권장합니다.");
+          return empty("ppt-fallback", "PPT(구형) 형식은 텍스트 추출을 지원하지 않습니다 — PPTX로 저장 후 다시 올려 주세요.");
         }
       case ".xlsx":
       case ".xls":            return await extractXlsx(buf);
