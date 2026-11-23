@@ -67,6 +67,16 @@ export function deliveryWindowFor(payoutDate: string): { from: string; to: strin
   return { from: `${y}-${pad(m)}-01`, to: `${y}-${pad(m)}-15` };   // 말일 지급(영업일 조정 포함) → 그달 1~15일
 }
 
+// 지급일별 점검 제외 — 고객 선입금 잔액 확인 중인 CRM 원본(거래처명|판매번호 정확 일치). 2026-11-23 대표 지시.
+const PREPAID_REVIEW_EXCLUSIONS: Record<string, Set<string>> = {
+  "2026-11-30": new Set([
+    "(주)호현에프앤씨|2024-02-27-0003", "한국사회복지협의회|2023-11-01-0008", "피에스타귀족|2018-12-10-0010",
+    "한국사회복지협의회|2018-12-20-0003", "한국사회복지협의회|2018-12-20-0002", "(주)리치몬트코리아/반클리프아펠|2024-02-27-0008",
+    "한국전자정보통신산업진흥회(KEA)|2021-03-31-0010", "한국소비자원|2019-12-06-0013", "더엠유|2019-03-21-0006",
+    "충북대학교 문화재보존기술지원센터|2020-01-07-0011",
+  ]),
+};
+
 export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "all"; date?: string }) {
   const today = todayKst();
   const scope = opts.scope;
@@ -307,6 +317,15 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
       state, stateLabel: READINESS_LABEL[state],
     });
   }
+  // 고객 선입금 잔액 확인 중인 CRM 원본(통번역사 지급 건 아님) — 해당 지급일 점검(화면·엑셀)에서만 제외. 데이터·다른 지급일·전체 기간은 유지.
+  let excludedPrepaid = 0;
+  if (scope === "date") {
+    const ex = PREPAID_REVIEW_EXCLUSIONS[d];
+    if (ex) for (let i = out.length - 1; i >= 0; i--) {
+      const o = out[i];
+      if (ex.has(`${String(o.client ?? "").trim()}|${String(o.saleNo ?? "").trim()}`)) { out.splice(i, 1); excludedPrepaid++; }
+    }
+  }
   // 주민등록번호(마스킹만) — 개인 수행자(Master 연결)만. 외주업체·미연결은 공란. 전체번호는 별도 관리자 전용 API.
   const rrnMasked = await loadResidentNumbers(dbx, out.filter(o => o.vendorId == null && o.masterId != null).map(o => o.masterId), false);
   for (const o of out) o.residentNumberMasked = o.vendorId == null && o.masterId != null ? (rrnMasked.get(o.masterId) ?? null) : null;
@@ -318,7 +337,7 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
   const issueCounts: Record<string, number> = {};
   for (const o of out) for (const b of o.blockers) issueCounts[b.code] = (issueCounts[b.code] ?? 0) + 1;
   return {
-    scope, payoutDate: scope === "date" ? d : null, deliveryWindow: win, today, items: out,
+    scope, payoutDate: scope === "date" ? d : null, deliveryWindow: win, today, items: out, excludedPrepaid,
     summary: { total: sum(out), byState: by(x => x.state), byKind: by(x => x.kind), byCandidate: by(x => x.candidate),
       roundEligible: sum(out.filter(x => x.roundEligible)), duplicates: out.filter(x => x.blockers.some((b: Blocker) => b.code.startsWith("dup_"))).length, issueCounts },
   };
