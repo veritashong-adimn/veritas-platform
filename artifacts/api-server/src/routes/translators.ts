@@ -599,6 +599,15 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
         (t.region ?? "").toLowerCase().includes(s) ||
         aliasMatchIds.has(t.id)
       );
+      // 이름(또는 별칭)이 검색어와 정확히 일치하는 통번역사가 있으면 그 사람만 표시(공백 무시·대소문자 무시).
+      //   없으면 위 부분검색 결과 유지(예: '김태' → 김태은·김태희·김태홍). 이메일·전화·ID·별칭 부분검색은 정확 일치가 없을 때 그대로.
+      const exactKey = s.replace(/\s+/g, "");
+      if (exactKey) {
+        const exactAliasIds = new Set((await db.select({ translatorId: translatorAliasesTable.translatorId }).from(translatorAliasesTable)
+          .where(sql`replace(lower(${translatorAliasesTable.aliasName}), ' ', '') = ${exactKey}`)).map(a => a.translatorId));
+        const exact = result.filter(t => (t.name ?? "").toLowerCase().replace(/\s+/g, "") === exactKey || exactAliasIds.has(t.id));
+        if (exact.length) result = exact;
+      }
     }
     if (languagePair?.trim()) {
       const lp = languagePair.trim().toLowerCase();

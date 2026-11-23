@@ -778,7 +778,10 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     finally { setMerging(false); }
   };
 
+  // 검색어를 빠르게 바꿀 때(한글 조합 입력 포함) 늦게 도착한 이전 요청 응답이 최신 결과를 덮어쓰지 않게 — 마지막 요청만 반영.
+  const translatorReqSeq = useRef(0);
   const fetchTranslators = useCallback(async () => {
+    const seq = ++translatorReqSeq.current;
     setTranslatorsLoading(true);
     try {
       const params = new URLSearchParams();
@@ -797,6 +800,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       if (translatorNameDupFilter !== "all") params.set("nameDup", translatorNameDupFilter);
       const res = await fetch(api(`/api/admin/translators?${params.toString()}`), { headers: authHeaders });
       const data = await res.json();
+      if (seq !== translatorReqSeq.current) return;   // 이후 요청이 있었음 — 오래된 응답 폐기
       if (res.ok) {
         // 페이지네이션 응답 {rows,total} 또는 (구버전) 배열 모두 수용.
         const rows: TranslatorListItem[] = Array.isArray(data?.rows) ? data.rows : Array.isArray(data) ? data : [];
@@ -810,8 +814,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           setTranslatorPage(p => Math.max(1, p - 1));
         }
       }
-    } catch { setToast("오류: 통번역사 조회 실패"); }
-    finally { setTranslatorsLoading(false); }
+    } catch { if (seq === translatorReqSeq.current) setToast("오류: 통번역사 조회 실패"); }
+    finally { if (seq === translatorReqSeq.current) setTranslatorsLoading(false); }
   }, [token, translatorPage, translatorPageSize, translatorSearch, translatorLangFilter, translatorStatusFilter, translatorGradeFilter, translatorRatingFilter, translatorSvcFilter, translatorRegFilter, translatorActivityFilter, translatorNameDupFilter]);
 
   // 통번역사 Excel 다운로드: 현재 검색/필터의 "전체 매칭 행"을 내보낸다(민감정보 제외 — translatorExcel.ts, §4).
