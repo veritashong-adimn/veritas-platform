@@ -15,6 +15,7 @@ type Item = {
   projectId: number | null; projectTitle: string | null; saleNo: string | null; quoteNumber: string | null; payee: string | null; client: string | null;
   masterId?: number | null; vendorId?: number | null;
   residentNumberMasked?: string | null;   // 통번역사 명부 주민번호(마스킹 '900101-*******'), 없으면 null
+  payeePhone?: string | null; payeeEmail?: string | null;   // 명부 연락처·이메일(수행자 ID 기준, 엑셀 전용), 없으면 null
   deliveryDate: string | null; payoutDate: string | null; actualPaymentDate: string | null;
   dateMismatch?: boolean;   // CRM·플랫폼 날짜 불일치(덮어쓰지 않음 — 사유에 상세)
   // 지급상태 표시(서버 공통 판정 — 화면·엑셀 같은 값) · 판매금액(판매정보 저장값, CRM 원본만 있는 건 null)
@@ -108,8 +109,10 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast }: {
         { header: '판매 총액(고객)', value: (r) => amt(r, 'total'), type: 'number', width: 14 },
         { header: '지급대상 구분', value: (r) => r.payeeTypeLabel ?? (isVendor(r) ? '외주업체' : '개인'), width: 10 },
         { header: '통번역사·외주업체', value: (r) => r.payee ?? '', width: 16 },
-        { header: '외주업체 Master', value: (r) => r.vendorName ?? '', width: 18 },
+        { header: '연락처', value: (r) => r.payeePhone ?? '', width: 15 },
+        { header: '이메일', value: (r) => r.payeeEmail ?? '', width: 24 },
         { header: '주민등록번호', value: (r) => rrn(r), width: 16 },
+        { header: '외주업체 Master', value: (r) => r.vendorName ?? '', width: 18 },
         { header: '납품일', value: (r) => r.deliveryDate ?? '', width: 11 },
         { header: '지급예정일', value: (r) => r.payoutDate ?? '', width: 11 },
         { header: '실제 지급일', value: (r) => r.actualPaymentDate ?? '', width: 11 },

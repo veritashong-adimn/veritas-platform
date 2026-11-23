@@ -20,6 +20,7 @@ import { LEGACY_PAID_DELIVERY_CUTOFF, todayKst } from "../lib/legacyPayoutRule";
 import { loadSaleIdentities } from "./saleIdentity";
 import { decrypt } from "../lib/encrypt";
 import { splitPayAmount, type PayeeType } from "../lib/payoutAmount";
+import { isLegacyPlaceholderEmail } from "../lib/mailer";
 
 // 주민등록번호(통번역사 명부 translator_sensitive, AES-256-GCM) — 수행자 ID(users.id) 기준.
 //   full=false: '900101-*******'(생년월일만) / full=true: '900101-1234567'(관리자 전용 경로에서만 호출).
@@ -329,6 +330,19 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
   // 주민등록번호(마스킹만) — 개인 수행자(Master 연결)만. 외주업체·미연결은 공란. 전체번호는 별도 관리자 전용 API.
   const rrnMasked = await loadResidentNumbers(dbx, out.filter(o => o.vendorId == null && o.masterId != null).map(o => o.masterId), false);
   for (const o of out) o.residentNumberMasked = o.vendorId == null && o.masterId != null ? (rrnMasked.get(o.masterId) ?? null) : null;
+  // 연락처·이메일(엑셀 전용) — 명부 ID 기준만(이름 매칭 없음): 개인 = 통번역사 프로필 연락처·계정 이메일, 외주업체 = 업체 전화(없으면 휴대폰)·이메일.
+  //   과거 CRM 이관 임시 이메일(@crm-migrated.invalid)·미등록은 null(공란).
+  const uIds = [...new Set(out.filter(o => o.vendorId == null && o.masterId != null).map(o => o.masterId as number))];
+  const vIds = [...new Set(out.filter(o => o.vendorId != null).map(o => o.vendorId as number))];
+  const uContact = new Map((await rows(dbx, sql`SELECT u.id, nullif(btrim((SELECT tp.phone FROM translator_profiles tp WHERE tp.user_id = u.id LIMIT 1)), '') AS phone, u.email
+    FROM users u WHERE u.id IN (${inList(uIds)})`)).map(r => [Number(r.id), r]));
+  const vContact = new Map((await rows(dbx, sql`SELECT c.id, coalesce(nullif(btrim(c.phone), ''), nullif(btrim(c.mobile), '')) AS phone, c.email
+    FROM companies c WHERE c.id IN (${inList(vIds)})`)).map(r => [Number(r.id), r]));
+  const cleanEmail = (e: unknown) => { const s = String(e ?? "").trim(); return s && !isLegacyPlaceholderEmail(s) ? s : null; };
+  for (const o of out) {
+    const c = o.vendorId != null ? vContact.get(o.vendorId) : o.masterId != null ? uContact.get(o.masterId) : null;
+    o.payeePhone = c?.phone ?? null; o.payeeEmail = cleanEmail(c?.email);
+  }
   const order: Record<string, number> = { base: 0, delivery_window: 1, carry_over: 2, no_payout_date: 3, other: 4, all: 0 };
   out.sort((a, b) => (order[a.candidate] - order[b.candidate]) || a.state.localeCompare(b.state) || String(a.payee ?? "").localeCompare(String(b.payee ?? "")));
   const sum = (arr: any[]) => { const c = arr.filter(x => x.countedInTotals); return { count: arr.length, counted: c.length, pretax: c.reduce((s, x) => s + x.pretax, 0), posttax: Math.round(c.reduce((s, x) => s + x.posttax, 0)),

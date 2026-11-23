@@ -6,6 +6,7 @@ import { requireAuth, requireRole, requireStaffPermission } from "../middlewares
 import { computePayoutReadiness, loadResidentNumbers } from "../services/payoutReadiness";
 import { getPermissionsForRole } from "../lib/rbac";
 import { logEvent } from "../lib/logEvent";
+import { maskPhoneLast4 } from "../lib/phoneMask";
 
 const router: IRouter = Router();
 const guard = [requireAuth, requireRole("admin", "staff"), requireStaffPermission(["payout.view", "payout.statement"], { allowStaffWithoutRole: true })];
@@ -15,7 +16,14 @@ router.get("/admin/payout-unified/readiness", ...guard, async (req, res) => {
   const scope = req.query.scope === "all" ? "all" : "date";
   const date = String(req.query.date ?? "");
   if (scope === "date" && !/^\d{4}-\d{2}-\d{2}$/.test(date)) { res.status(400).json({ error: "date(YYYY-MM-DD)가 필요합니다." }); return; }
-  try { res.json({ ...(await computePayoutReadiness(db, { scope, date })), canRevealResidentNumber: await canRevealRrn(req) }); }
+  try {
+    const r = await computePayoutReadiness(db, { scope, date });
+    // 연락처 — 통번역사 명부와 같은 기준(역할 미지정 관리자·직원 또는 project.update 보유자만 전체, 그 외 끝 4자리 마스킹)
+    const roleId = (req as any).user?.roleId ?? null;
+    const contactVisible = !roleId || (await getPermissionsForRole(roleId)).has("project.update");
+    if (!contactVisible) for (const o of r.items as any[]) o.payeePhone = maskPhoneLast4(o.payeePhone);
+    res.json({ ...r, canRevealResidentNumber: await canRevealRrn(req) });
+  }
   catch (err) { req.log.error({ err }, "지급 준비 점검 조회 실패"); res.status(500).json({ error: "지급 준비 점검 조회 실패." }); }
 });
 
