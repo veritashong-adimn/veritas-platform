@@ -49,7 +49,7 @@ export type VatType      = 'taxable' | 'exempt' | 'zero_rate';
 // 편집 화면 부가세 선택값 — VatType + 'unknown'(확인 필요: 저장 품목의 세금 유형이 불명확. lib/quoteTaxType)
 export type { VatMode } from '../../lib/quoteTaxType';
 export type ServiceType  = 'translation' | 'interpretation' | 'equipment' | 'expense' | 'discount';
-export type DiscountType  = 'amount' | 'percent';
+export type DiscountType  = 'amount' | 'percent' | 'total_amount';  // total_amount = 총금액(부가세 포함) 기준 할인
 
 export interface QuoteItemForm {
   // 서비스 그룹(매출 묶음) — 편집 폼 내부 안정 로컬키(_lid)와 부모 참조(parentLid). 저장 시 parentItemIndex 로 변환.
@@ -93,7 +93,7 @@ export interface QuoteItemForm {
   // 기타 전용
   expenseType:    string;  // 서비스 유형 (공증/속기/녹취 등)
   // 할인 전용 (productType='discount') — 하나의 품목 행으로 저장(공급가액 음수)
-  discountType?:   DiscountType;  // 'amount' | 'percent' (기본 amount)
+  discountType?:   DiscountType;  // 'amount' | 'percent' (공급가 기준, 기본 amount) | 'total_amount' (총금액 기준)
   discountValue?:  string;        // 입력값(금액 또는 %)
   discountReason?: string;        // 내부 사유 (PDF 미출력)
 }
@@ -176,8 +176,25 @@ function calcTranslationPages(wordCount: string, charCount: string, sourceLangua
 function calcDiscountAmount(it: QuoteItemForm, nonDiscountSupply: number): number {
   const v = Number(String(it.discountValue ?? '').replace(/,/g, '') || 0);
   if (v <= 0) return 0;
+  if (it.discountType === 'total_amount') return 0;   // 총금액 기준은 calcTotalDiscount 사용
   const raw = it.discountType === 'percent' ? Math.round(nonDiscountSupply * v / 100) : Math.round(v);
   return Math.max(0, Math.min(raw, nonDiscountSupply));
+}
+// 총금액 기준 할인 — 입력값(부가세 포함)을 행 총액으로 정확히 차감. 공급가 = round(할인액/(1+세율)), 부가세 = 할인액 − 공급가.
+//  0 ~ 비할인 총액으로 클램프. 영세율·면세(세율 0)는 공급가 = 할인액. 백엔드 computeQuoteItemAmounts 와 동일 공식.
+function calcTotalDiscount(it: QuoteItemForm, rate: 0 | 0.1, nonDiscountTotal: number) {
+  const v = Number(String(it.discountValue ?? '').replace(/,/g, '') || 0);
+  const gross = Math.max(0, Math.min(Math.round(v), nonDiscountTotal));
+  const supplyAbs = rate ? Math.round(gross / (1 + rate)) : gross;
+  return { supply: -supplyAbs, tax: -(gross - supplyAbs), total: -gross };
+}
+// 할인 기준 금액 — 비할인 상품의 공급가 합계(공급가 기준 %)와 총액 합계(총금액 기준 클램프)
+export function nonDiscountBase(items: QuoteItemForm[], vat: VatMode) {
+  return items.reduce((a, it) => {
+    if (it.productType === 'discount') return a;
+    const r = calcItem(it, vat);
+    return { supply: a.supply + r.supply, total: a.total + r.total };
+  }, { supply: 0, total: 0 });
 }
 // baseSupply — 할인 항목(%)의 기준이 되는 '비할인 상품 공급가액 합계'. 비할인 항목엔 무영향.
 // 품목 부가세율 — 선택한 유형 기준. '확인 필요'(unknown)면 품목에 저장된 유형을 따르되 근거 미확인 품목은 0(저장 금액 유지).
@@ -185,7 +202,8 @@ function itemTaxRate(it: QuoteItemForm, vat: VatMode): 0 | 0.1 {
   if (vat !== 'unknown') return vat === 'taxable' ? 0.1 : 0;
   return it.taxType === 'taxable' && !it.taxUnconfirmed ? 0.1 : 0;
 }
-function calcItem(it: QuoteItemForm, vat: VatMode, baseSupply = 0) {
+function calcItem(it: QuoteItemForm, vat: VatMode, baseSupply = 0, baseTotal = 0) {
+  if (it.productType === 'discount' && it.discountType === 'total_amount') return calcTotalDiscount(it, itemTaxRate(it, vat), baseTotal);
   const p = Number(it.unitPrice.replace?.(/,/g, '') || 0);
   let s: number;
   if (it.productType === 'interpretation') {
@@ -215,8 +233,8 @@ function calcItem(it: QuoteItemForm, vat: VatMode, baseSupply = 0) {
 // 견적·판매 공용 — 폼 항목 배열의 공급가액/부가세/합계 총합(할인 반영). 판매정보 금액 요약에서도 재사용.
 export function calcTotals(items: QuoteItemForm[], vat: VatMode) {
   // 1) 비할인 상품 공급가 합계(할인 % 기준). 2) 할인 항목 포함 전체 합산.
-  const nonDiscountSupply = items.reduce((a, it) => it.productType === 'discount' ? a : a + calcItem(it, vat).supply, 0);
-  return items.reduce((a, it) => { const r = calcItem(it, vat, nonDiscountSupply); return { supply: a.supply + r.supply, tax: a.tax + r.tax, total: a.total + r.total }; }, { supply: 0, tax: 0, total: 0 });
+  const base = nonDiscountBase(items, vat);
+  return items.reduce((a, it) => { const r = calcItem(it, vat, base.supply, base.total); return { supply: a.supply + r.supply, tax: a.tax + r.tax, total: a.total + r.total }; }, { supply: 0, tax: 0, total: 0 });
 }
 // 오늘(+d일) 날짜 — KST 기준. toISOString() 은 UTC 라 KST 00:00~09:00 사이에는 전날 날짜가 견적일로 들어갔다.
 function dateOffset(d: number) {
@@ -382,7 +400,7 @@ function toApiItem(it: QuoteItemForm, vat: VatMode) {
         productName:    it.productName.trim() || 'Special D.C',
         quantity:       1,
         unitPrice:      0,
-        discountType:   it.discountType === 'percent' ? 'percent' : 'amount',
+        discountType:   it.discountType === 'percent' || it.discountType === 'total_amount' ? it.discountType : 'amount',
         discountValue:  Number(String(it.discountValue ?? '').replace(/,/g, '') || 0),
         discountReason: it.discountReason?.trim() || undefined,
         memo:           it.memo || undefined,
@@ -1415,8 +1433,8 @@ function ServiceFields({ it, update, products }: {
 
 // ─── 견적 항목 Row ────────────────────────────────────────────────────────────
 
-function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, parentOptions, updateItem, removeItem, addItemBelow, moveItem, duplicateItem, productCreate, allowNegativePrice }: {
-  it: QuoteItemForm; idx: number; total: number; vatType: VatMode; baseSupply: number; products: Product[];
+function QuoteItemRow({ it, idx, total, vatType, baseSupply, baseTotal, products, parentOptions, updateItem, removeItem, addItemBelow, moveItem, duplicateItem, productCreate, allowNegativePrice }: {
+  it: QuoteItemForm; idx: number; total: number; vatType: VatMode; baseSupply: number; baseTotal: number; products: Product[];
   allowNegativePrice?: boolean;   // 차감 견적서 — 과거 차감내역의 음수 단가(정정·환입) 입력 허용
   productCreate?: QuoteProductCreate;
   parentOptions: { lid: string; label: string }[];
@@ -1427,13 +1445,15 @@ function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, parentOpt
   duplicateItem: (idx: number) => void;
 }) {
   const [showWarning, setShowWarning] = useState(false);
-  const supply = calcItem(it, vatType, baseSupply).supply;
+  const supply = calcItem(it, vatType, baseSupply, baseTotal).supply;
   // 미지원 유형(저장된 레거시/카탈로그 확장)이라도 배지 설정이 없어 크래시하지 않도록 기타로 폴백.
   const cfg    = SVC_CFG[it.productType] ?? SVC_CFG.expense;
 
   // ── 할인 항목 전용 행 (일반 상품 그리드와 다른 입력 필드) ──────────────────
   if (it.productType === 'discount') {
-    const dcAmount = calcDiscountAmount(it, baseSupply);   // 양수 할인액
+    const isTotalBase = it.discountType === 'total_amount';
+    const dcAmount = -supply;   // 양수 할인 공급가액(총금액 기준이면 부가세 제외분)
+    const dcGross  = isTotalBase ? -calcItem(it, vatType, baseSupply, baseTotal).total : 0;
     return (
       <div style={{ ...tblRow, borderBottom: `1px solid ${C.g100}`, minHeight: 42, background: C.dangerBg, transition: 'background 0.1s' }}>
         {/* ① 행 제어 */}
@@ -1454,7 +1474,15 @@ function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, parentOpt
         </div>
         {/* ④ 동적 필드 — 할인방식 / 할인값 / 할인사유 */}
         <div style={{ minWidth: 0, display: 'flex', gap: 8, alignItems: 'center' }}>
-          <div style={{ display: 'flex', gap: 3 }}>
+          <select value={isTotalBase ? 'total' : 'supply'}
+            onChange={e => updateItem(idx, { discountType: e.target.value === 'total' ? 'total_amount' : 'amount' })}
+            data-testid={`select-discount-base-${idx}`} aria-label="할인 기준"
+            title="공급가 기준: 공급가액에서 할인(부가세 별도) · 총금액 기준: 부가세 포함 금액에서 할인"
+            style={{ ...rinp(104), fontSize: 12, fontWeight: 600 }}>
+            <option value="supply">공급가 기준</option>
+            <option value="total">총금액 기준</option>
+          </select>
+          {!isTotalBase && <div style={{ display: 'flex', gap: 3 }}>
             {(['amount', 'percent'] as DiscountType[]).map(t => (
               <button key={t} type="button"
                 onClick={() => updateItem(idx, { discountType: t })}
@@ -1466,9 +1494,10 @@ function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, parentOpt
                 {t === 'amount' ? '금액' : '%'}
               </button>
             ))}
-          </div>
+          </div>}
           <NumericInput value={it.discountValue ?? ''} onChange={v => updateItem(idx, { discountValue: v })}
-            placeholder={(it.discountType ?? 'amount') === 'percent' ? '할인율' : '할인금액'}
+            placeholder={isTotalBase ? '할인금액(VAT 포함)' : (it.discountType ?? 'amount') === 'percent' ? '할인율' : '할인금액'}
+            testId={`input-discount-value-${idx}`} ariaLabel={isTotalBase ? '총금액 기준 할인금액(부가세 포함)' : '할인값'}
             suffix={(it.discountType ?? 'amount') === 'percent' ? '%' : '원'}
             style={rinp(130, { textAlign: 'right' })} />
           <input value={it.discountReason ?? ''} onChange={e => updateItem(idx, { discountReason: e.target.value })}
@@ -1485,7 +1514,8 @@ function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, parentOpt
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', color: C.g400, paddingRight: 6 }}>—</div>
         {/* ⑨ 공급가액 — 음수(빨강). 폰트·크기·굵기·tabular 는 일반 공급가액과 동일, 색상만 다르게 (지시문 §4·§7) */}
         <div style={dsAmount(dcAmount > 0, { paddingRight: 6, color: dcAmount > 0 ? C.danger : C.amountEmpty })}
-          data-testid="discount-supply">
+          data-testid="discount-supply"
+          title={isTotalBase && dcGross > 0 ? `총금액 기준 할인 -${formatWon(dcGross)} (공급가 -${formatWon(dcAmount)} · 부가세 -${formatWon(dcGross - dcAmount)})` : undefined}>
           {dcAmount > 0 ? `-${formatWon(dcAmount)}` : '—'}
         </div>
         {/* ⑩ 비고 */}
@@ -1708,7 +1738,7 @@ export function QuoteItemsEditor({ items, onItemsChange, vatType, products, prod
   const duplicateItem = (idx: number) => onItemsChange([...items.slice(0, idx + 1), { ...items[idx], _lid: nextLid(), parentLid: null }, ...items.slice(idx + 1)]);
   const fieldHint = (() => { const t = [...new Set(items.map(it => it.productType))]; return t.length === 1 ? SVC_FIELD_HINTS[t[0]] : '서비스별 상세 입력 필드'; })();
   // 할인 항목(%)의 기준이 되는 비할인 상품 공급가액 합계 — 모든 행에 공통 전달
-  const baseSupply = items.reduce((a, it) => it.productType === 'discount' ? a : a + calcItem(it, vatType).supply, 0);
+  const { supply: baseSupply, total: baseTotal } = nonDiscountBase(items, vatType);
   // 서비스 그룹 연결 후보 — 본 서비스(번역/통역/장비)만. 부대(expense)/할인(discount)은 부모가 될 수 없음(1-depth).
   const parentOptions = items
     .map((it, i) => ({ it, i }))
@@ -1736,7 +1766,7 @@ export function QuoteItemsEditor({ items, onItemsChange, vatType, products, prod
         {/* 항목 행 */}
         <div>
           {items.map((it, idx) => (
-            <QuoteItemRow key={idx} it={it} idx={idx} total={items.length} vatType={vatType} baseSupply={baseSupply} products={products}
+            <QuoteItemRow key={idx} it={it} idx={idx} total={items.length} vatType={vatType} baseSupply={baseSupply} baseTotal={baseTotal} products={products}
               parentOptions={parentOptions}
               updateItem={updateItem} removeItem={removeItem} addItemBelow={addItemBelow} moveItem={moveItem} duplicateItem={duplicateItem}
               productCreate={productCreate} allowNegativePrice={allowNegativePrice} />
@@ -3146,11 +3176,11 @@ export function QuoteEditorWorkspace({
           // ② Special D.C(할인) 배지 — 적용된 항목만 빨간색 계열로 표시. 각 할인 항목을 개별 배지로
           //    노출하여 향후 정부기관/VIP/프로모션 등 Price Adjustment 확장에도 동일 방식으로 대응한다.
           //    할인액은 비할인 상품 공급가 합계(nonDiscountSupply)를 기준으로 계산(화면·행과 동일 공식).
-          const nonDiscountSupply = items.reduce((a, it) => it.productType === 'discount' ? a : a + calcItem(it, vatType).supply, 0);
+          const ndBase = nonDiscountBase(items, vatType);
           const dc = SVC_CFG.discount;
           const discountBadges = items.map((it, i) => {
             if (it.productType !== 'discount') return null;
-            const amt = calcItem(it, vatType, nonDiscountSupply).supply;   // 음수(할인액). 미적용(0)이면 숨김
+            const amt = calcItem(it, vatType, ndBase.supply, ndBase.total).supply;   // 음수(할인액). 미적용(0)이면 숨김
             if (amt >= 0) return null;
             return (
               <div key={`dc-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px', background: dc.bg, border: `1px solid ${dc.border}`, borderRadius: 7 }}

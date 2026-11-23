@@ -1647,6 +1647,7 @@ router.get("/admin/quotes", ...adminGuard, async (req, res) => {
 //  2) 할인 품목: '비할인 공급가 합계' 기준으로 음수 공급가 계산
 //     - amount:  supply = -discountValue
 //     - percent: supply = -round(비할인합계 × discountValue / 100)
+//     - total_amount: 부가세 포함 할인액 → total = -discountValue, supply = -round(값/(1+세율)), tax = total - supply
 // 반환 품목의 합(totalAmount)이 곧 quotes.price. 기존 VAT(항목별 taxRate)·계산식은 그대로.
 type CalcItemInput = {
   itemType?: string; quantity?: number | string; unitPrice?: number | string;
@@ -1674,8 +1675,17 @@ export function computeQuoteItemAmounts<T extends CalcItemInput>(
   // pass 2 — 할인 품목(음수 공급가)
   return pass1.map(x => {
     if (!x.isDiscount) return { ...x.it, supplyAmount: x.s, taxAmount: x.t, totalAmount: x.s + x.t };
-    const dType = x.it.discountType === 'percent' ? 'percent' : 'amount';
     const dVal  = Number(x.it.discountValue ?? 0);
+    // 총금액 기준(total_amount) — 입력값은 부가세 포함 할인액. 행 총액 = -할인액(정확히), 공급가는 할인액 ÷ (1+세율) 반올림,
+    //  부가세 = 할인액 − 공급가(1원 오차 없이 원 단위 정수). 0 ~ 비할인 총액 범위로 클램프. 영세율·면세는 세율 0 → 공급가 = 할인액.
+    if (x.it.discountType === 'total_amount') {
+      const nonDiscountTotal = pass1.reduce((a, y) => a + (y.isDiscount ? 0 : y.s + y.t), 0);
+      const gross = Math.max(0, Math.min(Math.round(dVal), nonDiscountTotal));
+      const rate = effectiveTaxRate(x.it);
+      const supplyAbs = rate ? Math.round(gross / (1 + rate)) : gross;
+      return { ...x.it, supplyAmount: -supplyAbs, taxAmount: -(gross - supplyAbs), totalAmount: -gross };
+    }
+    const dType = x.it.discountType === 'percent' ? 'percent' : 'amount';
     let amount = dType === 'percent' ? Math.round(nonDiscountSupply * dVal / 100) : Math.round(dVal);
     amount = Math.max(0, Math.min(amount, nonDiscountSupply));   // 0 ~ 비할인합계로 클램프
     const supply = -amount;

@@ -146,7 +146,7 @@ export interface QuoteDetailItem {
   // 서비스 그룹 — 부대항목이 종속된 본 서비스 quote_items.id (NULL=본/공통). 폼에서 parentLid 로 복원.
   parentItemId?: number | null;
   // 할인 항목(itemType='discount') 전용
-  discountType?: string | null;    // 'amount' | 'percent'
+  discountType?: string | null;    // 'amount' | 'percent' | 'total_amount'
   discountValue?: string | number | null;
   discountReason?: string | null;
 }

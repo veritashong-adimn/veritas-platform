@@ -138,9 +138,9 @@ function ReadOnlyRow({ raw, idx }: { raw: SaleItem; idx: number }) {
           {f.productName || 'Special D.C'}
         </div>
         <div style={{ minWidth: 0, display: 'flex', gap: 4, alignItems: 'center' }}>
-          <RoCell w={64} value={f.discountType === 'percent' ? '비율(%)' : '금액'} title="할인방식" />
+          <RoCell w={f.discountType === 'total_amount' ? 96 : 64} value={f.discountType === 'percent' ? '비율(%)' : f.discountType === 'total_amount' ? '총금액 기준' : '금액'} title="할인방식" />
           <RoCell w={130} value={f.discountValue ? Number(f.discountValue).toLocaleString() : ''}
-            suffix={f.discountType === 'percent' ? '%' : '원'} align="right" title="할인값" />
+            suffix={f.discountType === 'percent' ? '%' : '원'} align="right" title={f.discountType === 'total_amount' ? '할인금액(부가세 포함)' : '할인값'} />
           <RoCell flex={1} value={f.discountReason} title="할인 사유 (내부용)" />
         </div>
         <div />
