@@ -1474,14 +1474,15 @@ function QuoteItemRow({ it, idx, total, vatType, baseSupply, baseTotal, products
         </div>
         {/* ④ 동적 필드 — 할인방식 / 할인값 / 할인사유 */}
         <div style={{ minWidth: 0, display: 'flex', gap: 8, alignItems: 'center' }}>
-          <select value={isTotalBase ? 'total' : 'supply'}
-            onChange={e => updateItem(idx, { discountType: e.target.value === 'total' ? 'total_amount' : 'amount' })}
-            data-testid={`select-discount-base-${idx}`} aria-label="할인 기준"
-            title="공급가 기준: 공급가액에서 할인(부가세 별도) · 총금액 기준: 부가세 포함 금액에서 할인"
-            style={{ ...rinp(104), fontSize: 12, fontWeight: 600 }}>
-            <option value="supply">공급가 기준</option>
-            <option value="total">총금액 기준</option>
-          </select>
+          {/* 할인 기준 — 표준 ClickSelect(외부 클릭·ESC·항목 선택 시에만 닫힘, 포커스 이동/창 전환으로 닫히지 않음) */}
+          <div title="공급가 기준: 공급가액에서 할인(부가세 별도) · 총금액 기준: 부가세 포함 금액에서 할인" style={{ flexShrink: 0 }}>
+            <ClickSelect value={isTotalBase ? 'total' : 'supply'}
+              onChange={v => updateItem(idx, { discountType: v === 'total' ? 'total_amount' : 'amount' })}
+              data-testid={`select-discount-base-${idx}`} aria-label="할인 기준"
+              style={{ width: 120 }}
+              triggerStyle={{ ...rinp(120), display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, paddingRight: 8 }}
+              options={[{ value: 'supply', label: '공급가 기준' }, { value: 'total', label: '총금액 기준' }]} />
+          </div>
           {!isTotalBase && <div style={{ display: 'flex', gap: 3 }}>
             {(['amount', 'percent'] as DiscountType[]).map(t => (
               <button key={t} type="button"
@@ -1499,7 +1500,7 @@ function QuoteItemRow({ it, idx, total, vatType, baseSupply, baseTotal, products
             placeholder={isTotalBase ? '할인금액(VAT 포함)' : (it.discountType ?? 'amount') === 'percent' ? '할인율' : '할인금액'}
             testId={`input-discount-value-${idx}`} ariaLabel={isTotalBase ? '총금액 기준 할인금액(부가세 포함)' : '할인값'}
             suffix={(it.discountType ?? 'amount') === 'percent' ? '%' : '원'}
-            style={rinp(130, { textAlign: 'right' })} />
+            style={rinp(isTotalBase ? 168 : 130, { textAlign: 'right' })} />
           <input value={it.discountReason ?? ''} onChange={e => updateItem(idx, { discountReason: e.target.value })}
             placeholder="할인 사유 (내부용 · PDF 미출력)" data-testid="input-discount-reason" aria-label="할인 사유"
             style={{ ...rinp('100%'), color: C.textMuted, flex: 1, minWidth: 120 }} />
