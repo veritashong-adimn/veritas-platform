@@ -21,6 +21,9 @@ type Item = {
   payDisplay?: 'paid' | 'review' | 'prep' | 'scheduled'; payDisplayLabel?: string;
   saleAmount?: { supply: number; vat: number; total: number } | null;
   pretax: number; withholding: number; posttax: number;
+  // 지급금액 구분(서버 lib/payoutAmount — 지급명세서와 같은 기준): 개인 세전/원천세/세후 · 외주업체 공급가/부가세/지급합계
+  payeeType?: 'individual' | 'vendor'; payeeTypeLabel?: string; vendorName?: string | null;
+  payAmount?: { withholding: number; supply: number | null; vat: number | null; payTotal: number }; taxConflict?: string | null;
   paymentStatus: string; payoutRoundId: number | null; hasAccount: boolean; roundEligible: boolean; candidate: string; countedInTotals: boolean;
   state: 'A' | 'B' | 'C' | 'D'; stateLabel: string; blockers: Blocker[]; actions: string[];
 };
@@ -39,6 +42,10 @@ const STATUS_LABEL: Record<string, string> = { unpaid: '미지급', payment_hold
 const payLabel = (r: Item) => r.payDisplayLabel ?? STATUS_LABEL[r.paymentStatus] ?? r.paymentStatus;
 const PAY_COLOR: Record<string, string> = { paid: '#15803d', review: '#b45309', prep: '#b91c1c', scheduled: '#1d4ed8' };
 const won = (n: number) => Math.round(n || 0).toLocaleString('ko-KR');
+const isVendor = (r: Item) => r.payeeType === 'vendor';
+// 지급금액 열(개인·외주 구분) — 해당하지 않는 쪽은 공란. 외주 부가세 미확정(null)은 공란(임의 생성 안 함).
+const indiv = (r: Item, k: 'pretax' | 'withholding' | 'posttax') => (isVendor(r) ? '' : r[k]);
+const vend = (r: Item, k: 'supply' | 'vat' | 'payTotal') => (!isVendor(r) ? '' : (r.payAmount?.[k] ?? ''));
 /** 다음 지급일(1~15일 → 그달 15일 / 16일~ → 그달 말일, KST) — 기본 조회 지급일 */
 export function nextPayoutDate(): string {
   const t = new Date(Date.now() + 9 * 3600 * 1000); const y = t.getUTCFullYear(), m = t.getUTCMonth(), d = t.getUTCDate();
@@ -95,18 +102,26 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast }: {
         { header: '거래처', value: (r) => r.client ?? '', width: 22 },
         { header: '판매번호', value: (r) => r.saleNo ?? r.quoteNumber ?? '', width: 16 },
         { header: '프로젝트', value: (r) => r.projectTitle ?? '', width: 22 },
-        { header: '공급가', value: (r) => amt(r, 'supply'), type: 'number', width: 12 },
-        { header: '부가세', value: (r) => amt(r, 'vat'), type: 'number', width: 11 },
-        { header: '총액', value: (r) => amt(r, 'total'), type: 'number', width: 12 },
+        // 고객 판매금액(판매건 단위) — 지급금액과 혼동되지 않게 '판매' 표기
+        { header: '판매 공급가(고객)', value: (r) => amt(r, 'supply'), type: 'number', width: 14 },
+        { header: '판매 부가세(고객)', value: (r) => amt(r, 'vat'), type: 'number', width: 13 },
+        { header: '판매 총액(고객)', value: (r) => amt(r, 'total'), type: 'number', width: 14 },
+        { header: '지급대상 구분', value: (r) => r.payeeTypeLabel ?? (isVendor(r) ? '외주업체' : '개인'), width: 10 },
         { header: '통번역사·외주업체', value: (r) => r.payee ?? '', width: 16 },
+        { header: '외주업체 Master', value: (r) => r.vendorName ?? '', width: 18 },
         { header: '주민등록번호', value: (r) => rrn(r), width: 16 },
         { header: '납품일', value: (r) => r.deliveryDate ?? '', width: 11 },
         { header: '지급예정일', value: (r) => r.payoutDate ?? '', width: 11 },
         { header: '실제 지급일', value: (r) => r.actualPaymentDate ?? '', width: 11 },
         { header: '날짜 불일치', value: (r) => (r.dateMismatch ? 'CRM·플랫폼 불일치' : ''), width: 14 },
-        { header: '세전', value: 'pretax', type: 'number', width: 12 },
-        { header: '원천세', value: 'withholding', type: 'number', width: 10 },
-        { header: '세후', value: 'posttax', type: 'number', width: 12 },
+        { header: '[개인 지급] 세전', value: (r) => indiv(r, 'pretax'), type: 'number', width: 13 },
+        { header: '[개인 지급] 원천세', value: (r) => indiv(r, 'withholding'), type: 'number', width: 13 },
+        { header: '[개인 지급] 세후', value: (r) => indiv(r, 'posttax'), type: 'number', width: 13 },
+        { header: '[외주 지급] 공급가', value: (r) => vend(r, 'supply'), type: 'number', width: 13 },
+        { header: '[외주 지급] 부가세', value: (r) => vend(r, 'vat'), type: 'number', width: 13 },
+        { header: '[외주 지급] 지급합계', value: (r) => vend(r, 'payTotal'), type: 'number', width: 14 },
+        { header: '지급금액(송금액)', value: (r) => r.payAmount?.payTotal ?? r.posttax, type: 'number', width: 14 },
+        { header: '세금 확인 필요', value: (r) => r.taxConflict ?? '', width: 50 },
         { header: '합계 집계', value: (r) => (r.countedInTotals ? '예' : '아니오(중복)'), width: 9 },
         { header: '지급상태', value: (r) => payLabel(r), width: 13 },
         { header: '지급회차', value: (r) => r.payoutRoundId ?? '', width: 8 },
@@ -204,7 +219,7 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast }: {
               </div>
               <div style={{ overflowX: 'auto', border: '1px solid #e5e7eb', borderRadius: 8, maxHeight: 640, overflowY: 'auto' }}>
                 <table style={{ borderCollapse: 'collapse', width: '100%' }}>
-                  <thead style={{ position: 'sticky', top: 0 }}><tr>{['상태', '후보', '출처', '거래처', '판매번호·프로젝트', 'CRM행', '통번역사·외주업체', '납품일', '지급예정일', '실제 지급일', '세전', '세후', '지급상태', '회차', '계좌', '누락·확인필요 사유', '필요한 조치'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+                  <thead style={{ position: 'sticky', top: 0 }}><tr>{['상태', '후보', '출처', '거래처', '판매번호·프로젝트', 'CRM행', '통번역사·외주업체', '납품일', '지급예정일', '실제 지급일', '세전·공급가', '원천세·부가세', '세후·지급합계', '지급상태', '회차', '계좌', '누락·확인필요 사유', '필요한 조치'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
                   <tbody>
                     {rows.map(r => (
                       <tr key={r.sourceKey} data-testid={`ready-row-${r.sourceKey}`} data-state={r.state} data-candidate={r.candidate} style={r.countedInTotals ? undefined : { background: '#fff7ed' }}>
@@ -214,13 +229,21 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast }: {
                         <td style={{ ...td, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.client ?? ''}>{r.client ?? '—'}</td>
                         <td style={{ ...td, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.projectTitle ?? ''}>{r.saleNo ?? r.quoteNumber ?? (r.projectId ? `#${r.projectId}` : '—')}{r.projectTitle ? <div style={{ fontSize: 10.5, color: '#94a3b8' }}>{r.projectTitle}</div> : null}</td>
                         <td style={{ ...td, color: '#64748b' }}>{r.crmRowId ?? '—'}</td>
-                        <td style={{ ...td, fontWeight: 700 }}>{r.payee ?? '—'}</td>
+                        <td style={{ ...td, fontWeight: 700 }}>{r.payee ?? '—'}
+                          <div data-testid={`ready-payee-type-${r.sourceKey}`} style={{ fontSize: 10.5, fontWeight: 700, color: isVendor(r) ? '#7c3aed' : '#64748b' }}>
+                            {isVendor(r) ? `외주업체${r.vendorName && r.vendorName !== r.payee ? ` · ${r.vendorName}` : ''}` : '개인'}</div></td>
                         <td style={{ ...td, color: r.deliveryDate ? undefined : '#b91c1c' }}>{r.deliveryDate ?? '공란'}
                           {r.dateMismatch && <span title="CRM·플랫폼 날짜 불일치 — 사유 참고" aria-label="날짜 불일치" data-testid={`ready-date-mismatch-${r.sourceKey}`} style={{ marginLeft: 4, color: '#c2410c', fontWeight: 700 }}>⚠</span>}</td>
                         <td style={{ ...td, color: r.payoutDate ? undefined : '#b91c1c' }}>{r.payoutDate ?? '공란'}</td>
                         <td style={td}>{r.actualPaymentDate ?? '—'}</td>
-                        <td style={{ ...td, textAlign: 'right' }}>{won(r.pretax)}</td>
-                        <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{won(r.posttax)}{!r.countedInTotals && <div style={{ fontSize: 10, color: '#c2410c' }}>합계 제외(중복)</div>}</td>
+                        <td style={{ ...td, textAlign: 'right' }}>{won(r.pretax)}<div style={{ fontSize: 10, color: '#94a3b8' }}>{isVendor(r) ? '공급가' : '세전'}</div></td>
+                        <td style={{ ...td, textAlign: 'right' }} data-testid={`ready-tax-${r.sourceKey}`}>
+                          {isVendor(r)
+                            ? (r.payAmount?.vat != null ? won(r.payAmount.vat) : '—')
+                            : won(r.withholding)}
+                          <div style={{ fontSize: 10, color: '#94a3b8' }}>{isVendor(r) ? (r.payAmount?.vat != null ? '부가세' : '부가세 미확정') : '원천세'}</div>
+                          {r.taxConflict && <div title={r.taxConflict} style={{ fontSize: 10, color: '#c2410c', fontWeight: 700 }}>⚠ 세금 확인</div>}</td>
+                        <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{won(r.payAmount?.payTotal ?? r.posttax)}<div style={{ fontSize: 10, color: '#94a3b8', fontWeight: 400 }}>{isVendor(r) ? '지급합계' : '세후'}</div>{!r.countedInTotals && <div style={{ fontSize: 10, color: '#c2410c' }}>합계 제외(중복)</div>}</td>
                         <td style={{ ...td, fontWeight: 700, color: PAY_COLOR[r.payDisplay ?? ''] }} data-testid={`ready-pay-${r.sourceKey}`}>{payLabel(r)}</td>
                         <td style={td}>{r.payoutRoundId ? `#${r.payoutRoundId}` : '—'}</td>
                         <td style={{ ...td, color: r.hasAccount ? '#15803d' : '#b91c1c' }}>{r.hasAccount ? '등록' : '미등록'}</td>
@@ -231,7 +254,7 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast }: {
                         <td style={{ ...td, whiteSpace: 'normal', minWidth: 220, fontSize: 11.5, color: '#334155' }}>{r.actions.length ? r.actions.map((a, i) => <div key={i}>· {a}</div>) : '—'}</td>
                       </tr>
                     ))}
-                    {rows.length === 0 && <tr><td colSpan={17} style={{ ...td, textAlign: 'center', color: '#9ca3af', padding: 18 }}>해당 건이 없습니다.</td></tr>}
+                    {rows.length === 0 && <tr><td colSpan={18} style={{ ...td, textAlign: 'center', color: '#9ca3af', padding: 18 }}>해당 건이 없습니다.</td></tr>}
                   </tbody>
                 </table>
               </div>

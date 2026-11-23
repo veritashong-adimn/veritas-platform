@@ -19,6 +19,7 @@ import { checkEligibility } from "./legacyPayoutConversion";
 import { LEGACY_PAID_DELIVERY_CUTOFF, todayKst } from "../lib/legacyPayoutRule";
 import { loadSaleIdentities } from "./saleIdentity";
 import { decrypt } from "../lib/encrypt";
+import { splitPayAmount, type PayeeType } from "../lib/payoutAmount";
 
 // 주민등록번호(통번역사 명부 translator_sensitive, AES-256-GCM) — 수행자 ID(users.id) 기준.
 //   full=false: '900101-*******'(생년월일만) / full=true: '900101-1234567'(관리자 전용 경로에서만 호출).
@@ -117,7 +118,8 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
     SELECT pa.id, pa.project_id, p.title AS project_title, pa.performer_category::text AS cat, pa.individual_user_id, pa.vendor_company_id,
       pa.payment_status::text AS payment_status, pa.status::text AS work_status, pa.payout_round_id,
       pa.delivery_date IS NOT NULL AS has_delivery, pa.delivery_confirmed, coalesce(pa.cost_total, 0) AS cost_total,
-      pa.withholding_treatment::text AS treatment, pa.vendor_settlement_type,
+      pa.withholding_treatment::text AS treatment, pa.vendor_settlement_type, pa.withholding_rate AS wrate, pa.purchase_evidence_type::text AS evidence,
+      (SELECT c.name FROM companies c WHERE c.id = pa.vendor_company_id) AS vendor_name,
       (SELECT q.quote_number FROM quotes q WHERE q.id = pa.quote_id) AS quote_number,
       (SELECT m.legacy_id FROM legacy_master_mappings m WHERE m.source_system = 'old_crm' AND m.entity_type = 'sale' AND m.entity_id = pa.project_id AND m.status = 'active' LIMIT 1) AS legacy_sale_no,
       (SELECT substring(r.source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') FROM import_row_sources s JOIN legacy_archive_rows r ON r.id::text = substring(s.row_key from 10)
@@ -170,6 +172,13 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
     return q != null ? (amtByQuote.get(Number(q)) ?? null) : null;
   };
 
+  // ⑦ 외주업체 Master 이름(정규화) — CRM 원본만 있는 건이 개인 Master 로 연결됐지만 이름이 외주업체와 같으면 '구분 확인 필요'만 표시(자동 연결 안 함)
+  const normName = (v: unknown) => String(v ?? "").toLowerCase().replace(/\([^)]*\)|\(주\)|주식회사|㈜|\s|\.|,/g, "");
+  const vendorByName = new Map<string, { id: number; name: string }>();
+  for (const c of await rows(dbx, sql`SELECT id, name FROM companies WHERE deleted_at IS NULL AND (company_type = 'vendor' OR coalesce(is_vendor, false))`)) {
+    const k = normName(c.name); if (k && !vendorByName.has(k)) vendorByName.set(k, { id: Number(c.id), name: String(c.name) });
+  }
+
   const out: any[] = [];
   for (const b of base) {
     const bl: Blocker[] = [];
@@ -191,6 +200,11 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
     }
     const amount = num(b.pretax);
     const paid = p ? p.payment_status === "paid" : b.legacy_paid === true;
+    // 지급 대상 구분·지급금액(lib/payoutAmount — 지급명세서와 같은 기준). 현재 수행정보(플랫폼·전환)가 기준, CRM 원본만 있으면 개인(CRM 기록).
+    const payeeType: PayeeType = p ? (p.cat === "vendor" ? "vendor" : "individual") : "individual";
+    const pay = splitPayAmount({ payeeType, source: b.source === "current" ? "current" : "legacy", pretax: amount, posttax: num(b.posttax),
+      withholding: b.source === "current" ? num(b.withholding) : null,
+      current: b.source === "legacy" && p ? { category: p.cat, treatment: p.treatment, rate: p.wrate, evidence: p.evidence } : null });
     const dd: string | null = b.delivery_date ?? null, pd: string | null = b.payout_date ?? null;
 
     // ── 후보 사유(범위 date) ──
@@ -240,7 +254,13 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
       if (p.cat === "vendor" && p.vendor_settlement_type === "overseas") add("C", "overseas", "해외송금 외주 — IBK 대량이체 제외", "별도 해외송금");
       if (p.payout_round_id == null) add("I", "no_round", "지급회차 미배정", "지급회차 생성 시 자격 충족하면 자동 포함");
     }
-    if (kind !== "platform" && masterId == null && !paid) add("C", "no_payee", "수행자 미연결(과거 CRM 이름만)", "통번역사 Master 연결 확인");
+    if (kind !== "platform" && masterId == null && vendorId == null && !paid) add("C", "no_payee", "수행자 미연결(과거 CRM 이름만)", "통번역사 Master 연결 확인");
+    // 세금 충돌(CRM 원천세 ↔ 현재 세금 설정, 외주업체인데 원천세 기록 등) — 확인 필요만 표시, 금액·지급상태 불변
+    if (pay.taxConflict && !paid) add("C", "tax_conflict", pay.taxConflict, "실제 세금(원천세·부가세) 확인 후 수행정보·지급액 정정");
+    if (kind === "crm_only" && !paid) {
+      const v = vendorByName.get(normName(b.translator));
+      if (v) add("C", "payee_type_check", `개인 통번역사로 연결됐으나 외주업체 '${v.name}'(#${v.id})와 이름 일치 — 개인/외주 구분 확인`, "지급 전환 시 수행자 구분(개인·외주업체) 지정");
+    }
 
     // ── B: 계좌 ──
     let hasAccount = false;
@@ -258,9 +278,11 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
     const roundEligible = kind === "platform" && !!p && p.payment_status === "unpaid" && p.has_delivery && p.delivery_confirmed && num(p.cost_total) > 0
       && ((p.cat === "individual" && p.individual_user_id != null && !!p.treatment) || (p.cat === "vendor" && p.vendor_company_id != null));
     const cats = new Set(bl.filter(x => x.cat !== "I").map(x => x.cat));
+    // 지급상태 표시는 세금·구분 확인 사유(tax_conflict·payee_type_check)로 바꾸지 않는다(상태 자동 변경 금지) — 점검 분류(state)에만 반영
+    const payCats = new Set(bl.filter(x => x.cat !== "I" && x.code !== "tax_conflict" && x.code !== "payee_type_check").map(x => x.cat));
     const payDisplay: PayDisplay = paid ? "paid"
       : (kind === "crm_only" || p?.payment_status === "payment_hold" || bl.some(x => x.code.startsWith("dup_"))) ? "review"
-      : (cats.has("B") || cats.has("C")) ? "prep" : "scheduled";
+      : (payCats.has("B") || payCats.has("C")) ? "prep" : "scheduled";
     const state: ReadinessState = cats.has("D") ? "D" : cats.has("C") ? "C" : cats.has("B") ? "B" : "A";
     out.push({
       source: b.source, kind, sourceKey: b.source_key, crmRowId: b.source === "legacy" ? Number(b.id) : (p?.crm_row_id ?? null),
@@ -272,6 +294,9 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
         crmPayout: b.crm_payout_date ?? null, platformPayout: b.platform_payout_date ?? null } : null,
       dateMismatch: b.delivery_mismatch === true || b.payout_mismatch === true || (kind === "platform" && !!p?.crm_delivery && !!dd && p.crm_delivery !== dd),
       pretax: amount, withholding: Math.round(num(b.withholding) * 100) / 100, posttax: Math.round(num(b.posttax) * 100) / 100,
+      // 지급금액 구분(2026-11-23): 개인 = 세전/원천세/세후, 외주업체 = 공급가/부가세/지급합계 — 화면·엑셀·지급명세서 공통
+      payeeType, payeeTypeLabel: payeeType === "vendor" ? "외주업체" : "개인", vendorName: p?.cat === "vendor" ? (p.vendor_name ?? null) : null,
+      payAmount: { withholding: pay.withholding, supply: pay.supply, vat: pay.vat, payTotal: pay.payTotal }, taxConflict: pay.taxConflict,
       paymentStatus: p?.payment_status ?? (b.legacy_paid ? "paid" : "unconfirmed"), payoutRoundId: p?.payout_round_id ?? null,
       payDisplay, payDisplayLabel: PAY_DISPLAY_LABEL[payDisplay],
       saleAmount: saleAmountOf(p ? Number(p.project_id) : null),   // { supply, vat, total } | null — 판매건 단위 금액(행마다 같은 값, 합산 시 판매건당 1회)
@@ -287,7 +312,8 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
   for (const o of out) o.residentNumberMasked = o.vendorId == null && o.masterId != null ? (rrnMasked.get(o.masterId) ?? null) : null;
   const order: Record<string, number> = { base: 0, delivery_window: 1, carry_over: 2, no_payout_date: 3, other: 4, all: 0 };
   out.sort((a, b) => (order[a.candidate] - order[b.candidate]) || a.state.localeCompare(b.state) || String(a.payee ?? "").localeCompare(String(b.payee ?? "")));
-  const sum = (arr: any[]) => { const c = arr.filter(x => x.countedInTotals); return { count: arr.length, counted: c.length, pretax: c.reduce((s, x) => s + x.pretax, 0), posttax: Math.round(c.reduce((s, x) => s + x.posttax, 0)) }; };
+  const sum = (arr: any[]) => { const c = arr.filter(x => x.countedInTotals); return { count: arr.length, counted: c.length, pretax: c.reduce((s, x) => s + x.pretax, 0), posttax: Math.round(c.reduce((s, x) => s + x.posttax, 0)),
+    vendorCount: c.filter(x => x.payeeType === "vendor").length, vat: Math.round(c.reduce((s, x) => s + (x.payAmount.vat ?? 0), 0)) }; };
   const by = (f: (x: any) => string) => { const m: Record<string, any> = {}; for (const k of [...new Set(out.map(f))]) m[k] = sum(out.filter(x => f(x) === k)); return m; };
   const issueCounts: Record<string, number> = {};
   for (const o of out) for (const b of o.blockers) issueCounts[b.code] = (issueCounts[b.code] ?? 0) + 1;

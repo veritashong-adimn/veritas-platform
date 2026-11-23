@@ -34,49 +34,60 @@ export interface ReproStmtOpts {
   scopeValue: string;       // 지급회차 라벨(예: "2026-09-15 지급")
   payDate: string;          // 대표 지급일('-' 가능)
   rows: ReproStmtRow[];
+  // 지급대상 구분(2026-11-23) — 외주업체면 원천징수 대신 부가세(세후−세전 저장값 차액)로 표시. 생략 시 개인(기존과 동일).
+  payeeType?: 'individual' | 'vendor';
 }
 
 const num = (n: unknown) => { const v = Number(n); return Number.isFinite(v) ? v : 0; };
 const safe = (s: string) => String(s || '지급대상').replace(/[\\/:*?"<>|\s]+/g, '_');
 const TAX_DISPLAY = '원천징수 3.3%';
 
-function totals(rows: ReproStmtRow[]) {
+function totals(rows: ReproStmtRow[], vendor = false) {
   const gross = rows.reduce((a, r) => a + num(r.pretax), 0);
   const net = rows.reduce((a, r) => a + num(r.posttax), 0);
-  const withholding = Math.round((gross - net) * 100) / 100;   // 원본 세전−세후(실제 공제)
-  return { base: gross, expense: 0, deduction: 0, gross, withholding, net };
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  // 개인: 원본 세전−세후(실제 공제) / 외주업체: 원천징수 없음. 부가세 = 행별 세후−세전(가산분)만 합산.
+  //   외주업체인데 CRM 기록에 공제(세후<세전)가 있으면 음수 부가세로 만들지 않고 'CRM 공제 기록'으로 그대로 표시(확인 필요, lib/payoutAmount 와 같은 기준).
+  const withholding = vendor ? r2(rows.reduce((a, r) => a + Math.max(0, num(r.pretax) - num(r.posttax)), 0)) : r2(gross - net);
+  const vat = vendor ? r2(rows.reduce((a, r) => a + Math.max(0, num(r.posttax) - num(r.pretax)), 0)) : 0;
+  return { base: gross, expense: 0, deduction: 0, gross, withholding, net, vat };
 }
+const taxDisplayOf = (vendor: boolean, vat: number, crmDeduct = 0) => (!vendor ? TAX_DISPLAY
+  : `외주업체 — 원천징수 없음${vat > 0 ? `, 부가세 ${Math.round(vat).toLocaleString()}원 포함` : ''}${crmDeduct > 0 ? ` · CRM 공제 기록 ${Math.round(crmDeduct).toLocaleString()}원(세금 확인 필요)` : ''}`);
 
 // 통번역사 1인 명세서 Excel — 정식 양식(14컬럼: '구분'·'수행일'·'작업량'·'단가' 제거, '상세내역'=파일명 추가).
 export function exportReproStatementExcel(opts: ReproStmtOpts): void {
-  const t = totals(opts.rows);
+  const vendor = opts.payeeType === 'vendor';
+  const t = totals(opts.rows, vendor);
+  const taxCol = vendor ? '부가세' : '원천세공제(3.3%)';
   const columns: ExcelColumn[] = [
     { header: '거래처', width: 16 }, { header: '상품·업무', width: 26 }, { header: '상세내역', width: 38 },
     { header: '납품일', width: 12 }, { header: '지급일', width: 12 }, { header: '통번역료', type: 'number', width: 12 },
     { header: '기타비용 내역', width: 14 }, { header: '기타비용 금액', type: 'number', width: 13 },
     { header: '차감 내역', width: 12 }, { header: '차감 금액', type: 'number', width: 11 },
     { header: '세전금액', type: 'number', width: 13 }, { header: '세금처리', width: 16 },
-    { header: '원천세공제(3.3%)', type: 'number', width: 16 }, { header: '실지급액', type: 'number', width: 16 },
+    { header: taxCol, type: 'number', width: 16 }, { header: vendor ? '지급합계' : '실지급액', type: 'number', width: 16 },
   ];
   const rows: ExcelCell[][] = opts.rows.map((r) => [
     r.client || '거래처 확인 필요', r.content || '-', r.filename || '-', r.deliveryDate || '-', r.payoutDate || '-',
     Math.round(num(r.pretax)),
     '', 0, '', 0,
-    Math.round(num(r.pretax)), TAX_DISPLAY,
-    Math.round(num(r.pretax) - num(r.posttax)), Math.round(num(r.posttax)),
+    Math.round(num(r.pretax)), vendor ? '외주업체' : TAX_DISPLAY,
+    Math.round(vendor ? Math.max(0, num(r.posttax) - num(r.pretax)) : num(r.pretax) - num(r.posttax)), Math.round(num(r.posttax)),
   ]);
   const totRow: ExcelCell[] = [
     `합계 (${opts.rows.length}건)`, '', '', '', '',
     Math.round(t.base), '', 0, '', 0,
-    Math.round(t.gross), '', Math.round(t.withholding), Math.round(t.net),
+    Math.round(t.gross), '', Math.round(vendor ? t.vat : t.withholding), Math.round(t.net),
   ];
   const footerRows: [string, ExcelCell][] = [
     ['통번역료 합계', Math.round(t.base)],
     ['기타비용 합계', 0],
     ['차감 합계', 0],
-    ['세전금액 합계', Math.round(t.gross)],
-    ['원천세공제(3.3%)', Math.round(t.withholding)],
-    ['최종 실지급액', Math.round(t.net)],
+    [vendor ? '공급가 합계' : '세전금액 합계', Math.round(t.gross)],
+    [taxCol, Math.round(vendor ? t.vat : t.withholding)],
+    ...(vendor && t.withholding > 0 ? [['CRM 공제 기록(세금 확인 필요)', Math.round(t.withholding)] as [string, ExcelCell]] : []),
+    [vendor ? '지급합계' : '최종 실지급액', Math.round(t.net)],
   ];
   downloadStatementExcel({
     filename: `지급명세서_${safe(opts.payeeName)}_${safe(opts.scopeValue)}_${todayStamp()}.xlsx`,
@@ -86,9 +97,9 @@ export function exportReproStatementExcel(opts: ReproStmtOpts): void {
       ['지급대상', opts.payeeName],
       ['이메일', opts.email || '-'],
       ['연락처', opts.phone || '-'],
-      ['구분', '통번역사'],
+      ['구분', vendor ? '외주업체' : '통번역사'],
       ['지급일', opts.payDate || '-'],
-      ['세금처리', TAX_DISPLAY],
+      ['세금처리', taxDisplayOf(vendor, t.vat, vendor ? t.withholding : 0)],
     ],
     columns, rows, totals: totRow, footerRows,
   });
@@ -96,7 +107,8 @@ export function exportReproStatementExcel(opts: ReproStmtOpts): void {
 
 // 통번역사 1인 재현 명세서 PDF — 기존 정식 A4 양식 재사용. 팝업 차단 시 false.
 export function exportReproStatementPdf(opts: ReproStmtOpts): boolean {
-  const t = totals(opts.rows);
+  const vendor = opts.payeeType === 'vendor';
+  const t = totals(opts.rows, vendor);
   const pdfRows: PayoutStatementPdfRow[] = opts.rows.map((r) => ({
     customer: r.client || '거래처 확인 필요', product: r.content || '-', detail: r.filename || '-',
     deliveryDate: r.deliveryDate || '-', payDate: r.payoutDate || '-',
@@ -107,9 +119,9 @@ export function exportReproStatementPdf(opts: ReproStmtOpts): boolean {
   return printPayoutStatementPdf({
     fileName: `지급명세서_${safe(opts.payeeName)}_${safe(opts.scopeValue)}`,
     issuedDate: `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`,
-    payeeName: opts.payeeName, payeeLanguages: opts.payeeLanguages ?? null, email: opts.email || '-', phone: opts.phone || '-', payeeType: '통번역사',
+    payeeName: opts.payeeName, payeeLanguages: opts.payeeLanguages ?? null, email: opts.email || '-', phone: opts.phone || '-', payeeType: vendor ? '외주업체' : '통번역사',
     scopeFieldLabel: '지급회차', scopeValue: opts.scopeValue,
-    payDate: opts.payDate || '-', taxDisplay: TAX_DISPLAY,
+    payDate: opts.payDate || '-', taxDisplay: taxDisplayOf(vendor, t.vat, vendor ? t.withholding : 0),
     count: opts.rows.length, rows: pdfRows,
     totals: t,
   });

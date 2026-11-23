@@ -26,6 +26,7 @@ import { getPermissionsForRole } from "../lib/rbac";
 import { isLegacyPlaceholderEmail } from "../lib/mailer";
 import { LEGACY_PAID_DELIVERY_CUTOFF, LEGACY_PAID_BASIS, LEGACY_PAID_BY_ROUND_BASIS } from "../lib/legacyPayoutRule";
 import { conversionsByRow } from "../services/legacyPayoutConversion";
+import { splitPayAmount, type PayeeType } from "../lib/payoutAmount";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -112,6 +113,9 @@ export const PROG = sql`
       to_char(act.actual_payment_date, 'YYYY-MM-DD') AS actual_payment_date,
       -- 운영 판매로 전환된 행의 실제 수행자(담당자가 수행정보에서 바꾼 통번역사) — CRM 이름 매핑보다 우선(지급명세서 수취인 오귀속 방지, 2026-11)
       act.uid AS act_user_id,
+      -- 전환 수행정보의 현재 수행자 구분·세금 설정(2026-11-23) — 담당자가 외주업체로 지정한 전환 건을 개인(CRM 이름 매핑)으로 보지 않게.
+      --   금액은 CRM 원본 그대로이며, 세금 설정과 다르면 '확인 필요'로만 표시(lib/payoutAmount).
+      act.cat AS act_cat, act.vid AS act_vendor_id, act.treatment AS act_treatment, act.wrate AS act_rate, act.evidence AS act_evidence,
       act.payment_status AS act_payment_status,
       coalesce(substring(source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') <= ${LEGACY_PAID_DELIVERY_CUTOFF}, false) AS legacy_paid_cutoff,
       -- 지급예정: 지급일이 오늘(KST) 당일 또는 이후. 지급일 미상은 지급확인 필요(지급일 경과는 위 legacy_paid).
@@ -133,6 +137,8 @@ export const PROG = sql`
           (xpa.id IS NOT NULL AND xpa.deleted_at IS NULL AND coalesce(xp.status::text, '') <> 'cancelled') AS live,
           EXISTS (SELECT 1 FROM legacy_master_mappings m WHERE m.source_system = 'old_crm' AND m.entity_type = 'sale' AND m.entity_id = xpa.project_id AND m.status = 'active') AS active_sale,
           xpa.payment_status::text AS payment_status, xpa.actual_payment_date, xpa.individual_user_id AS uid,
+          xpa.performer_category::text AS cat, xpa.vendor_company_id AS vid, xpa.withholding_treatment::text AS treatment,
+          xpa.withholding_rate AS wrate, xpa.purchase_evidence_type::text AS evidence,
           to_char(coalesce(xpa.expected_payment_date, xpa.expected_payment_date_auto), 'YYYY-MM-DD') AS expected_payment_date,
           to_char(coalesce(xpa.delivery_date, xpa.delivery_date_auto), 'YYYY-MM-DD') AS delivery_date
         FROM ch JOIN import_row_sources s ON s.module = 'legacy_sale_activation' AND s.row_key = 'progress:' || ch.src
@@ -144,7 +150,12 @@ export const PROG = sql`
         (array_agg(actual_payment_date ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS actual_payment_date,
         (array_agg(expected_payment_date ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS expected_payment_date,
         (array_agg(delivery_date ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS delivery_date,
-        (array_agg(uid ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS uid
+        (array_agg(uid ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS uid,
+        (array_agg(cat ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS cat,
+        (array_agg(vid ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS vid,
+        (array_agg(treatment ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS treatment,
+        (array_agg(wrate ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS wrate,
+        (array_agg(evidence ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS evidence
       FROM l GROUP BY row_id
     ) act ON act.row_id = legacy_archive_rows.id
     WHERE source_type = 'progress' AND is_effective = true
@@ -181,6 +192,7 @@ export const CUR = sql`
       pa.language_or_service_snapshot AS language,
       pa.individual_user_id AS master_user_id,
       pa.vendor_company_id AS vendor_company_id,
+      pa.performer_category::text AS performer_category,
       cu.email AS master_email, tp.phone AS master_phone, tp.language_pairs AS master_langpairs,
       pa.payment_status::text AS payment_status,
       pa.payout_round_id,
@@ -264,6 +276,8 @@ router.get("/admin/payout-unified/rounds", ...adminGuard, requireStaffPermission
         count(*)::int AS cnt,
         count(DISTINCT translator) FILTER (WHERE translator IS NOT NULL)::int AS payees,
         coalesce(sum(pretax),0) AS pretax_total, coalesce(sum(posttax),0) AS posttax_total,
+        coalesce(sum(pretax - posttax) FILTER (WHERE pretax >= posttax),0) AS withholding_total,
+        coalesce(sum(posttax - pretax) FILTER (WHERE posttax > pretax),0) AS vat_total,
         coalesce(sum(pretax) FILTER (WHERE legacy_paid),0) AS paid_total,
         count(*) FILTER (WHERE NOT legacy_paid AND NOT payout_future)::int AS need_review_cnt,
         count(*) FILTER (WHERE NOT legacy_paid AND payout_future)::int AS scheduled_cnt,
@@ -277,6 +291,8 @@ router.get("/admin/payout-unified/rounds", ...adminGuard, requireStaffPermission
         count(*)::int AS cnt,
         count(DISTINCT translator) FILTER (WHERE translator IS NOT NULL)::int AS payees,
         coalesce(sum(pretax),0) AS pretax_total, coalesce(sum(posttax),0) AS posttax_total,
+        coalesce(sum(withholding_tax),0) AS withholding_total,
+        coalesce(sum(posttax - pretax + withholding_tax),0) AS vat_total,
         coalesce(sum(pretax) FILTER (WHERE payment_status='paid'),0) AS paid_total,
         coalesce(sum(pretax) FILTER (WHERE payment_status='unpaid'),0) AS unpaid_total,
         count(*) FILTER (WHERE payment_status='payment_hold')::int AS excluded_cnt,
@@ -289,16 +305,16 @@ router.get("/admin/payout-unified/rounds", ...adminGuard, requireStaffPermission
     const map = new Map<string, any>();
     const key = (d: any) => d ?? "__none__";
     for (const r of legacyRows) {
-      const k = key(r.payout_date); const g = map.get(k) ?? { payoutDate: r.payout_date ?? null, cnt: 0, payees: new Set<string>(), pretax: 0, posttax: 0, paid: 0, unpaid: 0, needReview: 0, excluded: 0, scheduled: 0, scheduledTotal: 0, legacyCnt: 0, currentCnt: 0, sc: { paid: 0, unpaid: 0, scheduled: 0, review: 0 } };
-      g.cnt += num(r.cnt); g.pretax += num(r.pretax_total); g.posttax += num(r.posttax_total);
+      const k = key(r.payout_date); const g = map.get(k) ?? { payoutDate: r.payout_date ?? null, cnt: 0, payees: new Set<string>(), pretax: 0, posttax: 0, withholding: 0, vat: 0, paid: 0, unpaid: 0, needReview: 0, excluded: 0, scheduled: 0, scheduledTotal: 0, legacyCnt: 0, currentCnt: 0, sc: { paid: 0, unpaid: 0, scheduled: 0, review: 0 } };
+      g.cnt += num(r.cnt); g.pretax += num(r.pretax_total); g.posttax += num(r.posttax_total); g.withholding += num(r.withholding_total); g.vat += num(r.vat_total);
       g.paid += num(r.paid_total); g.needReview += num(r.need_review_cnt); g.legacyCnt += num(r.cnt);
       g.scheduled += num(r.scheduled_cnt); g.scheduledTotal += num(r.scheduled_total);
       g.sc.paid += num(r.paid_cnt); g.sc.scheduled += num(r.scheduled_cnt); g.sc.review += num(r.need_review_cnt);
       map.set(k, g);
     }
     for (const r of curRows) {
-      const k = key(r.payout_date); const g = map.get(k) ?? { payoutDate: r.payout_date ?? null, cnt: 0, payees: new Set<string>(), pretax: 0, posttax: 0, paid: 0, unpaid: 0, needReview: 0, excluded: 0, scheduled: 0, scheduledTotal: 0, legacyCnt: 0, currentCnt: 0, sc: { paid: 0, unpaid: 0, scheduled: 0, review: 0 } };
-      g.cnt += num(r.cnt); g.pretax += num(r.pretax_total); g.posttax += num(r.posttax_total);
+      const k = key(r.payout_date); const g = map.get(k) ?? { payoutDate: r.payout_date ?? null, cnt: 0, payees: new Set<string>(), pretax: 0, posttax: 0, withholding: 0, vat: 0, paid: 0, unpaid: 0, needReview: 0, excluded: 0, scheduled: 0, scheduledTotal: 0, legacyCnt: 0, currentCnt: 0, sc: { paid: 0, unpaid: 0, scheduled: 0, review: 0 } };
+      g.cnt += num(r.cnt); g.pretax += num(r.pretax_total); g.posttax += num(r.posttax_total); g.withholding += num(r.withholding_total); g.vat += num(r.vat_total);
       g.paid += num(r.paid_total); g.unpaid += num(r.unpaid_total); g.excluded += num(r.excluded_cnt); g.currentCnt += num(r.cnt);
       g.sc.paid += num(r.paid_cnt); g.sc.unpaid += num(r.overdue_cnt); g.sc.scheduled += num(r.future_cnt);
       g.sc.review += num(r.cnt) - num(r.paid_cnt) - num(r.overdue_cnt) - num(r.future_cnt);   // 지급보류·지급일 없음 등
@@ -309,7 +325,8 @@ router.get("/admin/payout-unified/rounds", ...adminGuard, requireStaffPermission
     const total = all.length;
     const paged = all.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize);
     const rounds = paged.map(g => {
-      const withholdingImplied = Math.round((g.pretax - g.posttax) * 100) / 100;
+      // 원천세 = 개인 공제액만(외주업체 부가세가 세전−세후에 섞여 원천세가 줄어 보이던 오류 수정). 부가세는 별도 vatTotal.
+      const withholdingImplied = Math.round(g.withholding * 100) / 100;
       return {
         payoutDate: g.payoutDate,
         label: g.payoutDate ? `${g.payoutDate} 지급` : "지급일 미확인",
@@ -317,7 +334,7 @@ router.get("/admin/payout-unified/rounds", ...adminGuard, requireStaffPermission
         assignmentCount: g.cnt,
         legacyCount: g.legacyCnt, currentCount: g.currentCnt,
         pretaxTotal: g.pretax, posttaxTotal: g.posttax,
-        withholdingImplied,
+        withholdingImplied, vatTotal: Math.round(g.vat * 100) / 100,
         withholdingRecalc: recalcDeduction(g.pretax),
         paidTotal: g.paid, unpaidTotal: g.unpaid, needReviewCount: g.needReview, excludedCount: g.excluded,
         scheduledCount: g.scheduled, scheduledTotal: g.scheduledTotal,
@@ -408,7 +425,15 @@ export async function collectUnifiedItems(opts: {
       else if (r.is_company === true) matchStatus = "client";
       else matchStatus = "unmatched";
       // Master 키: 연결된 건(active/confirmed 매핑)만 Master 기준 합산. 미연결은 이름키로 별도(자동병합 아님).
-      const masterKey = r.mapped_user_id != null ? `m:${r.mapped_user_id}` : `n:${r.translator ?? "?"}`;
+      let masterKey = r.mapped_user_id != null ? `m:${r.mapped_user_id}` : `n:${r.translator ?? "?"}`;
+      // 운영 판매로 전환된 행의 현재 수행자가 외주업체면 외주업체로 연결(CRM 이름 매핑보다 우선 — 수행정보가 현재 기준)
+      const payeeType: PayeeType = r.act_cat === "vendor" ? "vendor" : "individual";
+      if (payeeType === "vendor") {
+        matchStatus = "vendor"; matchedUserId = null; matchedUserName = null; masterEmail = null; masterPhone = null;
+        masterKey = r.act_vendor_id != null ? `v:${r.act_vendor_id}` : `n:${r.translator ?? "?"}`;
+      }
+      const amt = splitPayAmount({ payeeType, source: "legacy", pretax, posttax,
+        current: r.act_cat ? { category: r.act_cat, treatment: r.act_treatment, rate: r.act_rate, evidence: r.act_evidence } : null });
       // 지급상태(과거 CRM, PROG 판정과 동일) — 지급완료는 납품일 ≤ cutoff(대표 확인)만. 입금내역(고객 수금)은 근거 아님.
       const status: PayStatus = legacyStatus(r);
       const paidBasis: string | null = !r.legacy_paid ? null : r.legacy_paid_confirmed ? `VERITAS OS 지급완료 확인(실제 지급일 ${r.actual_payment_date})` : r.legacy_paid_cutoff ? LEGACY_PAID_BASIS : LEGACY_PAID_BY_ROUND_BASIS;
@@ -420,8 +445,10 @@ export async function collectUnifiedItems(opts: {
         masterEmail, masterPhone, originalPhone: canViewFullContact ? phoneFull(r.orig_phone) : maskPhone(r.orig_phone),
         matchStatus, matchedUserId, matchedUserName, masterKey, confirmed: matchStatus === "confirmed",
         isPayroll: r.is_payroll === true, content, filename: r.filename ?? null,
-        pretax, posttax, withholdingImplied: Math.round((pretax - posttax) * 100) / 100,
+        pretax, posttax, withholdingImplied: amt.withholding,
         withholdingTax: null,   // 과거 CRM: 원천세·기타공제 분리 정보 없음(세전−세후만 존재) — 추정 분리 금지
+        payeeType, vendorId: payeeType === "vendor" && r.act_vendor_id != null ? num(r.act_vendor_id) : null,
+        supply: amt.supply, vat: amt.vat, payTotal: amt.payTotal, taxConflict: amt.taxConflict,
         status, statusLabel: STATUS_LABEL[status], hasDeposit: r.has_deposit === true, paidBasis,
         // 통번역사 Master 가능언어(확정 연결 건만, 원문 그대로) — 지급명세서 상단 언어 표시용. 이름만 같은 후보는 사용하지 않음.
         masterLanguages: r.mapped_user_id != null ? (r.mapped_langpairs ?? null) : null,
@@ -433,6 +460,8 @@ export async function collectUnifiedItems(opts: {
       const ps = String(r.payment_status);
       const status: PayStatus = ps === "paid" ? "paid" : ps === "payment_hold" ? "excluded" : "pending";
       const confirmed = r.master_user_id != null; // 신규는 배정 시점에 Master 직접 연결(확정)
+      const payeeType: PayeeType = r.performer_category === "vendor" || (r.master_user_id == null && r.vendor_company_id != null) ? "vendor" : "individual";
+      const amt = splitPayAmount({ payeeType, source: "current", pretax, posttax, withholding: r.withholding_tax == null ? null : num(r.withholding_tax) });
       return {
         source: "current", sourceKey: r.source_key, id: num(r.id),
         deliveryDate: r.delivery_date ?? null, payoutDate: r.payout_date ?? null,
@@ -445,8 +474,10 @@ export async function collectUnifiedItems(opts: {
         matchedUserId: r.master_user_id != null ? num(r.master_user_id) : null, matchedUserName: r.translator ?? null,
         masterKey: r.master_user_id != null ? `m:${r.master_user_id}` : (r.vendor_company_id != null ? `v:${r.vendor_company_id}` : `n:${r.translator ?? "?"}`),
         confirmed, isPayroll: false, content, filename: null,
-        pretax, posttax, withholdingImplied: Math.round((pretax - posttax) * 100) / 100,
+        pretax, posttax, withholdingImplied: payeeType === "vendor" ? 0 : Math.round((pretax - posttax) * 100) / 100,
         withholdingTax: r.withholding_tax == null ? null : num(r.withholding_tax),   // 저장 원천세(기타 공제 = 세전−세후−원천세)
+        payeeType, vendorId: r.vendor_company_id != null ? num(r.vendor_company_id) : null,
+        supply: amt.supply, vat: amt.vat, payTotal: amt.payTotal, taxConflict: amt.taxConflict,
         status, statusLabel: STATUS_LABEL[status], hasDeposit: ps === "paid",
         // 지급완료 근거 — 실제 지급일 기록 / VERITAS OS 지급회차 / 대표 지급 확인(실제 지급일 미기록, 송금 증빙 없음)
         paidBasis: ps !== "paid" ? null : r.actual_payment_date ? `실제 지급일 ${r.actual_payment_date}` : r.payout_round_id != null ? "지급회차 지급완료 처리" : "대표 지급 확인(실제 지급일 미기록)",
@@ -512,8 +543,8 @@ router.get("/admin/payout-unified/payees", ...adminGuard, requireStaffPermission
     // ── 통번역사(Master)별 통합 집계(§8) — 확정 연결 기준 masterKey. 미확정은 이름키로 분리.
     const groups = new Map<string, any>();
     for (const it of items) {
-      const g = groups.get(it.masterKey) ?? { masterKey: it.masterKey, name: it.translator ?? "(이름 미상)", confirmed: it.confirmed, matchStatus: it.matchStatus, matchedUserId: it.matchedUserId, email: it.masterEmail ?? null, phone: it.masterPhone ?? it.originalPhone ?? null, count: 0, pretax: 0, posttax: 0, paidPretax: 0, unpaidPretax: 0, paidCount: 0, unpaidCount: 0, needReview: 0, dupSuspect: 0, scheduled: 0, sources: new Set<string>(), languages: new Set<string>() };
-      g.count++; g.pretax += it.pretax; g.posttax += it.posttax; g.sources.add(it.source); if (it.language) g.languages.add(it.language);
+      const g = groups.get(it.masterKey) ?? { masterKey: it.masterKey, name: it.translator ?? "(이름 미상)", confirmed: it.confirmed, matchStatus: it.matchStatus, matchedUserId: it.matchedUserId, email: it.masterEmail ?? null, phone: it.masterPhone ?? it.originalPhone ?? null, count: 0, pretax: 0, posttax: 0, withholding: 0, vat: 0, payeeType: (it as any).payeeType, paidPretax: 0, unpaidPretax: 0, paidCount: 0, unpaidCount: 0, needReview: 0, dupSuspect: 0, scheduled: 0, sources: new Set<string>(), languages: new Set<string>() };
+      g.count++; g.pretax += it.pretax; g.posttax += it.posttax; g.withholding += it.withholdingImplied; g.vat += (it as any).vat ?? 0; g.sources.add(it.source); if (it.language) g.languages.add(it.language);
       if ((it as any).status === "paid") { g.paidPretax += it.pretax; g.paidCount++; }
       else if ((it as any).status === "pending") { g.unpaidPretax += it.pretax; g.unpaidCount++; }
       else if ((it as any).status === "deposit_unconfirmed") g.needReview++;
@@ -525,7 +556,8 @@ router.get("/admin/payout-unified/payees", ...adminGuard, requireStaffPermission
     const payees = [...groups.values()].map(g => ({
       masterKey: g.masterKey, name: g.name, confirmed: g.confirmed, matchStatus: g.matchStatus, matchedUserId: g.matchedUserId,
       email: g.email, phone: g.phone, count: g.count,
-      pretaxTotal: g.pretax, posttaxTotal: g.posttax, withholdingImplied: Math.round((g.pretax - g.posttax) * 100) / 100,
+      pretaxTotal: g.pretax, posttaxTotal: g.posttax, withholdingImplied: Math.round(g.withholding * 100) / 100,
+      payeeType: g.payeeType, vatTotal: Math.round(g.vat * 100) / 100,
       paidPretax: g.paidPretax, unpaidPretax: g.unpaidPretax, paidCount: g.paidCount, unpaidCount: g.unpaidCount, needReviewCount: g.needReview, dupSuspectCount: g.dupSuspect,
       scheduledCount: g.scheduled,
       sources: [...g.sources], languages: [...g.languages],   // 해당 회차 수행 언어(중복 제거). 없으면 빈 배열.
@@ -534,13 +566,13 @@ router.get("/admin/payout-unified/payees", ...adminGuard, requireStaffPermission
     // 회차 요약(§4) — 선택 회차 기준.
     const totals = items.reduce((t, p) => {
       t.assignmentCount++; t.pretaxTotal += p.pretax; t.posttaxTotal += p.posttax;
-      t.withholdingImpliedTotal += p.withholdingImplied;
+      t.withholdingImpliedTotal += p.withholdingImplied; t.vatTotal += (p as any).vat ?? 0;
       const st = (p as any).status;
       if (st === "paid") t.paidTotal += p.pretax; else if (st === "pending") t.unpaidTotal += p.pretax;
       if (st === "deposit_unconfirmed") t.needReviewCount++; if (st === "dup_suspect") t.dupSuspectCount++; if (st === "excluded") t.excludedCount++;
       if (st === "scheduled") { t.scheduledCount++; t.scheduledTotal += p.pretax; }
       return t;
-    }, { assignmentCount: 0, pretaxTotal: 0, posttaxTotal: 0, withholdingImpliedTotal: 0, paidTotal: 0, unpaidTotal: 0, needReviewCount: 0, dupSuspectCount: 0, excludedCount: 0, scheduledCount: 0, scheduledTotal: 0 });
+    }, { assignmentCount: 0, pretaxTotal: 0, posttaxTotal: 0, withholdingImpliedTotal: 0, vatTotal: 0, paidTotal: 0, unpaidTotal: 0, needReviewCount: 0, dupSuspectCount: 0, excludedCount: 0, scheduledCount: 0, scheduledTotal: 0 });
     (totals as any).payeeCount = new Set(items.map(i => i.masterKey)).size;
     (totals as any).statusCounts = items.reduce((c: Record<PayBucket, number>, i: any) => { c[i.payBucket as PayBucket]++; return c; }, { paid: 0, unpaid: 0, scheduled: 0, review: 0 });
 

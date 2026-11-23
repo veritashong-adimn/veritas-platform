@@ -45,7 +45,9 @@ export interface PayoutStatementPdfData {
   taxDisplay: string;   // 세금처리 표기(그룹 기준)
   count: number;
   rows: PayoutStatementPdfRow[];
-  totals: { base: number; expense: number; deduction: number; gross: number; withholding: number; net: number };
+  totals: { base: number; expense: number; deduction: number; gross: number; withholding: number; net: number;
+    /** 외주업체 부가세(재현 명세서만 전달). 지정 + payeeType '외주업체'일 때만 외주 표기(공급가/부가세/지급합계)로 바꾼다 — 미지정 호출(지급회차 정식 명세서)은 기존과 동일. */
+    vat?: number };
 }
 
 // ── 페이지 나눔 ─────────────────────────────────────────────────────────────────
@@ -128,12 +130,15 @@ export function buildPayoutStatementHtml(data: PayoutStatementPdfData): string {
       <td class="num strong">${won(r.gross)}${r.vatIncluded ? '<span class="vat">(VAT별도)</span>' : ''}</td>
     </tr>`).join('');
 
+  const vendorMode = data.payeeType === '외주업체' && data.totals.vat != null;
   const summaryRows: [string, string, boolean?][] = [
     ['통번역료 합계', won(data.totals.base)],
     ['기타비용 합계', won(data.totals.expense)],
     ['차감 합계', won(data.totals.deduction)],
-    ['세전금액 합계', won(data.totals.gross)],
-    ['원천세공제(3.3%)', won(data.totals.withholding), true],
+    ...(vendorMode
+      ? [['공급가 합계', won(data.totals.gross)], ['부가세', won(data.totals.vat ?? 0)],
+         ...(data.totals.withholding > 0 ? [['CRM 공제 기록(세금 확인 필요)', won(data.totals.withholding), true]] : [])] as [string, string, boolean?][]
+      : [['세전금액 합계', won(data.totals.gross)], ['원천세공제(3.3%)', won(data.totals.withholding), true]] as [string, string, boolean?][]),
   ];
 
   return `<!DOCTYPE html>
@@ -245,10 +250,10 @@ export function buildPayoutStatementHtml(data: PayoutStatementPdfData): string {
     </tr></tfoot>
   </table>
   <div class="tail">
-  <div class="note">본 지급명세서는 VERITAS 정산 확정 데이터를 기준으로 발행되었습니다. 기재된 금액은 세전금액 = 통번역료 + 기타비용 − 차감이며, 최종 실지급액 = 세전금액 − 원천세공제(3.3%)입니다.</div>
+  <div class="note">본 지급명세서는 VERITAS 정산 확정 데이터를 기준으로 발행되었습니다. 기재된 금액은 세전금액 = 통번역료 + 기타비용 − 차감이며, ${vendorMode ? '외주업체는 원천징수 없이 지급합계 = 공급가 + 부가세입니다.' : '최종 실지급액 = 세전금액 − 원천세공제(3.3%)입니다.'}</div>
   <div class="summary">
     ${summaryRows.map(([k, v, deduct]) => `<div class="summary-row${deduct ? ' deduct' : ''}"><span class="sk">${esc(k)}</span><span class="sv">${esc(v)}</span></div>`).join('')}
-    <div class="summary-total"><span class="sk">최종 실지급액</span><span class="sv">${won(data.totals.net)}</span></div>
+    <div class="summary-total"><span class="sk">${vendorMode ? '지급합계' : '최종 실지급액'}</span><span class="sv">${won(data.totals.net)}</span></div>
   </div>
   </div>
 </div>

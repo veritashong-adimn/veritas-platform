@@ -25,11 +25,13 @@ type Item = {
   content: string | null; filename: string | null; pretax: number; posttax: number; withholdingImplied: number;
   withholdingTax?: number | null;   // 신규: 저장 원천세 / 과거 CRM: null(세전−세후만 존재 → 전액 원천징수로 표시, 분리 추정 안 함)
   status: Status; statusLabel: string; paidBasis: string | null;
+  // 지급대상 구분(서버 lib/payoutAmount): 외주업체는 원천징수 0, 부가세 = 세후−세전 저장값
+  payeeType?: 'individual' | 'vendor'; vat?: number | null; taxConflict?: string | null;
 };
 type Stmt = {
   key: string; masterKey: string; matchedUserId: number | null; confirmed: boolean; matchStatus: string;
   name: string; email: string | null; phone: string | null; payoutDate: string | null;
-  count: number; pretax: number; posttax: number; withholding: number; otherDeduction: number;
+  count: number; pretax: number; posttax: number; withholding: number; otherDeduction: number; vat: number; payeeType: 'individual' | 'vendor';
   byStatus: Partial<Record<Status, number>>; paidItems: Item[]; items: Item[]; sources: Set<string>;
 };
 
@@ -72,6 +74,7 @@ function stmtOpts(s: Stmt): ReproStmtOpts {
   // 상단 수행 언어 — 지급회차관리 PDF 와 같은 공용 규칙(reproPayeeLanguages). 명세서 대상(지급완료) 건 기준.
   return {
     payeeName: s.name, payeeLanguages: reproPayeeLanguages(s.paidItems), email: s.email, phone: s.phone, scopeValue: roundLabel(s.payoutDate), payDate: s.payoutDate ?? '-',
+    payeeType: s.payeeType,
     rows: s.paidItems.map(r => ({ client: r.client, filename: r.filename, deliveryDate: r.deliveryDate, payoutDate: r.payoutDate, content: r.content, pretax: r.pretax, posttax: r.posttax })),
   };
 }
@@ -136,9 +139,9 @@ export function PayoutStatementSearchTab({ token, onToast }: { token: string; on
     for (const it of items) {
       const key = `${it.masterKey}|${it.payoutDate ?? 'none'}`;
       const s = m.get(key) ?? { key, masterKey: it.masterKey, matchedUserId: it.matchedUserId, confirmed: it.confirmed, matchStatus: it.matchStatus,
-        name: it.translator ?? '(이름 미상)', email: null, phone: null, payoutDate: it.payoutDate, count: 0, pretax: 0, posttax: 0, withholding: 0, otherDeduction: 0,
+        name: it.translator ?? '(이름 미상)', email: null, phone: null, payoutDate: it.payoutDate, count: 0, pretax: 0, posttax: 0, withholding: 0, otherDeduction: 0, vat: 0, payeeType: it.payeeType === 'vendor' ? 'vendor' : 'individual',
         byStatus: {}, paidItems: [], items: [], sources: new Set<string>() };
-      s.count++; s.pretax += num(it.pretax); s.posttax += num(it.posttax); s.withholding += whOf(it); s.otherDeduction += otherOf(it);
+      s.count++; s.pretax += num(it.pretax); s.posttax += num(it.posttax); s.withholding += whOf(it); s.otherDeduction += otherOf(it); s.vat += num(it.vat);
       s.byStatus[it.status] = (s.byStatus[it.status] ?? 0) + 1;
       if (it.status === 'paid') s.paidItems.push(it);
       s.items.push(it); s.sources.add(it.source);
@@ -175,17 +178,19 @@ export function PayoutStatementSearchTab({ token, onToast }: { token: string; on
     exportDataset<Stmt>({
       filename: `지급명세서목록_${todayStamp()}.xlsx`, sheetName: '지급명세서 목록',
       columns: [
-        { header: '통번역사', value: 'name', width: 14 },
+        { header: '통번역사·외주업체', value: 'name', width: 14 },
+        { header: '지급대상 구분', value: (s) => (s.payeeType === 'vendor' ? '외주업체' : '개인'), width: 10 },
         { header: '통번역사 ID', value: (s) => s.matchedUserId ?? '', width: 10 },
         { header: '이메일', value: (s) => s.email ?? '', width: 24 },
         { header: '연락처', value: (s) => s.phone ?? '', width: 15 },
         { header: '지급일', value: (s) => s.payoutDate ?? '지급일 미확인', width: 12 },
         { header: '지급회차', value: (s) => roundLabel(s.payoutDate), width: 16 },
         { header: '수행건수', value: 'count', type: 'number', width: 9 },
-        { header: '세전금액', value: (s) => Math.round(s.pretax), type: 'number', width: 13 },
+        { header: '세전금액(외주: 공급가)', value: (s) => Math.round(s.pretax), type: 'number', width: 15 },
         { header: '원천징수액', value: (s) => Math.round(s.withholding), type: 'number', width: 13 },
+        { header: '부가세(외주)', value: (s) => (s.payeeType === 'vendor' ? Math.round(s.vat) : ''), type: 'number', width: 12 },
         { header: '기타 공제액', value: (s) => Math.round(s.otherDeduction), type: 'number', width: 12 },
-        { header: '실지급금액', value: (s) => Math.round(s.posttax), type: 'number', width: 13 },
+        { header: '실지급금액(외주: 지급합계)', value: (s) => Math.round(s.posttax), type: 'number', width: 16 },
         { header: '지급상태', value: statusText, width: 26 },
         { header: '명세서 출력 가능(지급완료 건)', value: (s) => s.paidItems.length, type: 'number', width: 12 },
       ],
@@ -260,6 +265,7 @@ export function PayoutStatementSearchTab({ token, onToast }: { token: string; on
                       style={{ cursor: 'pointer', background: s.key === selKey ? '#dbeafe' : undefined }}>
                       <td style={{ ...td, fontWeight: 700, color: '#111827' }}>
                         {s.name}
+                        {s.payeeType === 'vendor' && <span data-testid={`ps-vendor-${s.key}`} style={{ marginLeft: 5, fontSize: 10, color: '#7c3aed', background: '#f5f3ff', padding: '1px 5px', borderRadius: 7 }}>외주업체</span>}
                         {homonyms.has(s.name) && <span style={{ marginLeft: 5, fontSize: 10, color: '#6d28d9', background: '#f5f3ff', padding: '1px 5px', borderRadius: 7 }} title="동명이인 — 통번역사 고유 ID로 구분">{s.matchedUserId != null ? `ID ${s.matchedUserId}` : '미연결'}</span>}
                         {!s.confirmed && <span style={{ marginLeft: 5, fontSize: 10, color: '#1d4ed8', background: '#eff6ff', padding: '1px 5px', borderRadius: 7 }} title="Master 연결 미확정(이름 기준 표시)">{s.matchStatus === 'vendor' || s.matchStatus === 'client' ? '거래처' : '연결 확인필요'}</span>}
                       </td>
@@ -294,7 +300,7 @@ export function PayoutStatementSearchTab({ token, onToast }: { token: string; on
               <div style={{ fontSize: 13, fontWeight: 800, color: '#374151', margin: '0 0 6px' }}>{sel.name} · {roundLabel(sel.payoutDate)} — 건별 상세 ({sel.count}건)</div>
               <div style={{ overflowX: 'auto', border: '1px solid #e5e7eb', borderRadius: 10 }}>
                 <table className="veritas-read-table vz-sticky pr-detail-zebra" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                  <thead><tr>{['거래처', '상품/업무', '상세내역', '납품일', '지급일', '세전지급액', '원천징수액', '기타 공제액', '세후지급액', '지급상태', '출처'].map(h => <th key={h} style={h.includes('액') ? thR : th}>{h}</th>)}</tr></thead>
+                  <thead><tr>{['거래처', '상품/업무', '상세내역', '납품일', '지급일', '세전·공급가액', '원천징수액', '부가세(외주)', '기타 공제액', '세후·지급합계액', '지급상태', '출처'].map(h => <th key={h} style={h.includes('액') ? thR : th}>{h}</th>)}</tr></thead>
                   <tbody>
                     {sel.items.map(it => (
                       <tr key={it.sourceKey} data-testid={`ps-detail-${it.sourceKey}`}>
@@ -304,7 +310,8 @@ export function PayoutStatementSearchTab({ token, onToast }: { token: string; on
                         <td style={td}>{it.deliveryDate ?? '-'}</td>
                         <td style={td}>{it.payoutDate ?? '-'}</td>
                         <td style={tdR}>{won(it.pretax)}</td>
-                        <td style={{ ...tdR, color: '#dc2626' }}>{won(whOf(it))}</td>
+                        <td style={{ ...tdR, color: '#dc2626' }}>{won(whOf(it))}{it.taxConflict && <div title={it.taxConflict} style={{ fontSize: 10, color: '#c2410c', fontWeight: 700 }}>⚠ 세금 확인</div>}</td>
+                        <td style={tdR}>{it.payeeType === 'vendor' ? (it.vat != null ? won(it.vat) : '미확정') : '-'}</td>
                         <td style={tdR}>{won(otherOf(it))}</td>
                         <td style={tdR}>{won(it.posttax)}</td>
                         <td style={td} title={it.paidBasis ? `지급완료 근거: ${it.paidBasis}` : undefined}>{badge(it.status)}</td>

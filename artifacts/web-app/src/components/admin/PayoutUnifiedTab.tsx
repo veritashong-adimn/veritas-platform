@@ -17,6 +17,7 @@ type RoundRow = {
   payoutDate: string | null; label: string;
   assignmentCount: number; legacyCount: number; currentCount: number;
   pretaxTotal: number; posttaxTotal: number; withholdingImplied: number; withholdingRecalc: number;
+  vatTotal?: number;   // 외주업체 부가세 합계(원천세와 분리, 2026-11-23)
   paidTotal: number; unpaidTotal: number; needReviewCount: number; excludedCount: number;
   scheduledCount?: number; scheduledTotal?: number;
   statusCounts?: StatusCounts;   // 지급상태 4분류 건수(지급완료·미지급·지급예정·확인필요, 합계 = 수행건수)
@@ -29,6 +30,7 @@ type DetailRow = {
   masterEmail: string | null; masterPhone: string | null; originalPhone: string | null;
   matchStatus: string; matchedUserId: number | null; masterKey: string; confirmed: boolean;
   content: string | null; filename: string | null; pretax: number; posttax: number; withholdingImplied: number;
+  payeeType?: 'individual' | 'vendor'; vat?: number | null; taxConflict?: string | null;   // 지급대상 구분(외주: 원천징수 0, 부가세 별도)
   status: 'paid' | 'scheduled' | 'pending' | 'deposit_unconfirmed' | 'excluded' | 'dup_suspect'; statusLabel: string; dupSuspect: boolean;
   paidBasis: string | null;
   conversion?: ConversionInfo; conversionEligible?: boolean;
@@ -37,7 +39,7 @@ type DetailRow = {
 type PayeeGroup = {
   masterKey: string; name: string; confirmed: boolean; matchStatus: string; matchedUserId: number | null;
   email: string | null; phone: string | null; count: number; languages: string[];
-  pretaxTotal: number; posttaxTotal: number; withholdingImplied: number;
+  pretaxTotal: number; posttaxTotal: number; withholdingImplied: number; payeeType?: 'individual' | 'vendor'; vatTotal?: number;
   paidPretax: number; unpaidPretax: number; paidCount: number; unpaidCount: number; needReviewCount: number; dupSuspectCount: number; sources: string[];
   scheduledCount?: number;
 };
@@ -137,8 +139,9 @@ export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (
   const summaryList: [string, string, string?][] = sel && totals ? [
     ['지급대상 인원', `${num(totals.payeeCount)}명`], ['수행건수', `${num(totals.assignmentCount)}건`],
     ['세전금액', `${won(totals.pretaxTotal)}원`, '전체 건 세전 합계'],
-    ['원천세공제(3.3%)', `${won(totals.withholdingImpliedTotal)}원`, '원본 세전−세후(실제 공제) 합계 · 3.3%는 참고'],
-    ['실지급액(세후)', `${won(totals.posttaxTotal)}원`, '전체 건 세후(실지급) 합계 = 세전 − 원천세공제'],
+    ['원천세공제(3.3%)', `${won(totals.withholdingImpliedTotal)}원`, '개인 통번역사 원본 세전−세후(실제 공제) 합계 · 3.3%는 참고 · 외주업체 부가세는 포함하지 않음'],
+    ...(num(totals.vatTotal) > 0 ? [['부가세(외주업체)', `${won(totals.vatTotal)}원`, '외주업체 지급합계에 포함된 부가세(세후−세전 저장값) — 원천세와 별도']] as [string, string, string?][] : []),
+    ['실지급액(세후)', `${won(totals.posttaxTotal)}원`, '전체 건 세후(실지급) 합계 = 세전 − 원천세공제 + 외주업체 부가세'],
     ['지급완료(세전)', `${won(totals.paidTotal)}원 · ${num(sc(totals).paid)}건`, '지급완료 건의 세전 합계 — 과거 CRM: 납품일 ≤ 2026-09-15(대표 확인) 또는 지급일 경과(별도 지급파일 처리분) · 신규: 지급회차 지급완료 처리 건(전체 세후와 기준이 다름)'],
     ['미지급(세전)', `${won(totals.unpaidTotal)}원 · ${num(sc(totals).unpaid)}건`, '금액 = 신규 미지급 건의 세전 합계 · 건수 = 지급예정일이 지났는데 지급완료되지 않은 신규 건(지급보류·확인필요 제외)'],
     ['지급예정', `${num(sc(totals).scheduled)}건`, '지급일(지급예정일)이 아직 오지 않은 미완료 건 — 과거 CRM·신규 플랫폼'],
@@ -156,7 +159,7 @@ export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (
   const stmtFor = (g: PayeeGroup) => {
     const rows = detail.filter(r => r.masterKey === g.masterKey);
     const payDate = rows.find(r => r.payoutDate)?.payoutDate ?? (sel?.payoutDate ?? '-');
-    return { payeeName: g.name, payeeLanguages: reproPayeeLanguages(rows), email: g.email, phone: g.phone ?? pickPhone(rows), scopeValue: `${sel?.payoutDate ?? '지급일 미확인'} 지급`, payDate,
+    return { payeeType: g.payeeType === 'vendor' ? 'vendor' as const : 'individual' as const, payeeName: g.name, payeeLanguages: reproPayeeLanguages(rows), email: g.email, phone: g.phone ?? pickPhone(rows), scopeValue: `${sel?.payoutDate ?? '지급일 미확인'} 지급`, payDate,
       rows: rows.map(r => ({ client: r.client, filename: r.filename, deliveryDate: r.deliveryDate, payoutDate: r.payoutDate, content: r.content, pretax: r.pretax, posttax: r.posttax })) };
   };
 
@@ -208,7 +211,8 @@ export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (
                 <td style={tdR}>{r.assignmentCount.toLocaleString()}건</td>
                 <td style={td}><span style={{ color: '#6d28d9', fontWeight: 600 }}>{r.legacyCount}</span> / <span style={{ color: '#047857', fontWeight: 600 }}>{r.currentCount}</span></td>
                 <td style={tdR}>{won(r.pretaxTotal)}</td>
-                <td style={{ ...tdR, color: '#6b7280' }}>{won(r.withholdingImplied)}</td>
+                <td style={{ ...tdR, color: '#6b7280' }}>{won(r.withholdingImplied)}
+                  {num(r.vatTotal) > 0 && <div style={{ fontSize: 10.5, color: '#7c3aed', fontWeight: 600 }} data-testid={`pu-round-vat-${r.payoutDate ?? 'none'}`}>외주 부가세 {won(num(r.vatTotal))}</div>}</td>
                 {/* 금액 아래 작은 글씨 = 지급상태 4분류 건수(지급완료 파랑·미지급 주황·지급예정 녹색). 금액은 기존 값 그대로. */}
                 <td style={{ ...tdR, color: '#1d4ed8' }}>{won(r.paidTotal)}<div style={cntSub('#1d4ed8', sc(r).paid)} data-testid={`pu-round-paidcnt-${r.payoutDate ?? 'none'}`}>{sc(r).paid.toLocaleString()}건</div></td>
                 <td style={{ ...tdR, color: r.unpaidTotal > 0 ? '#b45309' : '#9ca3af' }}>{won(r.unpaidTotal)}<div style={cntSub('#c2410c', sc(r).unpaid)} data-testid={`pu-round-unpaidcnt-${r.payoutDate ?? 'none'}`}>{sc(r).unpaid.toLocaleString()}건</div></td>
@@ -273,7 +277,8 @@ export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (
                         <div style={{ color: '#9ca3af', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11.5 }}>{g.phone || ''}</div>
                         <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{g.count}</div>
                         <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{won(g.pretaxTotal)}</div>
-                        <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#dc2626' }}>{won(g.withholdingImplied)}</div>
+                        <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#dc2626' }}>{won(g.withholdingImplied)}
+                          {g.payeeType === 'vendor' && <div style={{ fontSize: 10, color: '#7c3aed', fontWeight: 700 }} data-testid={`pu-vendor-vat-${g.masterKey}`}>외주업체 · 부가세 {won(num(g.vatTotal))}</div>}</div>
                         <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 800, color: '#111827' }}>{won(g.posttaxTotal)}</div>
                         {/* 지급상태(§4②) — 건수 기준으로 지급완료/지급확인필요/미지급을 분리 표시. 연결 검증상태와 혼합하지 않음. */}
                         <div style={{ textAlign: 'right', display: 'flex', gap: 4, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
@@ -323,7 +328,9 @@ export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (
                           <td style={td}>{p.payoutDate ?? <span style={{ color: '#b45309', fontWeight: 700 }}>(지급일 미확인)</span>}</td>
                           <td style={tdR}>{won(p.pretax)}</td>
                           <td style={tdR}>{won(p.posttax)}</td>
-                          <td style={{ ...tdR, color: '#dc2626' }}>{won(p.withholdingImplied)}</td>
+                          <td style={{ ...tdR, color: '#dc2626' }}>{won(p.withholdingImplied)}
+                            {p.payeeType === 'vendor' && <div style={{ fontSize: 10, color: '#7c3aed' }}>외주 · 부가세 {p.vat != null ? won(p.vat) : '미확정'}</div>}
+                            {p.taxConflict && <div title={p.taxConflict} style={{ fontSize: 10, color: '#c2410c', fontWeight: 700 }}>⚠ 세금 확인</div>}</td>
                           <td style={td}><span style={{ padding: '2px 8px', borderRadius: 10, background: sm.bg, color: sm.fg, fontSize: 12, fontWeight: 700, cursor: p.paidBasis ? 'help' : undefined }} title={p.paidBasis ? `지급완료 근거: ${p.paidBasis}` : undefined} data-testid={`pu-detail-status-${i}`} aria-label={`지급상태 ${sm.label}`}>{sm.label}</span></td>
                           <td style={td} data-testid={`pu-detail-conv-${i}`}>{p.source === 'legacy'
                             ? <ConversionCell token={token} rowId={p.id} conversion={p.conversion ?? null} eligible={!!p.conversionEligible} onToast={onToast}
