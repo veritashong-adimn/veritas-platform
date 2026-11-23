@@ -203,7 +203,7 @@ export const QUOTE_NOTICE_VERSIONS: NoticeTemplateVersion[] = [
 ];
 
 // ── 2026-11-v2 — 통역 녹음·방송 요율 기준('기본 통역료' → '통역료'), 통역 취소보상비 → '통역 및 통역장비 취소보상비'
-//    (기준 금액 '통역료' → '통역료·장비대금'). 취소 시점·나머지 문구는 v1 그대로. 발행일 2026-11-23 이후 견적서부터 적용.
+//    (기준 금액 '통역료' → '요금'). 취소 시점·나머지 문구는 v1 그대로. 발행일 2026-11-23 이후 견적서부터 적용.
 {
   const v1 = QUOTE_NOTICE_VERSIONS[0].sections;
   QUOTE_NOTICE_VERSIONS.push({
@@ -222,10 +222,10 @@ export const QUOTE_NOTICE_VERSIONS: NoticeTemplateVersion[] = [
         ...v1.interpCancel,
         title: '통역 및 통역장비 취소보상비',
         rates: [
-          { label: '통역일 7일 전 취소', value: '통역료·장비대금의 30%' },
-          { label: '통역일 2~5일 전 취소', value: '통역료·장비대금의 50%' },
-          { label: '통역일 전일 취소', value: '통역료·장비대금의 70%' },
-          { label: '통역일 당일 취소', value: '통역료·장비대금의 100%' },
+          { label: '통역일 7일 전 취소', value: '요금의 30%' },
+          { label: '통역일 2~5일 전 취소', value: '요금의 50%' },
+          { label: '통역일 전일 취소', value: '요금의 70%' },
+          { label: '통역일 당일 취소', value: '요금의 100%' },
         ],
       },
     },
