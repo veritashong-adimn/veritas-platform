@@ -125,6 +125,12 @@ const SVC_UNITS: Record<ServiceType, string[]> = {
   expense:        ['건', '회', '시간', '일', '페이지', '부', '권', '개', '세트'],
   discount:       ['건'],
 };
+// 상품 비고 숫자 서식 — 단위(단어·글자·자·장)가 바로 붙은 쉼표 없는 정수(4자리 이상)에만 천 단위 쉼표 적용(입력 완료 시점).
+//   이미 쉼표·소수점이 붙은 숫자, 0으로 시작하는 숫자, 단위 없는 숫자·날짜·금액·'자리'는 변경하지 않는다.
+export function formatMemoUnitNumbers(text: string): string {
+  return text.replace(/(?<![\d,.])([1-9]\d{3,})(?=단어|글자|장|자(?!리))(?![\d,])/g, n => Number(n).toLocaleString('en-US'));
+}
+
 // 비고 입력 안내 — 입력값이 아님을 알 수 있게 '예:' 로 시작(장비 행에 번역·통역 예시 문구가 보이지 않게 유형별로 구분)
 const MEMO_PLACEHOLDER: Partial<Record<ServiceType, string>> = {
   translation: '비고 (예: 긴급, 감수 포함)', interpretation: '비고 (예: 출장비 별도)',
@@ -1485,6 +1491,7 @@ function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, parentOpt
         {/* ⑩ 비고 */}
         <div style={{ borderLeft: '2px solid #e5e7eb', paddingLeft: 14 }}>
           <input value={it.memo} onChange={e => updateItem(idx, { memo: e.target.value })}
+            onBlur={e => { const v = formatMemoUnitNumbers(e.target.value); if (v !== e.target.value) updateItem(idx, { memo: v }); }}
             placeholder="비고" style={{ ...rinp('100%'), color: C.textMuted }} />
         </div>
       </div>
@@ -1601,6 +1608,7 @@ function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, parentOpt
         {/* ⑩ 비고 — 공급가액과 명확히 구분 */}
         <div style={{ borderLeft: '2px solid #e5e7eb', paddingLeft: 14 }}>
           <input value={it.memo} onChange={e => updateItem(idx, { memo: e.target.value })}
+            onBlur={e => { const v = formatMemoUnitNumbers(e.target.value); if (v !== e.target.value) updateItem(idx, { memo: v }); }}
             placeholder={MEMO_PLACEHOLDER[it.productType] ?? '비고'}
             data-testid={`qe-memo-${idx}`} aria-label={`${idx + 1}행 비고`}
             style={{ ...rinp('100%'), color: C.textPrimary }}
