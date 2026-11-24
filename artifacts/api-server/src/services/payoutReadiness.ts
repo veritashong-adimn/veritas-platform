@@ -338,7 +338,10 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
     out.push({
       source: b.source, kind, sourceKey: b.source_key, crmRowId: b.source === "legacy" ? Number(b.id) : (p?.crm_row_id ?? null),
       assignmentId: p ? Number(p.id) : null, projectId: p ? Number(p.project_id) : null, projectTitle: p?.project_title ?? null,
-      saleNo, quoteNumber: p?.quote_number ?? null, masterId, vendorId, client: b.client,
+      // 판매번호(표시 전용): 과거 CRM 판매번호 우선 → 없으면 소속 판매의 유효 대표 견적 기준 판매번호(판매관리와 같은 saleIdentity 표시형).
+      //   수행정보에 견적 연결값이 없는 행(수행정보 직접 추가 등)도 판매 기준으로 표시. 수행정보 연결값·금액·상태는 바꾸지 않는다.
+      saleNo: saleNo ?? (p?.project_id != null ? ((idn.get(Number(p.project_id)) as any)?.saleNumber ?? null) : null),
+      quoteNumber: p?.quote_number ?? null, masterId, vendorId, client: b.client,
       // 실제 수행자 통번역사 Master(언어·상세정보 조회용) — 외주업체 지급 건도 수행자 Master 가 연결돼 있으면 사용
       performerMasterId: p?.cat === "vendor" ? (p.individual_user_id != null ? Number(p.individual_user_id) : masterId) : masterId,
       // 지급 대상(payee): 외주업체 지급 건은 외주업체 Master 명으로 통일(판매건·출처 무관). 실제 수행자(performerName)는 따로 표시 —
