@@ -44,8 +44,9 @@ export async function loadResidentNumbers(dbx: Dbx, ids: number[], full: boolean
 // 지급상태 표시(2026-11-22) — 화면·엑셀 공통. DB 지급상태(payment_status)·지급보류 안전장치는 바꾸지 않는 표시 전용 판정.
 //   paid 지급완료 / review 지급확인 필요(과거 CRM 지급보류·미확인, 지급보류, 중복 지급 후보)
 //   prep 지급준비 필요(계좌·수행자·세금·금액·날짜 등 필수 지급정보 미비) / scheduled 지급예정(지급 가능한 미지급)
-export type PayDisplay = "paid" | "review" | "prep" | "scheduled";
-export const PAY_DISPLAY_LABEL: Record<PayDisplay, string> = { paid: "지급완료", review: "지급확인 필요", prep: "지급준비 필요", scheduled: "지급예정" };
+//   hold 지급보류(플랫폼 수행정보에서 지급보류로 설정 — 과거 CRM 전환 확인용 지급보류(review)와 구분) / excluded 지급 제외(지급일별 대표 확인: 무료 제공 등)
+export type PayDisplay = "paid" | "review" | "prep" | "scheduled" | "hold" | "excluded";
+export const PAY_DISPLAY_LABEL: Record<PayDisplay, string> = { paid: "지급완료", review: "지급확인 필요", prep: "지급준비 필요", scheduled: "지급예정", hold: "지급보류", excluded: "지급 제외" };
 
 type Dbx = any;
 const rows = async (dbx: Dbx, q: any) => (await dbx.execute(q)).rows as any[];
@@ -77,6 +78,23 @@ const PREPAID_REVIEW_EXCLUSIONS: Record<string, Set<string>> = {
     "한국전자정보통신산업진흥회(KEA)|2021-03-31-0010", "한국소비자원|2019-12-06-0013", "더엠유|2019-03-21-0006",
     "충북대학교 문화재보존기술지원센터|2020-01-07-0011",
   ]),
+};
+
+// 지급일별 대표 확인 결정(2026-11-25 대표 확인) — 해당 지급일 점검(화면·엑셀 2종)에만 적용. 운영 데이터·다른 지급일·전체 기간 점검은 그대로.
+//   exclude      : 지급일 점검 대상에서 제외(sourceKey → 사유). 판매·수행이력·CRM 원본 보존, 지급기록 생성 없음.
+//   freeService  : 무료 제공으로 확인된 0원 건(sourceKey) — '지급액 미입력' 경고 대신 '지급 제외'(송금 대상 아님). 다른 0원 건에는 적용하지 않는다.
+//   excludeNoPayoutDate : 지급예정일 미기재 건(후보 no_payout_date)을 이 지급일 점검에서 제외(전체 기간 점검에는 유지, 날짜 임의 입력 없음).
+const DATE_DECISIONS: Record<string, { exclude: Map<string, string>; freeService: Set<string>; excludeNoPayoutDate: boolean }> = {
+  "2026-11-30": {
+    exclude: new Map([
+      // 사단법인한국법학원 — 2026-11-04-0005 건에서 11/13 일괄 지급 완료(대표 확인). 플랫폼 4건 + CRM 원본 3건.
+      ...["current:412", "current:413", "current:414", "current:383", "legacy:44155", "legacy:44159", "legacy:44827"]
+        .map(k => [k, "한국법학원 11/13 지급완료(대표 확인)"] as [string, string]),
+    ]),
+    // 코리아미디어 리시버 100개 이하 무료 제공(대표 확인)
+    freeService: new Set(["current:221", "current:201", "current:220", "current:206", "legacy:44354"]),
+    excludeNoPayoutDate: true,
+  },
 };
 
 // 외화 지급 통화별 합계(원화와 합산하지 않음) — 화면·엑셀 공통
@@ -249,6 +267,9 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
       current: !fromPlatform && p ? { category: p.cat, treatment: p.treatment, rate: p.wrate, evidence: p.evidence } : null });
     const dd: string | null = b.delivery_date ?? null, pd: string | null = b.payout_date ?? null;
 
+    const freeService = scope === "date" && !!DATE_DECISIONS[d]?.freeService.has(String(b.source_key));
+    // 플랫폼 수행정보 지급보류(담당자 설정) — 지급회차·송금 대상 아님(공식 지급회차 수집 조건도 미지급만)
+    const manualHold = kind === "platform" && p?.payment_status === "payment_hold";
     // ── 후보 사유(범위 date) ──
     let candidate = "all";
     if (scope === "date") {
@@ -275,6 +296,7 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
       add("D", "dup_crm", `CRM 원본(${dupByPa.get(Number(b.id))!.map(x => "#" + x).join(", ")})과 같은 수행 — 중복 지급 후보`, "한쪽만 지급(중복 건 정리)");
     if (b.source === "legacy" && dupRows.has(Number(b.id)))
       add("D", "dup_platform", "플랫폼 수행정보와 같은 수행 — 중복 지급 후보(합계 1회 집계)", "한쪽만 지급(중복 건 정리)");
+    if (manualHold) add("C", "payment_hold", "지급보류 설정(수행정보) — 지급회차·송금 제외", "보류 사유 해소 후 지급보류 해제");
     if (p?.payout_round_id != null && !paid) add("I", "in_round", `지급회차 #${p.payout_round_id} 배정됨`, "회차에서 처리");
 
     // ── C: 금액·세금·수행정보·날짜 ──
@@ -283,7 +305,10 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
       if (!(foreignAmount != null && foreignAmount > 0)) add("C", "foreign_amount_missing", `외화 지급(${payCurrency}) 금액 미입력`, "수행정보에 외화 지급금액 입력");
       add("I", "foreign_pay", `외화 지급 ${payCurrency}${foreignAmount != null ? " " + foreignAmount.toLocaleString("ko-KR", { maximumFractionDigits: 2 }) : ""} — 원화 합계·국내 원화 송금파일 제외(별도 해외송금)`, "해외송금으로 별도 지급");
       if (!(amount > 0)) add("I", "foreign_krw_unconfirmed", "환율 미확정 — 원화 원가·이익률 미확정", "송금 시 적용환율 확인");
-    } else if (amount <= 0) add("C", "amount_missing", "지급액 미입력(0원)", "수행정보 지급액 입력(무상이면 사유 기록)");
+    } else if (amount <= 0) {
+      if (freeService) add("I", "free_service", "무료 제공 확인(대표 확인) — 지급액 0원 정상, 송금 대상 아님", "송금 제외");
+      else add("C", "amount_missing", "지급액 미입력(0원)", "수행정보 지급액 입력(무상이면 사유 기록)");
+    }
     if (amountSource === "platform_fallback") add("I", "amount_from_platform",
       `현재 수행정보 기준 지급액 반영(${p?.cat === "vendor" ? `공급가 ${Math.round(amount).toLocaleString("ko-KR")}원 + 부가세 → 지급합계 ${Math.round(posttaxV).toLocaleString("ko-KR")}원` : `세전 ${Math.round(amount).toLocaleString("ko-KR")}원`}) · CRM 원본 세전 ${Math.round(num(b.crm_pretax)).toLocaleString("ko-KR")}원/세후 ${Math.round(num(b.crm_posttax)).toLocaleString("ko-KR")}원 보존`, "수행정보 등록값 확인");
     if (kind === "crm_converted" && p && amountSource === "crm" && !paid && num(p.cost_total) > 0 && Math.abs(num(p.cost_total) - amount) >= 1)
@@ -332,6 +357,8 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
     // 지급상태 표시는 세금·구분 확인 사유(tax_conflict·payee_type_check)로 바꾸지 않는다(상태 자동 변경 금지) — 점검 분류(state)에만 반영
     const payCats = new Set(bl.filter(x => x.cat !== "I" && x.code !== "tax_conflict" && x.code !== "payee_type_check").map(x => x.cat));
     const payDisplay: PayDisplay = paid ? "paid"
+      : freeService ? "excluded"
+      : manualHold ? "hold"
       : (kind === "crm_only" || p?.payment_status === "payment_hold" || bl.some(x => x.code.startsWith("dup_"))) ? "review"
       : (payCats.has("B") || payCats.has("C")) ? "prep" : "scheduled";
     const state: ReadinessState = cats.has("D") ? "D" : cats.has("C") ? "C" : cats.has("B") ? "B" : "A";
@@ -384,11 +411,19 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
   }
   // 고객 선입금 잔액 확인 중인 CRM 원본(통번역사 지급 건 아님) — 해당 지급일 점검(화면·엑셀)에서만 제외. 데이터·다른 지급일·전체 기간은 유지.
   let excludedPrepaid = 0;
+  const excludedByDecision: Record<string, number> = {};
   if (scope === "date") {
     const ex = PREPAID_REVIEW_EXCLUSIONS[d];
     if (ex) for (let i = out.length - 1; i >= 0; i--) {
       const o = out[i];
       if (ex.has(`${String(o.client ?? "").trim()}|${String(o.saleNo ?? "").trim()}`)) { out.splice(i, 1); excludedPrepaid++; }
+    }
+    // 지급일별 대표 확인 결정 — 지정 건·지급예정일 미기재 건 제외(이 지급일 점검만)
+    const dec = DATE_DECISIONS[d];
+    if (dec) for (let i = out.length - 1; i >= 0; i--) {
+      const o = out[i];
+      const why = dec.exclude.get(String(o.sourceKey)) ?? (dec.excludeNoPayoutDate && o.candidate === "no_payout_date" ? "지급예정일 미기재(이 지급일 대상 아님)" : null);
+      if (why) { out.splice(i, 1); excludedByDecision[why] = (excludedByDecision[why] ?? 0) + 1; }
     }
   }
   // 주민등록번호(마스킹만) — 개인 수행자(Master 연결)만. 외주업체·미연결은 공란. 전체번호는 별도 관리자 전용 API.
@@ -436,7 +471,7 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
   const issueCounts: Record<string, number> = {};
   for (const o of out) for (const b of o.blockers) issueCounts[b.code] = (issueCounts[b.code] ?? 0) + 1;
   return {
-    scope, payoutDate: scope === "date" ? d : null, deliveryWindow: win, today, items: out, excludedPrepaid,
+    scope, payoutDate: scope === "date" ? d : null, deliveryWindow: win, today, items: out, excludedPrepaid, excludedByDecision,
     summary: { total: sum(out), foreignTotals: foreignTotalsOf(out), byState: by(x => x.state), byKind: by(x => x.kind), byCandidate: by(x => x.candidate),
       roundEligible: sum(out.filter(x => x.roundEligible)), duplicates: out.filter(x => x.blockers.some((b: Blocker) => b.code.startsWith("dup_"))).length, issueCounts },
   };

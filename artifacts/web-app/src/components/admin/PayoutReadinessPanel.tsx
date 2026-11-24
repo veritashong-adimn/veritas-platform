@@ -22,7 +22,7 @@ type Item = {
   deliveryDate: string | null; payoutDate: string | null; actualPaymentDate: string | null;
   dateMismatch?: boolean;   // CRM·플랫폼 날짜 불일치(덮어쓰지 않음 — 사유에 상세)
   // 지급상태 표시(서버 공통 판정 — 화면·엑셀 같은 값) · 판매금액(판매정보 저장값, CRM 원본만 있는 건 null)
-  payDisplay?: 'paid' | 'review' | 'prep' | 'scheduled'; payDisplayLabel?: string;
+  payDisplay?: 'paid' | 'review' | 'prep' | 'scheduled' | 'hold' | 'excluded'; payDisplayLabel?: string;
   saleAmount?: { supply: number; vat: number; total: number } | null;
   pretax: number; withholding: number; posttax: number;
   // 지급통화(KRW 기본)·외화 지급금액 — 외화 건은 원화 합계와 별도 집계·원화 송금파일 제외. amountSource: 금액 출처(platform_fallback = CRM 0원 → 수행정보)
@@ -49,7 +49,7 @@ const CAND_LABEL: Record<string, string> = { base: '지급 후보(지급일 일�
 const STATUS_LABEL: Record<string, string> = { unpaid: '미지급', payment_hold: '지급보류', paid: '지급완료', unconfirmed: '확인 전(CRM)' };
 // 화면·엑셀 지급상태 표시 — 서버 판정(payDisplayLabel) 우선, 없으면(구버전 응답) 기존 표시
 const payLabel = (r: Item) => r.payDisplayLabel ?? STATUS_LABEL[r.paymentStatus] ?? r.paymentStatus;
-const PAY_COLOR: Record<string, string> = { paid: '#15803d', review: '#b45309', prep: '#b91c1c', scheduled: '#1d4ed8' };
+const PAY_COLOR: Record<string, string> = { paid: '#15803d', review: '#b45309', prep: '#b91c1c', scheduled: '#1d4ed8', hold: '#7c3aed', excluded: '#64748b' };
 const won = (n: number) => Math.round(n || 0).toLocaleString('ko-KR');
 // Excel 연락처 — 숫자만 있는 국내 휴대전화(010·011·016·017·018·019)만 하이픈 적용(01090444203 → 010-9044-4203).
 //   해외 번호·이미 형식이 있는 번호·마스킹 번호(*)는 그대로. 셀은 문자열로 출력(앞자리 0 유지).
@@ -74,8 +74,9 @@ const REASON_LABEL: Record<string, string | null> = {
   foreign_amount_missing: '외화 지급금액 미입력',
   dup_crm: '중복 지급 확인', dup_platform: '중복 지급 확인', already_paid: '중복 지급 확인',
   overseas: null,
+  payment_hold: '지급보류',
 };
-const REASON_ORDER = ['과거 지급 여부 확인', '지급완료 기록 확인', '지급금액 미입력', '지급금액 확인', '계좌 미등록', '세금처리 미설정', '세금처리 확인', '수행자 미연결',
+const REASON_ORDER = ['지급보류', '과거 지급 여부 확인', '지급완료 기록 확인', '지급금액 미입력', '지급금액 확인', '계좌 미등록', '세금처리 미설정', '세금처리 확인', '수행자 미연결',
   '수취인 명부 확인', '납품확인 필요', '납품일 미입력', '지급예정일 미입력', '납품일 불일치', '지급예정일 확인', '외화 지급금액 미입력', '중복 지급 확인'];
 const reasonText = (r: Item): string => {
   const out = new Set<string>();
