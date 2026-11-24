@@ -45,8 +45,9 @@ export async function loadResidentNumbers(dbx: Dbx, ids: number[], full: boolean
 //   paid 지급완료 / review 지급확인 필요(과거 CRM 지급보류·미확인, 지급보류, 중복 지급 후보)
 //   prep 지급준비 필요(계좌·수행자·세금·금액·날짜 등 필수 지급정보 미비) / scheduled 지급예정(지급 가능한 미지급)
 //   hold 지급보류(플랫폼 수행정보에서 지급보류로 설정 — 과거 CRM 전환 확인용 지급보류(review)와 구분) / excluded 지급 제외(지급일별 대표 확인: 무료 제공 등)
-export type PayDisplay = "paid" | "review" | "prep" | "scheduled" | "hold" | "excluded";
-export const PAY_DISPLAY_LABEL: Record<PayDisplay, string> = { paid: "지급완료", review: "지급확인 필요", prep: "지급준비 필요", scheduled: "지급예정", hold: "지급보류", excluded: "지급 제외" };
+//   no_amount 지급액 없음(무료 제공 등 정상 0원 — 대표 확인 건만, 송금 대상 아님)
+export type PayDisplay = "paid" | "review" | "prep" | "scheduled" | "hold" | "excluded" | "no_amount";
+export const PAY_DISPLAY_LABEL: Record<PayDisplay, string> = { paid: "지급완료", review: "지급확인 필요", prep: "지급준비 필요", scheduled: "지급예정", hold: "지급보류", excluded: "지급 제외", no_amount: "지급액 없음" };
 
 type Dbx = any;
 const rows = async (dbx: Dbx, q: any) => (await dbx.execute(q)).rows as any[];
@@ -82,7 +83,7 @@ const PREPAID_REVIEW_EXCLUSIONS: Record<string, Set<string>> = {
 
 // 지급일별 대표 확인 결정(2026-11-25 대표 확인) — 해당 지급일 점검(화면·엑셀 2종)에만 적용. 운영 데이터·다른 지급일·전체 기간 점검은 그대로.
 //   exclude      : 지급일 점검 대상에서 제외(sourceKey → 사유). 판매·수행이력·CRM 원본 보존, 지급기록 생성 없음.
-//   freeService  : 무료 제공으로 확인된 0원 건(sourceKey) — '지급액 미입력' 경고 대신 '지급 제외'(송금 대상 아님). 다른 0원 건에는 적용하지 않는다.
+//   freeService  : 무료 제공으로 확인된 0원 건(sourceKey) — '지급액 미입력'·과거 지급 여부 확인 경고 대신 '지급액 없음'(정상 0원, 송금 대상 아님). 다른 0원 건에는 적용하지 않는다.
 //   excludeNoPayoutDate : 지급예정일 미기재 건(후보 no_payout_date)을 이 지급일 점검에서 제외(전체 기간 점검에는 유지, 날짜 임의 입력 없음).
 const DATE_DECISIONS: Record<string, { exclude: Map<string, string>; freeService: Set<string>; excludeNoPayoutDate: boolean }> = {
   "2026-11-30": {
@@ -311,7 +312,7 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
       add("I", "foreign_pay", `외화 지급 ${payCurrency}${foreignAmount != null ? " " + foreignAmount.toLocaleString("ko-KR", { maximumFractionDigits: 2 }) : ""} — 원화 합계·국내 원화 송금파일 제외(별도 해외송금)`, "해외송금으로 별도 지급");
       if (!(amount > 0)) add("I", "foreign_krw_unconfirmed", "환율 미확정 — 원화 원가·이익률 미확정", "송금 시 적용환율 확인");
     } else if (amount <= 0) {
-      if (freeService) add("I", "free_service", "무료 제공 확인(대표 확인) — 지급액 0원 정상, 송금 대상 아님", "송금 제외");
+      if (freeService) add("I", "free_service", "지급액 없음 — 무료 제공(대표 확인) 정상 0원, 송금 대상 아님", "송금 제외");
       else add("C", "amount_missing", "지급액 미입력(0원)", "수행정보 지급액 입력(무상이면 사유 기록)");
     }
     if (amountSource === "platform_fallback") add("I", "amount_from_platform",
@@ -359,6 +360,8 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
     // 베리타스 내부용 0원 기록 — 목록에서 제외(경고 없음)
     if (payeeType === "individual" && !(amount > 0) && !(foreignAmount != null && foreignAmount > 0)
       && (normName(b.translator) === normName(INTERNAL_PAYEE) || (masterId != null && internalIds.has(masterId)))) { excludedInternal++; continue; }
+    // 무료 제공 확인 0원(대표 확인) — 정상 0원 수행정보: 과거 지급 여부 확인·지급액 미입력 경고 없음(지급할 금액이 없음)
+    if (freeService) for (let i = bl.length - 1; i >= 0; i--) if (["legacy_review", "crm_unconfirmed", "overdue", "amount_missing"].includes(bl[i].code)) bl.splice(i, 1);
     // 플랫폼 지급보류 — '지급보류'만 표시(금액·납품확인 등 부가 확인사항 숨김). 중복·과거 지급 여부(D) 등 지급 위험 검증은 유지.
     if (manualHold) for (let i = bl.length - 1; i >= 0; i--) if ((bl[i].cat === "B" || bl[i].cat === "C") && bl[i].code !== "payment_hold") bl.splice(i, 1);
     const roundEligible = kind === "platform" && !!p && !payCurrency && p.payment_status === "unpaid" && p.has_delivery && p.delivery_confirmed && num(p.cost_total) > 0
@@ -367,7 +370,7 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
     // 지급상태 표시는 세금·구분 확인 사유(tax_conflict·payee_type_check)로 바꾸지 않는다(상태 자동 변경 금지) — 점검 분류(state)에만 반영
     const payCats = new Set(bl.filter(x => x.cat !== "I" && x.code !== "tax_conflict" && x.code !== "payee_type_check").map(x => x.cat));
     const payDisplay: PayDisplay = paid ? "paid"
-      : freeService ? "excluded"
+      : freeService ? "no_amount"
       : manualHold ? "hold"
       : (kind === "crm_only" || p?.payment_status === "payment_hold" || bl.some(x => x.code.startsWith("dup_"))) ? "review"
       : (payCats.has("B") || payCats.has("C")) ? "prep" : "scheduled";
