@@ -38,6 +38,9 @@ export function QuoteCustomerDisplayEditor({ token, savedQuoteId, companyId, con
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [vals, setVals] = useState<Values>(EMPTY);
+  // 편집 시작 시 견적서에 출력되던 기본값 — 적용 시 이 값과 다른(직접 고친) 항목만 저장한다.
+  //  (손대지 않은 항목까지 저장하면 거래처 상호 변경·담당자 정보 갱신이 견적서에 반영되지 않음)
+  const [baseVals, setBaseVals] = useState<Values>(EMPTY);
   const [hidden, setHidden] = useState<Set<CustomerDisplayKey>>(new Set());
 
   // 저장된 견적의 편집값 — 요약 표시와 편집 시작값
@@ -79,10 +82,13 @@ export function QuoteCustomerDisplayEditor({ token, savedQuoteId, companyId, con
     try {
       if (current) {
         const base = (await loadFromQuote()) ?? (await loadFromMaster());
+        setBaseVals(base);
         setVals({ ...base, ...Object.fromEntries(Object.entries(current.fields ?? {}).filter(([, v]) => typeof v === 'string')) } as Values);
         setHidden(new Set(current.hidden ?? []));
       } else {
-        setVals((await loadFromQuote()) ?? (await loadFromMaster()));
+        const base = (await loadFromQuote()) ?? (await loadFromMaster());
+        setBaseVals(base);
+        setVals(base);
         setHidden(new Set());
       }
       setOpen(true);
@@ -95,7 +101,9 @@ export function QuoteCustomerDisplayEditor({ token, savedQuoteId, companyId, con
   };
 
   const apply = () => {
-    onChange({ fields: { ...vals }, hidden: [...hidden] });
+    const changed = Object.fromEntries((Object.keys(vals) as CustomerDisplayKey[])
+      .filter(k => vals[k].trim() !== (baseVals[k] ?? '').trim()).map(k => [k, vals[k]]));
+    onChange({ fields: changed, hidden: [...hidden] });
     setOpen(false);
   };
 

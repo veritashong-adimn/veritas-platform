@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { sanitizeCustomerDisplay } from "../services/quoteCustomerDisplay";
+import { sanitizeCustomerDisplay, resolveCustomerDisplay } from "../services/quoteCustomerDisplay";
 import { findReusableProjectForInquiry } from "../services/quoteDeletion";
 import { legacyVerifiedSaleSupply } from "../services/legacyActivationLineage";
 import {
@@ -3975,7 +3975,10 @@ router.get("/admin/quotes/:id", ...adminGuard, async (req, res) => {
     });
     const liveRecipient = await liveRecipientOf(db, quoteId);
 
-    res.json({ ...quote, items: customerItems, settings, prepaidLines, prepaidState, customerNote: customerNoteOf(quote.note, legacyOrigin), legacyOrigin, customerSnapshotFixed, liveRecipient });
+    // 거래처 상호 변경 반영 — 편집값에 남은 과거 상호는 적용하지 않음(미리보기·PDF 공통, 저장값 무변경)
+    const customerDisplay = await resolveCustomerDisplay(db, quoteId, quote.companyId, quote.customerDisplay ?? null);
+
+    res.json({ ...quote, customerDisplay, items: customerItems, settings, prepaidLines, prepaidState, customerNote: customerNoteOf(quote.note, legacyOrigin), legacyOrigin, customerSnapshotFixed, liveRecipient });
   } catch (err) {
     req.log.error({ err }, "Admin: failed to fetch quote detail");
     res.status(500).json({ error: "견적 조회 실패." });
