@@ -107,10 +107,9 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast }: {
       if (r.vendorId != null || r.masterId == null) return '';
       return full ? (full.get(r.masterId) ?? '') : (r.residentNumberMasked ?? '');
     };
-    // 판매금액은 판매건 단위 — 같은 판매건(판매ID)의 첫 행에만 기재해 엑셀 합계에서 중복 합산되지 않게 한다.
-    const firstOfSale = new Set<Item>(); const seen = new Set<number>();
-    for (const r of rows) if (r.projectId != null && r.saleAmount && !seen.has(r.projectId)) { seen.add(r.projectId); firstOfSale.add(r); }
-    const amt = (r: Item, k: 'supply' | 'vat' | 'total') => (firstOfSale.has(r) ? r.saleAmount![k] : '');
+    // 판매금액(고객)은 판매건 단위 값 — 같은 판매건의 모든 수행 행에 같은 값을 표시한다(행별 확인용).
+    //   판매금액 합계를 낼 때는 판매건(판매ID)당 한 번만 집계해야 한다(행 단위 합산 시 중복). 지급금액 열·합계는 변경 없음.
+    const amt = (r: Item, k: 'supply' | 'vat' | 'total') => (r.saleAmount ? r.saleAmount[k] : '');
     exportDataset<Item>({
       filename: (scope === 'date' ? `지급준비점검_${date}` : `지급누락점검_전체기간`) + (full ? '_주민번호전체' : '') + '.xlsx', sheetName: scope === 'date' ? '지급준비점검' : '지급누락점검',
       columns: [
