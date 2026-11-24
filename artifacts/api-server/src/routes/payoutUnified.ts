@@ -514,6 +514,35 @@ export async function collectUnifiedItems(opts: {
     }),
   ];
 
+  // ── 명부 기준 수취인·표시 이름(지급준비점검과 같은 기준, 2026-11-25) ──
+  //   Master 연결이 확정된 개인 건(과거: 확정 매핑·행 연결·전환 수행자 / 신규: 수행정보 수행자)만 적용. 이름만 같은 후보·미연결·외주업체는 그대로.
+  //   · 통합(translator_merges active)된 Master 는 대표 Master 로 수취인 키·연결 ID 를 맞춘다 → 같은 수취인의 금액·명세서 통합.
+  //   · 표시 이름 = 현재 명부 이름(대표 Master). CRM 원본·수행정보 스냅샷 이름은 originalTranslator 로 보존(검색·이력용).
+  //   · 연락처는 통합된 경우에만 대표 Master 값으로 바꾼다(기존 마스킹 규칙 그대로).
+  {
+    const ids = [...new Set(items.filter(it => it.confirmed && (it as any).payeeType !== "vendor" && it.matchedUserId != null).map(it => Number(it.matchedUserId)))];
+    if (ids.length) {
+      const rs = (await db.execute(sql`SELECT x.id, x.cid, nullif(btrim(u.name), '') AS name, u.email, tp.phone
+        FROM (SELECT i AS id, coalesce((SELECT m.representative_master_id FROM translator_merges m WHERE m.merged_master_id = i AND m.status = 'active' LIMIT 1), i) AS cid
+              FROM unnest(${sql.raw(`ARRAY[${ids.join(",")}]::int[]`)}) AS i) x
+        JOIN users u ON u.id = x.cid LEFT JOIN translator_profiles tp ON tp.user_id = x.cid`)).rows as any[];
+      const roster = new Map(rs.map(r => [Number(r.id), r]));
+      for (const it of items as any[]) {
+        if (!it.confirmed || it.payeeType === "vendor" || it.matchedUserId == null) continue;
+        const r = roster.get(Number(it.matchedUserId)); if (!r) continue;
+        const cid = Number(r.cid);
+        if (cid !== Number(it.matchedUserId)) {
+          it.mergedFromUserId = Number(it.matchedUserId);
+          it.masterEmail = canViewFullContact ? emailFull(r.email) : maskEmail(r.email);
+          it.masterPhone = canViewFullContact ? phoneFull(r.phone) : maskPhone(r.phone);
+        }
+        it.matchedUserId = cid; it.masterKey = `m:${cid}`;
+        it.originalTranslator = it.translator ?? null;
+        if (r.name) { it.translator = r.name; it.matchedUserName = r.name; }
+      }
+    }
+  }
+
   // ── 중복 의심(§9) — 과거↔신규 교차. 동일 (Master, 납품일, 세전반올림, 거래처) → 양쪽 dup_suspect. 자동 삭제/제외 없음.
   const dupIndex = new Map<string, { legacy: number[]; current: number[] }>();
   items.forEach((it, idx) => {
