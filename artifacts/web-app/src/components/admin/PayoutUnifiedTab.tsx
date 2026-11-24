@@ -74,7 +74,7 @@ function pickPhone(rows: DetailRow[]): string | null {
 export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (m: string) => void }) {
   const authH = { Authorization: `Bearer ${token}` };
   const [rounds, setRounds] = useState<RoundRow[]>([]);
-  const [pg, setPg] = useState({ page: 1, pageSize: 20, total: 0, totalPages: 1 }); // 기본 20행(옵션 5/10/20/50/100)
+  const [pg, setPg] = useState({ page: 1, pageSize: 10, total: 0, totalPages: 1 }); // 기본 10행(옵션 5/10/20/50/100)
   const [basis, setBasis] = useState<DateBasis>('delivery'); // 기본값 = 납품일(§5)
   const [dateFrom, setDateFrom] = useState(''); const [dateTo, setDateTo] = useState('');
   const [translator, setTranslator] = useState(''); const [client, setClient] = useState('');
