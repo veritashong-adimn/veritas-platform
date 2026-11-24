@@ -92,7 +92,7 @@ router.get("/admin/collections", ...adminGuard, requireStaffPermission(["payment
         SELECT project_payment_id,
                COUNT(*)                          AS tx_cnt,
                COALESCE(SUM(customer_paid_amount), 0) AS tx_paid,
-               MAX(paid_date)                    AS last_paid_date
+               MAX(paid_date) FILTER (WHERE COALESCE(txn_type, '') <> 'refund') AS last_paid_date
         FROM payment_transactions
         GROUP BY project_payment_id
       ) tx ON tx.project_payment_id = pp.id
@@ -353,7 +353,7 @@ router.get("/admin/collections/sales", ...adminGuard, requireStaffPermission(["p
       FROM project_payments pp
       LEFT JOIN companies c ON c.id = pp.billing_company_id
       LEFT JOIN (
-        SELECT project_payment_id, COUNT(*) AS tx_cnt, COALESCE(SUM(customer_paid_amount), 0) AS tx_paid, MAX(paid_date) AS last_paid_date
+        SELECT project_payment_id, COUNT(*) AS tx_cnt, COALESCE(SUM(customer_paid_amount), 0) AS tx_paid, MAX(paid_date) FILTER (WHERE COALESCE(txn_type, '') <> 'refund') AS last_paid_date
         FROM payment_transactions GROUP BY project_payment_id
       ) tx ON tx.project_payment_id = pp.id
       WHERE pp.project_id IN (${sql.join(pids.map((i) => sql`${i}`), sql`, `)})

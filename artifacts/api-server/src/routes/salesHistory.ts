@@ -217,7 +217,7 @@ export function summarizeBillingForList(saleTotal: number | null, pays: any[], t
   const txByPay = new Map<number, any[]>();
   for (const t of txns) { const k = Number(t.project_payment_id); txByPay.set(k, [...(txByPay.get(k) ?? []), t]); }
   const issues = [...new Set(pays.map(p => toDateStr(p.issue_date)).filter((d): d is string => !!d))].sort();
-  const deposits: { date: string | null; bank: string | null; amount: number; label?: string }[] = [];
+  const deposits: { date: string | null; bank: string | null; amount: number; label?: string; refund?: boolean }[] = [];
   let fxPaidKrw = 0, fxAny = false;
   for (const p of pays) {
     const ts = txByPay.get(Number(p.id)) ?? [];
@@ -236,6 +236,8 @@ export function summarizeBillingForList(saleTotal: number | null, pays: any[], t
     }
     // 카드결제(카드사 수수료 별도 저장) — 입금내역은 실제 은행 입금액(settled_amount) + 수수료 표기. 입금상태 합계(amount)는 기존대로 고객결제액(입금+수수료).
     if (ts.length) for (const t of ts) {
+      // 입금 환불(음수 거래) — 입금내역에 '환불'로 표시하고 순입금액에서 차감(최근 입금일 계산에서는 제외)
+      if (t.txn_type === "refund") { deposits.push({ date: toDateStr(t.paid_date), bank: null, amount: Number(t.customer_paid_amount ?? 0), label: `환불 −${won(Math.abs(Number(t.customer_paid_amount ?? 0)))}`, refund: true }); continue; }
       const fee = Number(t.fee_amount ?? 0), card = ["카드", "신용카드", "card"].includes(String(t.method ?? "").trim());
       deposits.push({ date: toDateStr(t.paid_date), bank: (t.bank_account ?? "").trim() || null, amount: Number(t.customer_paid_amount ?? 0),
         ...(card && fee > 0 && t.settled_amount != null ? { label: `${won(Number(t.settled_amount))} (카드수수료 ${won(fee)})` } : {}) });
@@ -247,9 +249,9 @@ export function summarizeBillingForList(saleTotal: number | null, pays: any[], t
   const one = (d: typeof paid[number]) => [d.bank, d.label ?? won(d.amount)].filter(Boolean).join(" ");
   return {
     taxInvoiceDate: issues.length ? issues.join(", ") : null,
-    paymentDate: paid.length ? (paid.map(d => d.date).filter(Boolean).sort().pop() ?? null) : null,   // 마지막 실제 입금일
+    paymentDate: paid.some(d => !d.refund) ? (paid.filter(d => !d.refund).map(d => d.date).filter(Boolean).sort().pop() ?? null) : null,   // 마지막 실제 입금일(환불 제외)
     paymentMemo: !paid.length ? null : paid.length === 1 ? one(paid[0]) : paid.map(d => `${d.date ? md(d.date) + " " : ""}${one(d)}`).join(", "),
-    paymentStatus: (paidTotal <= 0 && !(fxAny && paid.length) ? null : (saleTotal != null && paidTotal < saleTotal ? "partial" : "completed")) as "partial" | "completed" | null,
+    paymentStatus: (paidTotal <= 0 && !(fxAny && paid.some(d => !d.refund)) ? null : (saleTotal != null && paidTotal < saleTotal ? "partial" : "completed")) as "partial" | "completed" | null,
   };
 }
 async function fillBillingInfo(dbx: any, list: SalesHistoryRow[]) {

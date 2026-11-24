@@ -141,10 +141,21 @@ router.put("/admin/projects/:id/payment-records", ...adminGuard, requireRolePerm
 
   // 입금확인(확정) 수금기록 보호 — 삭제·금액·입금일·확인해제는 일반 저장으로 불가(비고·청구정보 등은 수정 가능).
   const before = await db.select().from(projectPaymentsTable).where(eq(projectPaymentsTable.projectId, projectId));
-  const confirmedById = new Map(before.filter(b => b.depositConfirmed).map(b => [b.id, b]));
+  // 전액 환불된 회차(입금거래가 있고 순입금액 ≤ 0) — 입금확인 보호에서 제외: 청구금액·결제유형 수정 가능(입금·환불 거래 이력은 그대로 보존)
+  const txAgg = before.length ? (await db.select({ pid: paymentTransactionsTable.projectPaymentId,
+      net: sql<string>`coalesce(sum(${paymentTransactionsTable.customerPaidAmount}), 0)`,
+      refunds: sql<number>`count(*) filter (where ${paymentTransactionsTable.txnType} = 'refund')::int` })
+    .from(paymentTransactionsTable).where(inArray(paymentTransactionsTable.projectPaymentId, before.map(b => b.id)))
+    .groupBy(paymentTransactionsTable.projectPaymentId)) : [];
+  const fullyRefunded = new Set(txAgg.filter(a => Number(a.refunds) > 0 && Number(a.net) <= 0.005).map(a => a.pid));
+  const hasRefundHistory = new Set(txAgg.filter(a => Number(a.refunds) > 0).map(a => a.pid));
+  const confirmedById = new Map(before.filter(b => b.depositConfirmed && !fullyRefunded.has(b.id)).map(b => [b.id, b]));
   const beforeById = new Map(before.map(b => [b.id, b]));
   const delLocked = deletedIds.filter(id => confirmedById.has(id));
   if (delLocked.length) { res.status(409).json({ error: `입금확인된 수금기록은 삭제할 수 없습니다 (id: ${delLocked.join(", ")}).` }); return; }
+  // 환불 이력이 있는 회차는 삭제 금지(삭제 시 입금·환불 거래가 함께 지워짐) — 금액·결제유형 수정으로 정리
+  const refundDel = deletedIds.filter(id => hasRefundHistory.has(id));
+  if (refundDel.length) { res.status(409).json({ error: `입금·환불 이력이 있는 청구회차는 삭제할 수 없습니다 (id: ${refundDel.join(", ")}). 청구금액·결제유형을 수정하세요.` }); return; }
   const n2 = (v: unknown) => Number(v ?? 0).toFixed(2);
   for (const r of rows) {
     const b = r.id ? confirmedById.get(r.id) : undefined;
@@ -277,13 +288,20 @@ const txnRowSchema = z.object({
   cardPgType: z.string().nullable().optional(),
   note: z.string().nullable().optional(),
   // 거래유형 — 'deposit'(기본, 실제 입금) · 'offset'(선입금·초과입금 상계 — 실제 은행 입금 아님)
-  txnType: z.enum(["deposit", "offset"]).nullable().optional(),
+  //   · 'refund'(입금 환불 — 원화 청구회차만. 환불액은 음수 고객결제액으로 저장 → 순입금액·미수금 자동 반영. 실제 송금 기능 아님)
+  txnType: z.enum(["deposit", "offset", "refund"]).nullable().optional(),
   offsetSourcePaymentId: z.number().int().nullable().optional(),   // 상계 원천 청구회차(초과입금 발생 회차)
 }).superRefine((r, ctx) => {
   if (r.txnType === "offset") {
     if (!r.currency) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['currency'], message: '상계는 통화가 필요합니다.' });
     if (!(typeof r.foreignAmount === 'number' && r.foreignAmount > 0)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['foreignAmount'], message: '상계금액은 0보다 커야 합니다.' });
     if (!r.offsetSourcePaymentId) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['offsetSourcePaymentId'], message: '상계 원천 청구회차가 필요합니다.' });
+    return;
+  }
+  if (r.txnType === "refund") {
+    // 환불일·환불액은 사용자가 직접 입력(임의 지정 금지). 금액은 부호와 무관하게 절댓값으로 받아 음수로 저장한다.
+    if (!r.paidDate) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['paidDate'], message: '환불일을 입력하세요.' });
+    if (!(typeof r.customerPaidAmount === 'number' && Math.abs(r.customerPaidAmount) > 0)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['customerPaidAmount'], message: '환불금액은 0보다 커야 합니다.' });
     return;
   }
   // 필수/조건부 필수(§3/§4) — 결제방법별로 성립 조건이 다르다:
@@ -308,10 +326,32 @@ router.put("/admin/project-payments/:paymentId/transactions", ...adminGuard, req
   const userId = req.user?.id ?? null;
 
   // 청구행 존재 확인 + projectId 확보(수금거래 denormalized projectId 세팅용).
-  const [pay] = await db.select({ id: projectPaymentsTable.id, projectId: projectPaymentsTable.projectId, billingCurrency: projectPaymentsTable.billingCurrency })
-    .from(projectPaymentsTable).where(eq(projectPaymentsTable.id, paymentId));
+  const [pay] = await db.select().from(projectPaymentsTable).where(eq(projectPaymentsTable.id, paymentId));
   if (!pay) { res.status(404).json({ error: "청구행을 찾을 수 없습니다." }); return; }
   const txBefore = await db.select().from(paymentTransactionsTable).where(eq(paymentTransactionsTable.projectPaymentId, paymentId));
+
+  // ── 입금 환불(txnType='refund') — 원화 청구회차만. 순입금액(입금 − 환불)을 넘는 환불은 차단 ──
+  //  · 입금거래 없이 기존 방식으로 입금완료 확정된 회차(과거 CRM 전환 입금 등)는 환불 시 그 입금(입금일·금액)을 입금거래 1건으로
+  //    먼저 이관한 뒤 환불을 기록한다(거래가 하나도 없을 때만 — 중복 생성 없음). 회차의 원래 입금일·금액 값은 바꾸지 않는다.
+  const hasRefund = rows.some(r => r.txnType === "refund");
+  // 환불 이력이 있는 회차에서 입금 거래를 삭제·수정할 때도 순입금액이 음수가 되지 않게 같은 검증을 적용
+  const refundHistory = txBefore.some(t => t.txnType === "refund");
+  let legacyDeposit: typeof paymentTransactionsTable.$inferInsert | null = null;
+  if (hasRefund || refundHistory) {
+    if (hasRefund && isForeignCurrency(pay.billingCurrency)) { res.status(400).json({ error: "외화 청구회차의 환불은 지원하지 않습니다(원화 청구회차만)." }); return; }
+    if (hasRefund && txBefore.length === 0 && pay.depositStatus === "completed" && pay.depositConfirmed && pay.paidDate && Number(pay.amount) > 0) {
+      legacyDeposit = { projectPaymentId: paymentId, projectId: pay.projectId, paidDate: pay.paidDate, method: pay.paymentMethod ?? null,
+        customerPaidAmount: String(pay.amount), currency: "KRW", bankAccount: (pay.depositBank ?? "").trim() || null,
+        note: "기존 입금확인 회차의 입금 — 환불 처리 시 입금거래로 이관(입금일·금액 그대로)", createdBy: userId, updatedBy: userId };
+    }
+    // 저장 후 거래 집합의 순입금액(원화 고객결제액 합) ≥ 0 이어야 한다.
+    const signed = (r: typeof rows[number]) => r.txnType === "refund" ? -Math.abs(Number(r.customerPaidAmount ?? 0)) : Number(r.customerPaidAmount ?? 0);
+    const upd = new Map(rows.filter(r => r.id).map(r => [r.id!, r]));
+    const net = txBefore.filter(t => !deletedIds.includes(t.id)).reduce((s, t) => s + (upd.has(t.id) ? signed(upd.get(t.id)!) : Number(t.customerPaidAmount ?? 0)), 0)
+      + rows.filter(r => !r.id).reduce((s, r) => s + signed(r), 0)
+      + (legacyDeposit ? Number(legacyDeposit.customerPaidAmount) : 0);
+    if (net < -0.005) { res.status(400).json({ error: `환불금액이 순입금액을 초과합니다(초과 ${Math.round(-net).toLocaleString("ko-KR")}원).` }); return; }
+  }
 
   // ── 외화 청구회차 검증·환산(원화 청구회차는 기존 동작 그대로) ──
   const billCur = isForeignCurrency(pay.billingCurrency) ? String(pay.billingCurrency).toUpperCase() : null;
@@ -351,6 +391,7 @@ router.put("/admin/project-payments/:paymentId/transactions", ...adminGuard, req
         await tx.delete(paymentTransactionsTable)
           .where(and(eq(paymentTransactionsTable.projectPaymentId, paymentId), inArray(paymentTransactionsTable.id, deletedIds)));
       }
+      if (legacyDeposit) await tx.insert(paymentTransactionsTable).values(legacyDeposit);   // 기존 확정 입금 → 입금거래 이관(환불 전 입금 이력 보존)
       for (const [i, r] of rows.entries()) {
         const num = (v: number | null | undefined) => (v == null ? null : String(v));
         const fx = fxCalc.get(i);
@@ -360,6 +401,7 @@ router.put("/admin/project-payments/:paymentId/transactions", ...adminGuard, req
           // 카드결제(실제 입금액 + 카드사 수수료가 함께 입력된 거래): 고객결제액 = 실제 입금액 + 수수료(원 단위).
           //  → 미수금 = 청구금액 − 실제 입금액 − 수수료. 수수료는 fee_amount 로 별도 보관(매출·할인 아님). 그 외 결제방법은 기존 그대로.
           customerPaidAmount: fx ? String(fx.paid)
+            : r.txnType === "refund" ? String(-Math.abs(Number(r.customerPaidAmount ?? 0)))   // 환불 = 음수 거래
             : (isCardMethod(r.method) && r.settledAmount != null && r.feeAmount != null
                 ? String(Math.round(Number(r.settledAmount)) + Math.round(Number(r.feeAmount)))
                 : String(r.customerPaidAmount ?? 0)),
@@ -374,7 +416,7 @@ router.put("/admin/project-payments/:paymentId/transactions", ...adminGuard, req
           approvalNo: r.approvalNo ?? null,
           cardPgType: r.cardPgType ?? null,
           note: r.note ?? null,
-          txnType: r.txnType === "offset" ? "offset" : (fx ? "deposit" : null),
+          txnType: r.txnType === "offset" ? "offset" : r.txnType === "refund" ? "refund" : (fx ? "deposit" : null),
           offsetSourcePaymentId: r.txnType === "offset" ? (r.offsetSourcePaymentId ?? null) : null,
           updatedBy: userId,
           updatedAt: new Date(),

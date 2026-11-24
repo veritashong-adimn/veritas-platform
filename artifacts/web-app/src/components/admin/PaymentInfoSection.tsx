@@ -33,7 +33,7 @@ export interface PayTxn {
   approvalNo?: string | null;
   cardPgType?: string | null;
   note?: string | null;
-  txnType?: string | null;            // 'deposit' 실제 입금 · 'offset' 선입금 상계(외화 회차)
+  txnType?: string | null;            // 'deposit' 실제 입금 · 'offset' 선입금 상계(외화 회차) · 'refund' 입금 환불(음수 금액)
   offsetSourcePaymentId?: number | null;
 }
 interface PayRow {
@@ -328,6 +328,9 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   const [txnBusy, setTxnBusy] = useState(false);
   const emptyTxn = (): PayTxn => ({ paidDate: new Date().toISOString().slice(0, 10), method: '기타' });
   const [addForm, setAddForm] = useState<PayTxn>(emptyTxn());
+  // 입금 환불 — 대상 청구행 id·입력값(환불일·환불금액은 직접 입력, 기본값 없음)
+  const [refundFor, setRefundFor] = useState<number | null>(null);
+  const [refundForm, setRefundForm] = useState<{ date: string; amount: string; note: string }>({ date: '', amount: '', note: '' });
   const toggleExpand = (id: number) => setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const list: PayRow[] = paymentRecords ?? [];
@@ -450,12 +453,17 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     return { supply: 0, vat: saleVat, amount: saleVat };   // 고객사
   };
   // 결제유형 전환 — 혼용 금지. 기존 행은 교체(id는 삭제 대상). 수출바우처=2행 고정, 일반결제=기본 1행.
+  //  입금거래(입금·환불 이력)가 있는 회차는 삭제하지 않고 새 유형의 첫 회차(수출바우처는 고객사·부가세 회차)로 이어 쓴다 — 거래 이력 보존.
   const changeCategory = (v: string) => {
     if (v === category) return;
-    setDeletedIds(d => [...d, ...rows.filter(r => r.id != null).map(r => r.id as number)]);
+    const keep = rows.find(r => r.id != null && (r.transactions?.length ?? 0) > 0);
+    setDeletedIds(d => [...d, ...rows.filter(r => r.id != null && r.id !== keep?.id).map(r => r.id as number)]);
     setCategory(v);
-    if (v === CAT_VOUCHER) { setRows(voucherRows()); if (defaultCompany?.id) loadContacts(defaultCompany.id); }
-    else setRows([generalRow()]);
+    const fresh = v === CAT_VOUCHER ? voucherRows() : [generalRow()];
+    if (keep) fresh[0] = { ...fresh[0], id: keep.id, transactions: keep.transactions, note: keep.note,
+      depositStatus: keep.depositStatus, depositConfirmed: keep.depositConfirmed, paidDate: keep.paidDate };
+    setRows(fresh);
+    if (v === CAT_VOUCHER && defaultCompany?.id) loadContacts(defaultCompany.id);
   };
 
   const patchRow = (i: number, p: Partial<PayRow>) => setRows(prev => prev.map((r, idx) => idx === i ? { ...r, ...p } : r));
@@ -760,6 +768,18 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     if (!txnId) return;
     await putTxn(paymentId, { deletedIds: [txnId] });
   };
+  // 입금 환불 — 환불일·환불금액 직접 입력(전액·부분). 순입금액 초과 차단(서버도 재검증). 실제 송금은 하지 않고 환불 기록만 남긴다.
+  //  입금거래 없이 확정된 회차(과거 CRM 전환 입금 등)는 서버가 기존 입금일·금액을 입금거래로 먼저 이관한다(중복 생성 없음).
+  const startRefund = (r: PayRow) => { if (r.id == null) return; setAddingFor(null); setRefundFor(r.id); setRefundForm({ date: '', amount: '', note: '' }); };
+  const saveRefund = async (r: PayRow) => {
+    if (r.id == null) return;
+    const amt = num(refundForm.amount), net = paidOf(r);
+    if (!refundForm.date) { onToast('환불일을 입력하세요.'); return; }
+    if (amt <= 0) { onToast('환불금액을 입력하세요.'); return; }
+    if (amt > net + 0.005) { onToast(`환불금액이 순입금액(${won(net)}원)을 초과합니다.`); return; }
+    const ok = await putTxn(r.id, { rows: [{ txnType: 'refund', paidDate: refundForm.date, method: '환불', customerPaidAmount: amt, bankAccount: null, note: refundForm.note || null }] });
+    if (ok) { setRefundFor(null); setExpanded(prev => new Set(prev).add(r.id as number)); }
+  };
 
   // 2차+ 입금 추가 — 얇은 한 줄(§7/§8). 라벨 없이 placeholder로 compact. 결제방법 선택 시 외화면 통화/외화액만 추가.
   const setAF = (patch: Partial<PayTxn>) => setAddForm(prev => ({ ...prev, ...patch }));
@@ -834,7 +854,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
         <td style={{ ...tdBase, textAlign: 'center', width: 96 }}>
           {editable && !voucher ? (
             <div style={{ display: 'flex', gap: 2, alignItems: 'center', justifyContent: 'center' }}>
-              <button type="button" onClick={() => removeRow(i)} data-testid={`pay-del-${i}`} aria-label="청구 삭제"
+              <button type="button" onClick={() => ((r.transactions ?? []).some(t => t.txnType === 'refund') ? onToast('입금·환불 이력이 있는 회차는 삭제할 수 없습니다. 청구금액·결제유형을 수정하세요.') : removeRow(i))} data-testid={`pay-del-${i}`} aria-label="청구 삭제"
                 style={{ border: `1px solid ${C.g300}`, borderRadius: 5, background: cellBg, color: C.danger, cursor: 'pointer', width: 22, height: 22, lineHeight: 1 }}>−</button>
               <span style={{ ...TYPO.helper, minWidth: 16, textAlign: 'center' }}>{i + 1}</span>
             </div>
@@ -993,6 +1013,10 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
                   <button type="button" onClick={() => startAdd(r)} data-testid={`txn-add-open-${i}`}
                     style={{ border: `1px solid ${C.primary}`, borderRadius: 5, background: '#eff6ff', color: C.primaryText, cursor: 'pointer', fontSize: 11, fontWeight: 700, padding: '2px 8px' }}>+ 입금</button>
                 )}
+                {!editable && pid != null && paidOf(r) > 0 && refundFor !== pid && (
+                  <button type="button" onClick={() => startRefund(r)} data-testid={`txn-refund-open-${i}`} aria-label="입금 환불"
+                    style={{ border: `1px solid ${C.danger}`, borderRadius: 5, background: '#fff5f5', color: C.danger, cursor: 'pointer', fontSize: 11, fontWeight: 700, padding: '2px 8px' }}>환불</button>
+                )}
               </div>
             )}
         </td>
@@ -1043,6 +1067,9 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
               <span style={{ color: '#374151' }}>{t.bankAccount || '—'}</span>
               {isFxRow(r) && isForeignCur(t.currency)
                 ? <span style={{ fontWeight: 700, color: t.txnType === 'offset' ? '#7c3aed' : undefined }} data-testid={`txn-fx-${i}-${ti}`}>{fxTxnText(t)}</span>
+                : t.txnType === 'refund'
+                ? <><span data-testid={`txn-refund-${i}-${ti}`} style={{ padding: '1px 7px', borderRadius: 4, background: '#fee2e2', color: C.danger, fontWeight: 700 }}>환불</span>
+                  <span style={{ fontWeight: 700, color: C.danger }}>−{won(Math.abs(num(t.customerPaidAmount)))}원</span></>
                 : <><span style={{ fontWeight: 700 }}>{won(num(t.customerPaidAmount))}원</span>
                   {txnDetail(t) && <span style={{ color: '#6b7280' }}>{txnDetail(t)}</span>}</>}
               {t.note ? <span style={{ color: '#9ca3af' }}>· {t.note}</span> : null}
@@ -1063,6 +1090,30 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
               ? renderTxnAddForm(pid)
               : <button type="button" onClick={() => startAdd(r)} data-testid={`txn-add-open-${i}`}
                   style={{ marginLeft: 28, border: `1px dashed ${C.primary}`, borderRadius: 6, background: '#fff', color: C.primaryText, cursor: 'pointer', fontSize: 12, fontWeight: 700, padding: '5px 12px' }}>└ + 입금 추가</button>}
+          </td>
+        </tr>
+      )}
+      {/* 입금 환불 입력 — 환불일·환불금액(전액·부분, 순입금액 이하)·비고. 환불은 음수 거래로 기록(실제 송금 아님) */}
+      {!editable && pid != null && refundFor === pid && (
+        <tr data-testid={`txn-refundrow-${i}`}>
+          <td colSpan={cols} style={{ ...tdBase, background: '#fff7f7', whiteSpace: 'normal' }}>
+            <div style={{ paddingLeft: 28, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', fontSize: 12 }}>
+              <span style={{ fontWeight: 700, color: C.danger }}>└ 입금 환불</span>
+              <span style={{ color: C.textSecondary }}>순입금액 {won(paidOf(r))}원</span>
+              <DateField style={{ padding: '4px 7px', borderRadius: 6, border: `1px solid ${C.g300}`, fontSize: 12, width: 128 }} value={refundForm.date}
+                onChange={v => setRefundForm(f => ({ ...f, date: v || '' }))} testid={`txn-refund-date-${i}`} ariaLabel="환불일" placeholder="환불일" />
+              <input inputMode="numeric" value={commafy(refundForm.amount)} onChange={e => setRefundForm(f => ({ ...f, amount: e.target.value.replace(/[^\d]/g, '') }))}
+                placeholder="환불금액" data-testid={`txn-refund-amount-${i}`} aria-label="환불금액"
+                style={{ padding: '4px 7px', borderRadius: 6, border: `1px solid ${C.g300}`, fontSize: 12, width: 120, textAlign: 'right', fontWeight: 700 }} />
+              <button type="button" onClick={() => setRefundForm(f => ({ ...f, amount: String(Math.round(paidOf(r))) }))} data-testid={`txn-refund-full-${i}`} aria-label="전액 환불 금액 입력"
+                style={{ border: `1px solid ${C.g300}`, borderRadius: 5, background: '#fff', cursor: 'pointer', fontSize: 11, padding: '2px 8px' }}>전액</button>
+              <input value={refundForm.note} onChange={e => setRefundForm(f => ({ ...f, note: e.target.value }))} placeholder="비고(환불 사유)" data-testid={`txn-refund-note-${i}`} aria-label="환불 비고"
+                style={{ padding: '4px 7px', borderRadius: 6, border: `1px solid ${C.g300}`, fontSize: 12, width: 180 }} />
+              <button type="button" onClick={() => saveRefund(r)} disabled={txnBusy} data-testid={`txn-refund-save-${i}`} aria-label="환불 저장"
+                style={{ padding: '6px 14px', borderRadius: 6, border: 'none', color: '#fff', fontSize: 12, fontWeight: 700, background: txnBusy ? '#9ca3af' : C.danger, cursor: txnBusy ? 'not-allowed' : 'pointer' }}>{txnBusy ? '저장 중…' : '환불 저장'}</button>
+              <button type="button" onClick={() => setRefundFor(null)} disabled={txnBusy} data-testid={`txn-refund-cancel-${i}`} aria-label="환불 취소"
+                style={{ padding: '6px 12px', borderRadius: 6, border: `1px solid ${C.g300}`, background: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', color: '#374151' }}>취소</button>
+            </div>
           </td>
         </tr>
       )}

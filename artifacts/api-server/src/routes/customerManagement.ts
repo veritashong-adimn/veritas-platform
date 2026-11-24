@@ -164,7 +164,7 @@ router.get("/admin/customer-management", ...viewGuard, async (req, res) => {
             coalesce(tx.last_paid, CASE WHEN coalesce(tx.tx_cnt, 0) = 0 THEN pp.paid_date END) AS last_paid
           FROM project_payments pp
           JOIN projects p ON p.id = pp.project_id
-          LEFT JOIN (SELECT project_payment_id, count(*) AS tx_cnt, coalesce(sum(customer_paid_amount), 0) AS tx_paid, max(paid_date) AS last_paid
+          LEFT JOIN (SELECT project_payment_id, count(*) AS tx_cnt, coalesce(sum(customer_paid_amount), 0) AS tx_paid, max(paid_date) FILTER (WHERE coalesce(txn_type, '') <> 'refund') AS last_paid
                      FROM payment_transactions GROUP BY project_payment_id) tx ON tx.project_payment_id = pp.id
           WHERE coalesce(pp.billing_company_id, p.company_id) IN (${ids(pageIds)})
             AND NOT EXISTS (SELECT 1 FROM quotes q2 WHERE q2.project_id = pp.project_id AND q2.is_current = true
