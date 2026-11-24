@@ -7,6 +7,7 @@ import { Pagination } from '../ui/Paginator';
 import { SaleContactPicker } from './SaleContactPicker';
 import { ContactReviewListModal } from './ContactReviewListModal';
 import { LegacyPartyManager } from './LegacyPartyManager';
+import { SaleDateSearchBar, appendSalePeriod, hasSalePeriod, type SalePeriod } from './SaleDateSearchBar';
 
 type AdminUser = { id: number; name?: string | null; email?: string | null };
 type Row = {
@@ -53,7 +54,9 @@ type Result = { rows: Row[]; pagination: { page: number; pageSize: number; total
 const PAGE_SIZE = 50;
 const WORKFLOW_KR: Record<string, string> = { created: '접수', quoted: '견적', approved: '확정', paid: '입금', matched: '배정', in_progress: '진행중', completed: '완료', cancelled: '취소' };
 
-export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, range, search, onOpenSalesDetail, onOpenLegacyDetail, returnTick = 0 }: {
+export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, range, search, onOpenSalesDetail, onOpenLegacyDetail, returnTick = 0, period, onPeriodChange }: {
+  // 날짜별 검색(판매날짜/계산서 발행일/입금일) — 적용값은 상위(판매관리)에서 탭 공통으로 보관
+  period: SalePeriod; onPeriodChange: (p: SalePeriod) => void;
   // 판매 상세에서 돌아올 때마다 증가 — 마지막 조회 조건(검색어·페이지·페이지당)으로 조용히 재조회 + 표 스크롤 복원
   returnTick?: number;
   authHeaders: Record<string, string>; setToast: (m: string) => void; adminUsers: AdminUser[];
@@ -87,6 +90,7 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
       const p = new URLSearchParams();
       p.set('range', range);
       if (keyword.trim()) p.set('search', keyword.trim());
+      appendSalePeriod(p, period);
       p.set('page', String(page)); p.set('pageSize', String(size));
       const res = await fetch(api(`/api/admin/sales-history?${p.toString()}`), { headers: authHeaders });
       const data = await res.json();
@@ -95,11 +99,11 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
       setResult(data); setRows(data.rows);
     } catch (e: any) { if (seq === reqSeq.current) setToast(e?.message || '판매이력 조회 실패'); }
     finally { if (seq === reqSeq.current) setLoading(false); }
-  }, [range, pageSize, authHeaders]);
+  }, [range, pageSize, authHeaders, period]);
   // 검색 실행(자동 검색·[검색]·Enter 공통) — 항상 첫 페이지부터. 빈 검색어 = 전체 목록.
   const runSearch = (keyword: string) => load(1, keyword);
 
-  useEffect(() => { load(1, lastLoad.current.keyword); /* range 변경 시 같은 검색어로 첫 페이지 재조회 */ }, [range]); // eslint-disable-line
+  useEffect(() => { load(1, lastLoad.current.keyword); /* range·날짜 검색 변경 시 같은 검색어로 첫 페이지 재조회 */ }, [range, period.basis, period.from, period.to]); // eslint-disable-line
   // 자동 검색: 입력이 멈추고 300ms 후 조회(적용된 검색어와 같으면 생략). [검색]·Enter 는 즉시 같은 runSearch.
   useEffect(() => {
     if (q.trim() === lastLoad.current.keyword.trim()) return;
@@ -129,7 +133,9 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
                placeholder="판매번호 · 프로젝트명 · 거래처 · 담당자 · 상품 통합검색 (현재 + 과거 CRM)" aria-label="통합 판매이력 검색" data-testid="sales-history-search"
                style={{ padding: '8px 11px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13, flex: '1 1 320px', maxWidth: 420 }} />
         <button style={btn(loading, true)} disabled={loading} onClick={() => runSearch(q)} data-testid="sales-history-search-btn" aria-label="판매이력 검색">{loading ? '검색 중…' : '검색'}</button>
-        <span style={{ fontSize: 12, color: '#6b7280' }}>총 {(p?.total ?? 0).toLocaleString()}건{range === 'all' ? ' (현재+과거)' : ' (과거 CRM)'}</span>
+        <SaleDateSearchBar idPrefix="sales-history" value={period} disabled={loading}
+          onApply={np => (np.basis === period.basis && np.from === period.from && np.to === period.to) ? load(1, lastLoad.current.keyword) : onPeriodChange(np)} />
+        <span style={{ fontSize: 12, color: '#6b7280' }} data-testid="sales-history-total">{hasSalePeriod(period) ? '검색 결과 ' : '총 '}{(p?.total ?? 0).toLocaleString()}건{range === 'all' ? ' (현재+과거)' : ' (과거 CRM)'}</span>
         <button style={{ ...btn(false), marginLeft: 'auto', background: '#fef2f2', color: '#b91c1c' }} onClick={() => setShowParty(true)} data-testid="btn-legacy-party-manager" aria-label="미연결 관리">미연결 관리</button>
         <button style={btn(false)} onClick={() => setShowReview(true)} data-testid="btn-contact-review-open" aria-label="고객 담당자 확인 필요 목록">고객 담당자 확인 필요 목록</button>
       </div>

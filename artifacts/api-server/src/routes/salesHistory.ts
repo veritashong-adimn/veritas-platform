@@ -18,6 +18,7 @@ import { requireAuth, requireRole } from "../middlewares/auth";
 import { buildFilteredSalesProjectList } from "./admin";
 import { loadSaleIdentities, saleIdentityMatches, type SaleIdentity } from "../services/saleIdentity";
 import { loadFxSummaries, fmtForeign, fmtForeignWithKrw, type FxSummary } from "../services/fxBilling";
+import { parseSaleDateFilter, legacyPeriodCond } from "../services/saleDateSearch";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -338,6 +339,9 @@ function legacyWhere(q: Record<string, string | undefined>): SQL {
   const dFrom = validDate(q.dateFrom), dTo = validDate(q.dateTo);
   if (dFrom) conds.push(gte(LA.recordDate, dFrom));
   if (dTo) conds.push(lte(LA.recordDate, dTo));
+  // 날짜별 검색(판매날짜 = 목록 판매일 / 계산서 발행일·입금일 = 원본 값)
+  const pf = parseSaleDateFilter(q);
+  if (pf) conds.push(legacyPeriodCond(LEGACY_SALE_DATE, sql`${LA.sourceRaw}`, pf));
   return and(...conds) as SQL;
 }
 

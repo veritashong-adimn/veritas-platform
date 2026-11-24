@@ -12,6 +12,7 @@ import { renderQuoteTitle } from '../../lib/quoteTitle';
 import { exportSales } from '../../lib/salesExcel';
 import { UnifiedSalesHistoryView } from './UnifiedSalesHistoryView';
 import { DateField } from './DatePickerShared';
+import { SaleDateSearchBar, EMPTY_SALE_PERIOD, appendSalePeriod, hasSalePeriod, type SalePeriod } from './SaleDateSearchBar';
 import './readTableView.css';
 
 // ─── 인라인 스타일 ─────────────────────────────────────────────────────────────
@@ -257,6 +258,9 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
   const projectSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  // 날짜별 검색(판매날짜/계산서 발행일/입금일) 적용값 — [전체자료]·[현재]·[과거 CRM] 공통(서버 검색)
+  const [salePeriod, setSalePeriod] = useState<SalePeriod>(EMPTY_SALE_PERIOD);
+  const salePeriodMounted = useRef(false);
   const [assignedAdminFilter, setAssignedAdminFilter] = useState<string>("all");
   const [projectPage, setProjectPage] = useState(1);
   const [projectFinancialFilter, setProjectFinancialFilter] = useState<string>("all");
@@ -397,13 +401,14 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
       if (projectPaymentDueDateFrom) params.set("paymentDueDateFrom", projectPaymentDueDateFrom);
       if (projectPaymentDueDateTo) params.set("paymentDueDateTo", projectPaymentDueDateTo);
       if (projectCompanyIdFilter) params.set("companyId", projectCompanyIdFilter);
+      appendSalePeriod(params, salePeriod);
       const res = await fetch(api(`/api/admin/projects${params.toString() ? "?" + params.toString() : ""}`), { headers: authHeaders });
       const data = await res.json();
       if (seq !== projectReqSeq.current) return;  // 더 최근 요청이 있음
       if (res.ok) setProjects(Array.isArray(data) ? data : []);
     } catch { if (seq === projectReqSeq.current) setToast("오류: 판매 조회 실패"); }
     finally { if (!silent && seq === projectReqSeq.current) setLoading(false); }
-  }, [token, projectSearch, projectFilter, dateFrom, dateTo, assignedAdminFilter, projectFinancialFilter, projectQuickFilter, projectBillingTypeFilter, projectPaymentDueDateFrom, projectPaymentDueDateTo, projectCompanyIdFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [token, projectSearch, projectFilter, dateFrom, dateTo, assignedAdminFilter, projectFinancialFilter, projectQuickFilter, projectBillingTypeFilter, projectPaymentDueDateFrom, projectPaymentDueDateTo, projectCompanyIdFilter, salePeriod]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 거래처/담당자/고객 데이터 로드 (모달용) ──────────────────────────────
   const fetchModalData = useCallback(async () => {
@@ -441,6 +446,13 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
     projectSearchTimer.current = setTimeout(() => { projectSearchTimer.current = null; runProjectSearchRef.current(); }, 300);
     return () => { if (projectSearchTimer.current) { clearTimeout(projectSearchTimer.current); projectSearchTimer.current = null; } };
   }, [projectSearch, salesRange]);
+
+  // 날짜별 검색 적용·초기화 → [현재] 목록도 첫 페이지부터 재조회(탭 전환 시 같은 조건 유지)
+  useEffect(() => {
+    if (!salePeriodMounted.current) { salePeriodMounted.current = true; return; }
+    setProjectPage(1);
+    fetchProjects();
+  }, [salePeriod]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // applyAdvancedFilter / resetAdvancedFilter 에서 증가 → 최신 fetchProjects(새 클로저) 호출
   useEffect(() => {
@@ -517,6 +529,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
       if (projectPaymentDueDateFrom) params.set("paymentDueDateFrom", projectPaymentDueDateFrom);
       if (projectPaymentDueDateTo) params.set("paymentDueDateTo", projectPaymentDueDateTo);
       if (projectCompanyIdFilter) params.set("companyId", projectCompanyIdFilter);
+      appendSalePeriod(params, salePeriod);
       const res = await fetch(api(`/api/admin/projects/export?${params.toString()}`), { headers: authHeaders });
       const data = await res.json();
       if (!res.ok) { setToast(`오류: ${data?.error ?? "Excel 데이터 조회 실패"}`); return; }
@@ -872,6 +885,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
         <UnifiedSalesHistoryView
           authHeaders={authHeaders} setToast={setToast} adminUsers={adminUsers}
           range={salesRange} search={projectSearch} returnTick={returnTick}
+          period={salePeriod} onPeriodChange={setSalePeriod}
           onOpenSalesDetail={goToDetail}
           onOpenLegacyDetail={(id) => onOpenLegacyDetail?.(id)}
         />
@@ -904,9 +918,11 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
             <PrimaryBtn onClick={() => runProjectSearch()} disabled={loading} style={{ padding: "7px 14px", fontSize: 13 }} data-testid="project-search-btn" aria-label="판매 검색 실행">
               {loading ? "검색 중..." : "검색"}
             </PrimaryBtn>
-            {(projectSearch || dateFrom || dateTo || assignedAdminFilter !== "all" || projectFilter !== "all" || projectFinancialFilter !== "all" || projectQuickFilter !== "all" || projectBillingTypeFilter !== "all" || projectPaymentDueDateFrom || projectPaymentDueDateTo || projectCompanyIdFilter) && (
+            <SaleDateSearchBar idPrefix="project" value={salePeriod} disabled={loading}
+              onApply={np => (np.basis === salePeriod.basis && np.from === salePeriod.from && np.to === salePeriod.to) ? runProjectSearch() : setSalePeriod(np)} />
+            {(hasSalePeriod(salePeriod) || projectSearch || dateFrom || dateTo || assignedAdminFilter !== "all" || projectFilter !== "all" || projectFinancialFilter !== "all" || projectQuickFilter !== "all" || projectBillingTypeFilter !== "all" || projectPaymentDueDateFrom || projectPaymentDueDateTo || projectCompanyIdFilter) && (
               <button
-                onClick={() => { setProjectSearch(""); setDateFrom(""); setDateTo(""); setAssignedAdminFilter("all"); setProjectFilter("all"); setProjectFinancialFilter("all"); setProjectQuickFilter("all"); setProjectBillingTypeFilter("all"); setProjectPaymentDueDateFrom(""); setProjectPaymentDueDateTo(""); setProjectCompanyIdFilter(""); setProjectPage(1); }}
+                onClick={() => { setProjectSearch(""); setSalePeriod(EMPTY_SALE_PERIOD); setDateFrom(""); setDateTo(""); setAssignedAdminFilter("all"); setProjectFilter("all"); setProjectFinancialFilter("all"); setProjectQuickFilter("all"); setProjectBillingTypeFilter("all"); setProjectPaymentDueDateFrom(""); setProjectPaymentDueDateTo(""); setProjectCompanyIdFilter(""); setProjectPage(1); }}
                 style={{ padding: "7px 12px", fontSize: 12, fontWeight: 700, background: "#fef2f2", color: "#dc2626", border: "1.5px solid #fca5a5", borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
                 ✕ 필터 초기화
               </button>

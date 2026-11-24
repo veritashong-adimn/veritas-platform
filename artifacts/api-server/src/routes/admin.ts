@@ -61,6 +61,7 @@ import { legacyOriginOfProject, customerNoteOf, customerMemoOf } from "../servic
 import { captureIfMissing, recaptureRecipient, freezeProjectQuotes, liveRecipientOf, hasSnapshot } from "../services/quoteRecipientSnapshot";
 import { restoredCustomerNameOfProject, linkedContactNameOfSaleNo } from "../services/legacyContactRestore";
 import { loadRemittanceSummaries } from "../services/performanceRemittance";
+import { parseSaleDateFilter, projectIdsInPeriod } from "../services/saleDateSearch";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -331,6 +332,13 @@ export async function buildFilteredSalesProjectList(query: Record<string, string
         compBalanceMap.set(cid, Number(q.prepaidBalanceAfter));
       }
       result = result.filter(p => p.companyId != null && (compBalanceMap.get(p.companyId!) ?? 0) > 0);
+    }
+
+    // ── 날짜별 검색(판매날짜 / 계산서 발행일 / 입금일) — 미선택 시 필터 없음 ──
+    const periodFilter = parseSaleDateFilter(query);
+    if (periodFilter && result.length) {
+      const hit = await projectIdsInPeriod(db, result.map(p => p.id), periodFilter);
+      result = result.filter(p => hit.has(p.id));
     }
 
     return result;
