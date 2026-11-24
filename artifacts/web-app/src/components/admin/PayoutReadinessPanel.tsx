@@ -8,6 +8,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../../lib/constants';
 import { exportDataset } from '../../lib/excelExport';
 import { DateField } from './DatePickerShared';
+import { orderBySale } from '../../lib/payoutReadinessExcelOrder';
 
 type Blocker = { cat: 'B' | 'C' | 'D' | 'I'; code: string; text: string; action: string };
 type Item = {
@@ -143,7 +144,7 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast }: {
         { header: '계좌', value: (r) => (r.hasAccount ? '등록' : '미등록'), width: 7 },
         { header: '누락·확인필요 사유', value: (r) => r.blockers.map(b => `[${b.cat === 'I' ? '참고' : b.cat}] ${b.text}`).join(' / '), width: 80 },
       ],
-      rows,
+      rows: orderBySale(rows),   // 같은 판매건 연속 표시(개인 → 외주업체) — 출력 순서만, 화면 목록 순서 불변
     });
     onToast(`${rows.length}건을 Excel로 내보냈습니다.${full ? ' (주민번호 전체 — 외부 유출 주의)' : ''}`);
   };
