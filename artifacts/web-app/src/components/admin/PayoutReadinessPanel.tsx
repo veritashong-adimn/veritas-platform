@@ -57,6 +57,34 @@ const excelPhone = (v: string | null | undefined): string => {
   if (!/^01[016789]\d{7,8}$/.test(t)) return t;
   return t.length === 11 ? `${t.slice(0, 3)}-${t.slice(3, 7)}-${t.slice(7)}` : `${t.slice(0, 3)}-${t.slice(3, 6)}-${t.slice(6)}`;
 };
+// 누락·확인필요 사유(표시 전용) — 담당자가 확인·조치할 항목만 짧은 문구로. 내부 검증·분류(A~D)·지급 차단 판정은 서버 그대로.
+//   참고(I) 사유(지급회차 미배정·수행정보 기준 반영·외화 원화 합계 제외·환율 미확정)와 송금파일 제외 안내(overseas)는 표시하지 않는다.
+//   같은 문구는 한 번만, 여러 개면 쉼표로 구분. 확인할 것이 없으면 공란. 처음 보는 코드는 원문 그대로 표시(경고 누락 방지).
+const REASON_LABEL: Record<string, string | null> = {
+  legacy_review: '과거 지급 여부 확인', crm_unconfirmed: '과거 지급 여부 확인', conversion_blocked: '과거 지급 여부 확인', overdue: '과거 지급 여부 확인',
+  paid_no_actual: '지급완료 기록 확인',
+  amount_missing: '지급금액 미입력', amount_mismatch: '지급금액 확인',
+  no_account: '계좌 미등록', no_holder: '계좌 미등록',
+  no_tax: '세금처리 미설정', tax_review: '세금처리 확인', tax_conflict: '세금처리 확인',
+  no_payee: '수행자 미연결',
+  payee_deleted: '수취인 명부 확인', payee_type_check: '수취인 명부 확인', payee_hold: '수취인 명부 확인',
+  no_confirm: '납품확인 필요', no_delivery: '납품일 미입력', no_payout_date: '지급예정일 미입력',
+  date_mismatch: '납품일 불일치', payout_date_mismatch: '지급예정일 확인', date_order: '지급예정일 확인', window_mismatch: '지급예정일 확인',
+  foreign_amount_missing: '외화 지급금액 미입력',
+  dup_crm: '중복 지급 확인', dup_platform: '중복 지급 확인', already_paid: '중복 지급 확인',
+  overseas: null,
+};
+const REASON_ORDER = ['과거 지급 여부 확인', '지급완료 기록 확인', '지급금액 미입력', '지급금액 확인', '계좌 미등록', '세금처리 미설정', '세금처리 확인', '수행자 미연결',
+  '수취인 명부 확인', '납품확인 필요', '납품일 미입력', '지급예정일 미입력', '납품일 불일치', '지급예정일 확인', '외화 지급금액 미입력', '중복 지급 확인'];
+const reasonText = (r: Item): string => {
+  const out = new Set<string>();
+  for (const b of r.blockers) {
+    if (b.cat === 'I') continue;
+    const l = b.code in REASON_LABEL ? REASON_LABEL[b.code] : b.text;
+    if (l) out.add(l);
+  }
+  return [...out].sort((a, b) => (REASON_ORDER.indexOf(a) + 1 || 99) - (REASON_ORDER.indexOf(b) + 1 || 99)).join(', ');
+};
 const isFx = (r: Item) => !!r.payCurrency && r.payCurrency !== 'KRW';
 const fxAmt = (cur: string, v: number | null | undefined) => v == null ? `${cur} 미입력` : `${cur} ${v.toLocaleString('ko-KR', { minimumFractionDigits: cur === 'JPY' ? 0 : 2, maximumFractionDigits: 2 })}`;
 const isVendor = (r: Item) => r.payeeType === 'vendor';
@@ -142,7 +170,7 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast }: {
         { header: '외화 지급금액', value: (r) => (isFx(r) ? (r.foreignAmount ?? '') : ''), type: 'number', width: 13 },
         { header: '지급상태', value: (r) => payLabel(r), width: 13 },
         { header: '계좌', value: (r) => (r.hasAccount ? '등록' : '미등록'), width: 7 },
-        { header: '누락·확인필요 사유', value: (r) => r.blockers.map(b => `[${b.cat === 'I' ? '참고' : b.cat}] ${b.text}`).join(' / '), width: 80 },
+        { header: '누락·확인필요 사유', value: (r) => reasonText(r), width: 40 },
       ],
       rows: orderBySale(rows),   // 같은 판매건 연속 표시(개인 → 외주업체) — 출력 순서만, 화면 목록 순서 불변
     });
@@ -266,8 +294,8 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast }: {
                         <td style={td}>{r.payoutRoundId ? `#${r.payoutRoundId}` : '—'}</td>
                         <td style={{ ...td, color: r.hasAccount ? '#15803d' : '#b91c1c' }}>{r.hasAccount ? '등록' : '미등록'}</td>
                         <td style={{ ...td, whiteSpace: 'normal', minWidth: 260, fontSize: 11.5 }}>
-                          {r.blockers.length === 0 ? <span style={{ color: '#15803d' }}>없음</span>
-                            : r.blockers.map((b, i) => <div key={i}><b style={{ color: STATE_STYLE[b.cat].c }}>[{b.cat === 'I' ? '참고' : b.cat}]</b> {b.text}</div>)}
+                          {(() => { const t = reasonText(r); return t
+                            ? <span data-testid={`ready-reason-${r.sourceKey}`} title={r.blockers.filter(b => b.cat !== 'I').map(b => b.text).join('\n')}>{t}</span> : null; })()}
                         </td>
                         <td style={{ ...td, whiteSpace: 'normal', minWidth: 220, fontSize: 11.5, color: '#334155' }}>{r.actions.length ? r.actions.map((a, i) => <div key={i}>· {a}</div>) : '—'}</td>
                       </tr>
