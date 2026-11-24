@@ -22,7 +22,7 @@ import './readTableView.css';
 import {
   Row, ExpenseRow, toRow, won, num, round2, commafy, dateVal, calcRowCostPreview, calcPaymentDate, isEquipmentKind, isInterpretationKind, isTranslationKind, perPersonSnapshot,
   autoRateSig, isAutoRateOverwritable, afterTaxPayout, profitRatePct,
-  VENDOR_SETTLE_OPTS, CONTRACT_CURRENCY_OPTS, vendorSettleKey, isDomesticCountry, vendorSettlementPreview, fmtForeignAmt,
+  VENDOR_SETTLE_OPTS, CONTRACT_CURRENCY_OPTS, PAY_CURRENCY_OPTS, indivForeign, vendorSettleKey, isDomesticCountry, vendorSettlementPreview, fmtForeignAmt,
   INTERP_ADD_FEE_TYPE, INTERP_BIZTRIP_TYPE, INTERP_TRANSPORT_TYPE, INTERP_DEDICATED_EXPENSE_TYPES, INTERP_ETC_DEFAULT_TYPE,
   ETC_SELECTABLE_TYPES, computeEtcCols, etcColLabel, etcColIsEmpty, CUSTOM_EXPENSE_VALUE,
   defaultPayoutRate, effectivePayoutRate, expenseBase, actualPayout, displayPayoutRate, isFixed100Type,
@@ -617,7 +617,10 @@ export default function PerformanceSection({ projectId, token, performances, onC
     copyrightFee: num(r.copyrightFee), travelDayCompensation: num(r.travelDayCompensation), cancellationCompensation: num(r.cancellationCompensation),
     vendorCompanyId: r.vendorCompanyId ?? null, purchaseEvidenceType: r.purchaseEvidenceType ?? null,
     vendorSettlementType: r.performerCategory === 'vendor' ? (r.vendorSettlementType ?? null) : null,
-    contractCurrency: r.performerCategory === 'vendor' && r.vendorSettlementType === 'overseas' ? (r.contractCurrency || 'USD') : null,
+    contractCurrency: r.performerCategory === 'vendor' && r.vendorSettlementType === 'overseas' ? (r.contractCurrency || 'USD')
+      : r.performerCategory === 'individual' ? (indivForeign(r) ? String(r.contractCurrency).toUpperCase() : null) : null,
+    // 개인 외화 지급금액(직접 입력) — 외화 지급통화일 때만. 원화 원가·세금 계산과 합산하지 않는다.
+    ...(r.performerCategory === 'individual' ? { contractAmountForeign: indivForeign(r) && r.contractAmountForeign != null && r.contractAmountForeign !== '' ? num(r.contractAmountForeign) : null } : {}),
     purchaseInvoiceDate: r.purchaseInvoiceDate || null, supplyAmount: num(r.supplyAmount), vatAmountManual: num(r.vatAmount),
     expenses: (r.expenses ?? []).map(e => ({
       id: e.id, expenseType: e.expenseType, amount: num(e.amount), incurredDate: e.incurredDate || null,
@@ -873,6 +876,8 @@ export default function PerformanceSection({ projectId, token, performances, onC
     }
     // 해외 외주 외화 계약 — 원화 원가가 송금 시점에야 정해지므로(원화 0) 수익률을 계산하지 않는다(100% 오표시 방지).
     if (r.performerCategory === 'vendor' && r.vendorSettlementType === 'overseas' && String(r.contractCurrency || 'USD').toUpperCase() !== 'KRW') profit = null;
+    // 개인 외화 지급 — 환율이 없어 원화 원가가 확정되지 않으므로 수익률을 확정값처럼 표시하지 않는다.
+    if (indivForeign(r)) profit = null;
     const cat = r.performerCategory;
     const isIndiv = cat === 'individual';
     // 유형별 금액 컬럼 분기(§2·§9·§11) — 개인 통역/번역만 신규 구조 적용. 외주·경비·장비는 기존 표시 유지.
@@ -1119,9 +1124,11 @@ export default function PerformanceSection({ projectId, token, performances, onC
               </div>;
             })()}</td>
         </>) : <>
-        <td style={{ ...tdR, width: RW.cost, fontWeight: 700, color: C.primaryText }}>{won(before)}원</td>
+        <td style={{ ...tdR, width: RW.cost, fontWeight: 700, color: C.primaryText }}>{won(before)}원
+          {indivForeign(r) && <div data-testid={`perf-fx-krw-note-${i}`} style={{ fontSize: 10, fontWeight: 400, color: '#b45309' }}>원화 환율 미확정</div>}</td>
         {/* 지급액(세후) — 세전 × (1−원천세율). 실제 송금 기준(§3). 세율 0이면 세전과 동일. */}
-        <td style={{ ...tdR, width: RW.cost }} title="세전 × (1 − 원천세율)">{won(after)}원</td>
+        <td style={{ ...tdR, width: RW.cost }} title="세전 × (1 − 원천세율)">{won(after)}원
+          {indivForeign(r) && <div data-testid={`perf-fx-pay-${i}`} style={{ fontSize: 11, fontWeight: 700, color: '#4338ca' }}>외화 {fmtForeignAmt(String(r.contractCurrency).toUpperCase(), r.contractAmountForeign != null && r.contractAmountForeign !== '' ? num(r.contractAmountForeign) : null)}</div>}</td>
         </>}
         {/* 세금처리 — 통번역사·외주업체 공통 드롭다운(3.3% / 원천징수 예외 / 세금계산서). 외주업체는 기록용(지급액 불변) */}
         {/* paddingLeft 20 — 헤더와 동일. 지급액(우측정렬 금액)과 세금처리 사이 여백 확보(붙어 보임 방지) */}
@@ -1146,8 +1153,19 @@ export default function PerformanceSection({ projectId, token, performances, onC
                     + (r.vendorSettlementType === 'overseas' ? ` · ${r.contractCurrency || 'USD'}` : '')}</span>)
             : isIndiv
             ? (editable
-                ? <ClickSelect value={effectiveTreatment(r)} onChange={(v: string) => patchRow(i, { withholdingTreatment: v })} triggerStyle={catSel} menuStyle={catMenu} options={TREATMENT_OPTS} />
-                : <span style={{ fontSize: 12 }}>{withholdingText(r)}</span>)
+                ? <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    <ClickSelect value={effectiveTreatment(r)} onChange={(v: string) => patchRow(i, { withholdingTreatment: v })} triggerStyle={catSel} menuStyle={catMenu} options={TREATMENT_OPTS} />
+                    {/* 지급통화(기본 KRW) · 외화 지급금액(직접 입력) — 외화는 원화 지급회차·국내 송금파일 제외(별도 해외송금) */}
+                    <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                      <ClickSelect value={String(r.contractCurrency || 'KRW').toUpperCase()} triggerStyle={{ ...inp, minWidth: 58 }} options={PAY_CURRENCY_OPTS}
+                        data-testid={`perf-pay-currency-${i}`} aria-label="지급통화"
+                        onChange={(v: string) => patchRow(i, v === 'KRW' ? { contractCurrency: null, contractAmountForeign: null } : { contractCurrency: v })} />
+                      {indivForeign(r) && <input type="text" inputMode="decimal" value={r.contractAmountForeign ?? ''} placeholder="외화 지급금액"
+                        onChange={e => patchRow(i, { contractAmountForeign: e.target.value.replace(/[^\d.]/g, '').slice(0, 14) })}
+                        data-testid={`perf-pay-foreign-${i}`} aria-label="외화 지급금액" style={{ ...inp, width: 90, textAlign: 'right' }} />}
+                    </div>
+                  </div>
+                : <span style={{ fontSize: 12 }}>{withholdingText(r)}{indivForeign(r) && <span data-testid={`perf-pay-currency-view-${i}`} style={{ display: 'block', color: '#4338ca', fontWeight: 700 }}>지급통화 {String(r.contractCurrency).toUpperCase()}</span>}</span>)
             : muted}
         </td>
         <td style={{ ...tdBase, width: RW.pay }}>

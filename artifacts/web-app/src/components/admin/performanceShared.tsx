@@ -603,6 +603,9 @@ export const VENDOR_SETTLE_OPTS = [
   { value: 'overseas', label: '해외송금' },
 ];
 export const CONTRACT_CURRENCY_OPTS = ['USD', 'EUR', 'JPY', 'CNY', 'GBP', 'KRW'].map(c => ({ value: c, label: c }));
+// 개인 통번역사 지급통화(기본 KRW) — 외화 선택 시 외화 지급금액 직접 입력(contract_currency / contract_amount_foreign 재사용)
+export const PAY_CURRENCY_OPTS = ['KRW', 'EUR', 'USD', 'JPY', 'CNY', 'GBP'].map(c => ({ value: c, label: c }));
+export const indivForeign = (r: Row): boolean => r.performerCategory === 'individual' && !!r.contractCurrency && String(r.contractCurrency).trim().toUpperCase() !== 'KRW';
 export const vendorSettleKey = (r: Row): string => r.vendorSettlementType === 'overseas' ? 'overseas'
   : r.vendorSettlementType === 'domestic' ? `domestic:${r.purchaseEvidenceType === 'zero_rate_tax_invoice' || r.purchaseEvidenceType === 'invoice' ? r.purchaseEvidenceType : 'tax_invoice'}` : '';
 // 외주업체 Master 국가 → 기본 정산유형. 비어 있거나 한국이면 국내.

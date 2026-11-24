@@ -398,7 +398,19 @@ export const rowSchema = z.object({
   // 외주 정산유형(2026-11) — 지정 시 새 계산(국내: 공급가액·부가세·합계 / 해외: 계약통화·외화 계약금액). 생략·null=기존 계산.
   vendorSettlementType: z.enum(["domestic", "overseas"]).nullable().optional(),
   contractCurrency: z.string().trim().regex(/^[A-Za-z]{3}$/).nullable().optional(),
+  // 개인 통번역사 외화 지급(2026-11) — 지급통화(KRW 기본) + 외화 지급금액(직접 입력). 외주 해외송금은 수량×단가로 계산(기존).
+  contractAmountForeign: z.coerce.number().min(0).nullable().optional(),
 });
+
+// 개인 외화 지급 — 외화(KRW 아님)일 때만 통화·외화 지급금액 저장, KRW·미지정은 둘 다 null(원화 지급 기존 그대로).
+//   contractCurrency 를 보내지 않은 저장(가져오기 등)은 기존 값을 유지(undefined = 갱신 안 함). 원화 원가·세금 계산과 합산하지 않는다.
+function individualForeignPay(r: RowInput): { contractCurrency?: string | null; contractAmountForeign?: string | null } {
+  if (r.contractCurrency === undefined) return {};
+  const cur = String(r.contractCurrency ?? "").trim().toUpperCase();
+  if (!cur || cur === "KRW") return { contractCurrency: null, contractAmountForeign: null };
+  const amt = r.contractAmountForeign;
+  return { contractCurrency: cur, contractAmountForeign: amt != null && Number.isFinite(Number(amt)) ? String(Math.round(Number(amt) * 100) / 100) : null };
+}
 
 export type RowInput = z.infer<typeof rowSchema>;
 
@@ -507,7 +519,8 @@ export function computeRowValues(r: RowInput) {
     // 업체 필드 초기화
     purchaseEvidenceType: null, purchaseInvoiceDate: null,
     supplyAmount: "0", vatAmount: "0", totalPurchaseAmount: "0",
-    vendorSettlementType: null, contractCurrency: null, contractAmountForeign: null,
+    vendorSettlementType: null,
+    ...individualForeignPay(r),   // 개인 외화 지급(지급통화·외화 지급금액)
     // 개인
     individualUserId: r.individualUserId ?? null,
     residencyType: r.residencyType ?? null,

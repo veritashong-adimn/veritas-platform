@@ -21,6 +21,7 @@ import { loadSaleIdentities } from "./saleIdentity";
 import { decrypt } from "../lib/encrypt";
 import { splitPayAmount, type PayeeType } from "../lib/payoutAmount";
 import { isLegacyPlaceholderEmail } from "../lib/mailer";
+import { calcPayoutWithholding } from "@workspace/db";
 
 // 주민등록번호(통번역사 명부 translator_sensitive, AES-256-GCM) — 수행자 ID(users.id) 기준.
 //   full=false: '900101-*******'(생년월일만) / full=true: '900101-1234567'(관리자 전용 경로에서만 호출).
@@ -78,6 +79,18 @@ const PREPAID_REVIEW_EXCLUSIONS: Record<string, Set<string>> = {
   ]),
 };
 
+// 외화 지급 통화별 합계(원화와 합산하지 않음) — 화면·엑셀 공통
+export function foreignTotalsOf(items: any[]): { currency: string; count: number; amount: number; missing: number }[] {
+  const m = new Map<string, { currency: string; count: number; amount: number; missing: number }>();
+  for (const x of items) {
+    if (!x.countedInTotals || !x.payCurrency || x.payCurrency === "KRW") continue;
+    const g = m.get(x.payCurrency) ?? { currency: x.payCurrency, count: 0, amount: 0, missing: 0 };
+    g.count++; if (x.foreignAmount != null) g.amount = Math.round((g.amount + x.foreignAmount) * 100) / 100; else g.missing++;
+    m.set(x.payCurrency, g);
+  }
+  return [...m.values()].sort((a, b) => a.currency.localeCompare(b.currency));
+}
+
 export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "all"; date?: string }) {
   const today = todayKst();
   const scope = opts.scope;
@@ -130,6 +143,8 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
       pa.payment_status::text AS payment_status, pa.status::text AS work_status, pa.payout_round_id,
       pa.delivery_date IS NOT NULL AS has_delivery, pa.delivery_confirmed, coalesce(pa.cost_total, 0) AS cost_total,
       pa.withholding_treatment::text AS treatment, pa.vendor_settlement_type, pa.withholding_rate AS wrate, pa.purchase_evidence_type::text AS evidence,
+      -- 지급통화·외화 지급금액(개인 외화 지급 / 외주 해외송금 계약) — 원화 금액과 합산하지 않음
+      upper(nullif(btrim(pa.contract_currency), '')) AS pay_currency, pa.contract_amount_foreign AS foreign_amount,
       (SELECT c.name FROM companies c WHERE c.id = pa.vendor_company_id) AS vendor_name,
       (SELECT q.quote_number FROM quotes q WHERE q.id = pa.quote_id) AS quote_number,
       (SELECT m.legacy_id FROM legacy_master_mappings m WHERE m.source_system = 'old_crm' AND m.entity_type = 'sale' AND m.entity_id = pa.project_id AND m.status = 'active' LIMIT 1) AS legacy_sale_no,
@@ -212,13 +227,26 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
       if (p.cat === "vendor") vendorId = p.vendor_company_id != null ? Number(p.vendor_company_id) : null;
       else masterId = p.individual_user_id != null ? Number(p.individual_user_id) : masterId;
     }
-    const amount = num(b.pretax);
+    // 지급금액 출처: 기본은 집계 행(플랫폼 = 수행정보 / CRM = 원본). CRM 전환 건에서 CRM 원본 지급액이 0원(미기재)이고
+    //   현재 수행정보에 지급액이 등록돼 있으면 수행정보 지급액·세금(공식 지급회차 calcPayoutWithholding 과 같은 계산)을 쓴다.
+    //   (전환 건이 CRM 원본 0원으로만 집계돼 세후 0원·지급액 미입력으로 표시되던 오류 수정 — 판매금액으로 추정하지 않음)
+    let amountSource: "platform" | "crm" | "platform_fallback" = b.source === "current" ? "platform" : "crm";
+    let pretaxV = num(b.pretax), posttaxV = num(b.posttax), withholdingV = num(b.withholding);
+    if (kind === "crm_converted" && p && pretaxV === 0 && num(p.cost_total) > 0) {
+      const t = calcPayoutWithholding(num(p.cost_total), p.cat === "vendor" ? "vendor" : "individual", p.treatment, p.wrate != null ? Number(p.wrate) : null, p.evidence);
+      pretaxV = t.gross; withholdingV = t.deduction; posttaxV = t.net; amountSource = "platform_fallback";
+    }
+    const amount = pretaxV;
     const paid = p ? p.payment_status === "paid" : b.legacy_paid === true;
+    // 외화 지급(개인 지급통화 외화 / 외주 해외송금 외화 계약) — 외화 금액은 원화 합계와 따로 집계, 원화 송금(IBK) 대상 아님
+    const payCurrency: string | null = p && p.pay_currency && p.pay_currency !== "KRW" && (p.cat === "individual" || p.vendor_settlement_type === "overseas") ? String(p.pay_currency) : null;
+    const foreignAmount: number | null = payCurrency && p.foreign_amount != null ? num(p.foreign_amount) : null;
     // 지급 대상 구분·지급금액(lib/payoutAmount — 지급명세서와 같은 기준). 현재 수행정보(플랫폼·전환)가 기준, CRM 원본만 있으면 개인(CRM 기록).
     const payeeType: PayeeType = p ? (p.cat === "vendor" ? "vendor" : "individual") : "individual";
-    const pay = splitPayAmount({ payeeType, source: b.source === "current" ? "current" : "legacy", pretax: amount, posttax: num(b.posttax),
-      withholding: b.source === "current" ? num(b.withholding) : null,
-      current: b.source === "legacy" && p ? { category: p.cat, treatment: p.treatment, rate: p.wrate, evidence: p.evidence } : null });
+    const fromPlatform = amountSource !== "crm";
+    const pay = splitPayAmount({ payeeType, source: fromPlatform ? "current" : "legacy", pretax: amount, posttax: posttaxV,
+      withholding: fromPlatform ? withholdingV : null,
+      current: !fromPlatform && p ? { category: p.cat, treatment: p.treatment, rate: p.wrate, evidence: p.evidence } : null });
     const dd: string | null = b.delivery_date ?? null, pd: string | null = b.payout_date ?? null;
 
     // ── 후보 사유(범위 date) ──
@@ -250,7 +278,15 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
     if (p?.payout_round_id != null && !paid) add("I", "in_round", `지급회차 #${p.payout_round_id} 배정됨`, "회차에서 처리");
 
     // ── C: 금액·세금·수행정보·날짜 ──
-    if (amount <= 0) add("C", "amount_missing", "지급액 미입력(0원)", "수행정보 지급액 입력(무상이면 사유 기록)");
+    if (payCurrency) {
+      // 외화 지급 — 원화 지급액이 0원이어도 '미입력'이 아니다. 외화 금액이 없을 때만 확인 필요. 환율 미확정이면 원화 원가 미확정.
+      if (!(foreignAmount != null && foreignAmount > 0)) add("C", "foreign_amount_missing", `외화 지급(${payCurrency}) 금액 미입력`, "수행정보에 외화 지급금액 입력");
+      add("I", "foreign_pay", `외화 지급 ${payCurrency}${foreignAmount != null ? " " + foreignAmount.toLocaleString("ko-KR", { maximumFractionDigits: 2 }) : ""} — 원화 합계·국내 원화 송금파일 제외(별도 해외송금)`, "해외송금으로 별도 지급");
+      if (!(amount > 0)) add("I", "foreign_krw_unconfirmed", "환율 미확정 — 원화 원가·이익률 미확정", "송금 시 적용환율 확인");
+    } else if (amount <= 0) add("C", "amount_missing", "지급액 미입력(0원)", "수행정보 지급액 입력(무상이면 사유 기록)");
+    if (amountSource === "platform_fallback") add("I", "amount_from_platform", `CRM 원본 지급액 0원 — 현재 수행정보 지급액(세전 ${Math.round(amount).toLocaleString("ko-KR")}원) 반영`, "수행정보 지급액 확인");
+    if (kind === "crm_converted" && p && amountSource === "crm" && !paid && num(p.cost_total) > 0 && Math.abs(num(p.cost_total) - amount) >= 1)
+      add("C", "amount_mismatch", `CRM 원본 지급액(세전 ${Math.round(amount).toLocaleString("ko-KR")}원) ≠ 현재 수행정보 지급액(${Math.round(num(p.cost_total)).toLocaleString("ko-KR")}원)`, "실제 지급액 확인 후 CRM·수행정보 정리");
     if (!dd) add("C", "no_delivery", "납품일 누락", "납품일 입력(원본 확인 — 추정 입력 금지)");
     if (!pd && !paid) add("C", "no_payout_date", amount > 0 ? "지급예정일 누락(지급액 있음)" : "지급예정일 누락", "지급예정일 확인·입력");
     if (dd && pd && pd < dd) add("C", "date_order", `지급일(${pd})이 납품일(${dd})보다 이름`, "날짜 확인");
@@ -289,7 +325,7 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
       }
     } else hasAccount = vendorId != null ? !!vAcct.get(vendorId)?.acct : masterId != null ? !!uAcct.get(masterId)?.acct : false;
 
-    const roundEligible = kind === "platform" && !!p && p.payment_status === "unpaid" && p.has_delivery && p.delivery_confirmed && num(p.cost_total) > 0
+    const roundEligible = kind === "platform" && !!p && !payCurrency && p.payment_status === "unpaid" && p.has_delivery && p.delivery_confirmed && num(p.cost_total) > 0
       && ((p.cat === "individual" && p.individual_user_id != null && !!p.treatment) || (p.cat === "vendor" && p.vendor_company_id != null));
     const cats = new Set(bl.filter(x => x.cat !== "I").map(x => x.cat));
     // 지급상태 표시는 세금·구분 확인 사유(tax_conflict·payee_type_check)로 바꾸지 않는다(상태 자동 변경 금지) — 점검 분류(state)에만 반영
@@ -316,7 +352,9 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
       dateSource: b.source === "legacy" ? { crmDelivery: b.crm_delivery_date ?? null, platformDelivery: b.platform_delivery_date ?? null,
         crmPayout: b.crm_payout_date ?? null, platformPayout: b.platform_payout_date ?? null } : null,
       dateMismatch: b.delivery_mismatch === true || b.payout_mismatch === true || (kind === "platform" && !!p?.crm_delivery && !!dd && p.crm_delivery !== dd),
-      pretax: amount, withholding: Math.round(num(b.withholding) * 100) / 100, posttax: Math.round(num(b.posttax) * 100) / 100,
+      pretax: amount, withholding: Math.round(withholdingV * 100) / 100, posttax: Math.round(posttaxV * 100) / 100, amountSource,
+      // 지급통화(KRW 기본)·외화 지급금액 — 외화 건은 원화 합계와 별도(foreignTotals), 원화 송금파일 제외
+      payCurrency: payCurrency ?? "KRW", foreignAmount,
       // 지급금액 구분(2026-11-23): 개인 = 세전/원천세/세후, 외주업체 = 공급가/부가세/지급합계 — 화면·엑셀·지급명세서 공통
       payeeType, payeeTypeLabel: payeeType === "vendor" ? "외주업체" : "개인", vendorName: p?.cat === "vendor" ? (p.vendor_name ?? null) : null,
       payAmount: { withholding: pay.withholding, supply: pay.supply, vat: pay.vat, payTotal: pay.payTotal }, taxConflict: pay.taxConflict,
@@ -377,14 +415,15 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
   }
   const order: Record<string, number> = { base: 0, delivery_window: 1, carry_over: 2, no_payout_date: 3, other: 4, all: 0 };
   out.sort((a, b) => (order[a.candidate] - order[b.candidate]) || a.state.localeCompare(b.state) || String(a.payee ?? "").localeCompare(String(b.payee ?? "")));
-  const sum = (arr: any[]) => { const c = arr.filter(x => x.countedInTotals); return { count: arr.length, counted: c.length, pretax: c.reduce((s, x) => s + x.pretax, 0), posttax: Math.round(c.reduce((s, x) => s + x.posttax, 0)),
+  // 원화 합계 — 외화 지급 건(payCurrency ≠ KRW)은 원화 합계에 넣지 않고 foreignTotals 로 별도 집계
+  const sum = (arr: any[]) => { const c = arr.filter(x => x.countedInTotals && x.payCurrency === "KRW"); return { count: arr.length, counted: c.length, pretax: c.reduce((s, x) => s + x.pretax, 0), posttax: Math.round(c.reduce((s, x) => s + x.posttax, 0)),
     vendorCount: c.filter(x => x.payeeType === "vendor").length, vat: Math.round(c.reduce((s, x) => s + (x.payAmount.vat ?? 0), 0)) }; };
   const by = (f: (x: any) => string) => { const m: Record<string, any> = {}; for (const k of [...new Set(out.map(f))]) m[k] = sum(out.filter(x => f(x) === k)); return m; };
   const issueCounts: Record<string, number> = {};
   for (const o of out) for (const b of o.blockers) issueCounts[b.code] = (issueCounts[b.code] ?? 0) + 1;
   return {
     scope, payoutDate: scope === "date" ? d : null, deliveryWindow: win, today, items: out, excludedPrepaid,
-    summary: { total: sum(out), byState: by(x => x.state), byKind: by(x => x.kind), byCandidate: by(x => x.candidate),
+    summary: { total: sum(out), foreignTotals: foreignTotalsOf(out), byState: by(x => x.state), byKind: by(x => x.kind), byCandidate: by(x => x.candidate),
       roundEligible: sum(out.filter(x => x.roundEligible)), duplicates: out.filter(x => x.blockers.some((b: Blocker) => b.code.startsWith("dup_"))).length, issueCounts },
   };
 }

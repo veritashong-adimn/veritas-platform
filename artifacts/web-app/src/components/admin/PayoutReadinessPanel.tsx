@@ -23,6 +23,8 @@ type Item = {
   payDisplay?: 'paid' | 'review' | 'prep' | 'scheduled'; payDisplayLabel?: string;
   saleAmount?: { supply: number; vat: number; total: number } | null;
   pretax: number; withholding: number; posttax: number;
+  // 지급통화(KRW 기본)·외화 지급금액 — 외화 건은 원화 합계와 별도 집계·원화 송금파일 제외. amountSource: 금액 출처(platform_fallback = CRM 0원 → 수행정보)
+  payCurrency?: string; foreignAmount?: number | null; amountSource?: 'platform' | 'crm' | 'platform_fallback';
   // 지급금액 구분(서버 lib/payoutAmount — 지급명세서와 같은 기준): 개인 세전/원천세/세후 · 외주업체 공급가/부가세/지급합계
   payeeType?: 'individual' | 'vendor'; payeeTypeLabel?: string; vendorName?: string | null;
   performerName?: string | null;
@@ -33,7 +35,7 @@ type Item = {
 };
 type Sum = { count: number; counted: number; pretax: number; posttax: number };
 type Resp = { canRevealResidentNumber?: boolean; scope: 'date' | 'all'; payoutDate: string | null; deliveryWindow: { from: string; to: string } | null; items: Item[];
-  summary: { total: Sum; byState: Record<string, Sum>; byKind: Record<string, Sum>; byCandidate: Record<string, Sum>; roundEligible: Sum; duplicates: number; issueCounts: Record<string, number> } };
+  summary: { total: Sum; foreignTotals?: { currency: string; count: number; amount: number; missing: number }[]; byState: Record<string, Sum>; byKind: Record<string, Sum>; byCandidate: Record<string, Sum>; roundEligible: Sum; duplicates: number; issueCounts: Record<string, number> } };
 
 const STATE_STYLE: Record<string, { bg: string; c: string }> = {
   A: { bg: '#dcfce7', c: '#15803d' }, B: { bg: '#e0f2fe', c: '#0369a1' }, C: { bg: '#fef3c7', c: '#92400e' }, D: { bg: '#fee2e2', c: '#b91c1c' }, I: { bg: '#f1f5f9', c: '#475569' },
@@ -46,6 +48,8 @@ const STATUS_LABEL: Record<string, string> = { unpaid: '미지급', payment_hold
 const payLabel = (r: Item) => r.payDisplayLabel ?? STATUS_LABEL[r.paymentStatus] ?? r.paymentStatus;
 const PAY_COLOR: Record<string, string> = { paid: '#15803d', review: '#b45309', prep: '#b91c1c', scheduled: '#1d4ed8' };
 const won = (n: number) => Math.round(n || 0).toLocaleString('ko-KR');
+const isFx = (r: Item) => !!r.payCurrency && r.payCurrency !== 'KRW';
+const fxAmt = (cur: string, v: number | null | undefined) => v == null ? `${cur} 미입력` : `${cur} ${v.toLocaleString('ko-KR', { minimumFractionDigits: cur === 'JPY' ? 0 : 2, maximumFractionDigits: 2 })}`;
 const isVendor = (r: Item) => r.payeeType === 'vendor';
 // 지급금액 열(개인·외주 구분) — 해당하지 않는 쪽은 공란. 외주 부가세 미확정(null)은 공란(임의 생성 안 함).
 const indiv = (r: Item, k: 'pretax' | 'withholding' | 'posttax') => (isVendor(r) ? '' : r[k]);
@@ -129,7 +133,11 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast }: {
         { header: '[외주 지급] 공급가', value: (r) => vend(r, 'supply'), type: 'number', width: 13 },
         { header: '[외주 지급] 부가세', value: (r) => vend(r, 'vat'), type: 'number', width: 13 },
         { header: '[외주 지급] 지급합계', value: (r) => vend(r, 'payTotal'), type: 'number', width: 14 },
-        { header: '지급금액(송금액)', value: (r) => r.payAmount?.payTotal ?? r.posttax, type: 'number', width: 14 },
+        { header: '지급금액(송금액)', value: (r) => (isFx(r) ? '' : (r.payAmount?.payTotal ?? r.posttax)), type: 'number', width: 14 },
+        // 지급통화(KRW 기본)·외화 지급금액 — 외화 건은 원화 합계와 별도, 국내 원화 송금파일 제외. 환율 미확정 원화 원가는 확정값 아님.
+        { header: '지급통화', value: (r) => r.payCurrency ?? 'KRW', width: 8 },
+        { header: '외화 지급금액', value: (r) => (isFx(r) ? (r.foreignAmount ?? '') : ''), type: 'number', width: 13 },
+        { header: '원화 송금', value: (r) => (isFx(r) ? '제외(해외송금·환율 미확정)' : ''), width: 20 },
         { header: '세금 확인 필요', value: (r) => r.taxConflict ?? '', width: 50 },
         { header: '합계 집계', value: (r) => (r.countedInTotals ? '예' : '아니오(중복)'), width: 9 },
         { header: '지급상태', value: (r) => payLabel(r), width: 13 },
@@ -208,6 +216,8 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast }: {
                 {(['A', 'B', 'C', 'D'] as const).map(k => chip(k, data.summary.byState[k]))}
                 <div style={{ fontSize: 11.5, color: '#475569', alignSelf: 'center', lineHeight: 1.6 }}>
                   전체 <b data-testid="ready-total">{data.summary.total.count}건 · {won(data.summary.total.pretax)}원</b>
+                  {(data.summary.foreignTotals ?? []).map(f => <span key={f.currency} data-testid={`ready-fx-total-${f.currency}`} style={{ marginLeft: 8, color: '#4338ca', fontWeight: 700 }}>
+                    외화 {f.currency} {f.count}건 · {fxAmt(f.currency, f.amount)}{f.missing ? ` (금액 미입력 ${f.missing}건)` : ''} <span style={{ fontWeight: 400, color: '#6b7280' }}>(원화 합계 별도)</span></span>)}
                   {' · '}공식 회차 자동포함 <b data-testid="ready-round-eligible">{data.summary.roundEligible.count}건 · {won(data.summary.roundEligible.pretax)}원</b><br />
                   {data.scope === 'date' && Object.entries(data.summary.byCandidate).map(([k, v]) => <span key={k} data-testid={`ready-cand-${k}`} style={{ marginRight: 10 }}>{CAND_LABEL[k] ?? k} {v.count}건·{won(v.pretax)}원</span>)}
                 </div>
@@ -252,7 +262,9 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast }: {
                             : won(r.withholding)}
                           <div style={{ fontSize: 10, color: '#94a3b8' }}>{isVendor(r) ? (r.payAmount?.vat != null ? '부가세' : '부가세 미확정') : '원천세'}</div>
                           {r.taxConflict && <div title={r.taxConflict} style={{ fontSize: 10, color: '#c2410c', fontWeight: 700 }}>⚠ 세금 확인</div>}</td>
-                        <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{won(r.payAmount?.payTotal ?? r.posttax)}<div style={{ fontSize: 10, color: '#94a3b8', fontWeight: 400 }}>{isVendor(r) ? '지급합계' : '세후'}</div>{!r.countedInTotals && <div style={{ fontSize: 10, color: '#c2410c' }}>합계 제외(중복)</div>}</td>
+                        <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{isFx(r)
+                            ? <span data-testid={`ready-fx-${r.sourceKey}`} style={{ color: '#4338ca' }}>{fxAmt(r.payCurrency!, r.foreignAmount)}<div style={{ fontSize: 10, color: '#b45309', fontWeight: 400 }}>외화 지급 · 원화 미확정</div></span>
+                            : won(r.payAmount?.payTotal ?? r.posttax)}{!isFx(r) && <div style={{ fontSize: 10, color: '#94a3b8', fontWeight: 400 }}>{isVendor(r) ? '지급합계' : '세후'}</div>}{!r.countedInTotals && <div style={{ fontSize: 10, color: '#c2410c' }}>합계 제외(중복)</div>}</td>
                         <td style={{ ...td, fontWeight: 700, color: PAY_COLOR[r.payDisplay ?? ''] }} data-testid={`ready-pay-${r.sourceKey}`}>{payLabel(r)}</td>
                         <td style={td}>{r.payoutRoundId ? `#${r.payoutRoundId}` : '—'}</td>
                         <td style={{ ...td, color: r.hasAccount ? '#15803d' : '#b91c1c' }}>{r.hasAccount ? '등록' : '미등록'}</td>

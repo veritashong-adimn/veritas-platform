@@ -59,6 +59,8 @@ const eligibleConds = () => [
   sql`${performanceAssignmentsTable.deliveryDate} IS NOT NULL`,     // 납품일 입력(§7-2)
   eq(performanceAssignmentsTable.deliveryConfirmed, true),          // 납품확인(§7-3)
   sql`${performanceAssignmentsTable.costTotal} > 0`,                // 지급액 확정·0원 초과(§7-4·5)
+  // 외화 지급(개인 지급통화 외화·외주 해외송금 외화 계약) — 원화 지급회차·국내 원화 송금파일(IBK) 대상 아님(별도 해외송금)
+  sql`coalesce(upper(nullif(btrim(${performanceAssignmentsTable.contractCurrency}), '')), 'KRW') = 'KRW'`,
   sql`(
     (${performanceAssignmentsTable.performerCategory} = 'individual'
       AND ${performanceAssignmentsTable.individualUserId} IS NOT NULL
@@ -483,6 +485,7 @@ function notEligibleReason(r: any): string | null {
   if (!r.deliveryConfirmed) return "납품확인 미완료";
   // 해외 외주업체 외화 계약 — 원화 지급회차(원화 합계·IBK 이체)에 합산하지 않는다. 외화 계약금액은 수행정보에 유지.
   if (r.vendorSettlementType === "overseas" && (r.contractCurrency ?? "KRW") !== "KRW") return "해외송금(외화) — 원화 지급회차 별도";
+  if (r.performerCategory === "individual" && r.contractCurrency && String(r.contractCurrency).toUpperCase() !== "KRW") return "외화 지급 — 원화 지급회차 별도(해외송금)";
   if (num(r.costTotal) <= 0) return "지급액 0원";
   if (r.performerCategory === "individual" && !r.withholdingTreatment) return "세금처리 미선택";
   return null;
@@ -553,7 +556,7 @@ async function loadWarnings(round: any) {
   const buckets: Record<string, any[]> = {};
   const push = (reason: string, r: any) => { (buckets[reason] ??= []).push({ id: r.id, projectId: r.projectId, performerName: r.performerName, productName: r.productName, costTotal: num(r.costTotal), reason,
     // 해외 외화 계약(가산 필드) — 원화 금액과 합산하지 않고 통화 그대로 표시
-    ...(r.vendorSettlementType === "overseas" && r.contractCurrency && r.contractCurrency !== "KRW" ? { contractCurrency: r.contractCurrency, contractAmountForeign: num(r.contractAmountForeign) } : {}) }); };
+    ...((r.vendorSettlementType === "overseas" || r.performerCategory === "individual") && r.contractCurrency && r.contractCurrency !== "KRW" ? { contractCurrency: r.contractCurrency, contractAmountForeign: num(r.contractAmountForeign) } : {}) }); };
   let holdAmount = 0;
   for (const r of rows) {
     if (r.payoutRoundId != null && r.payoutRoundId !== round.id) { push("이미 다른 회차에 포함됨", r); continue; }
