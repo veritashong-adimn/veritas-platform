@@ -84,7 +84,10 @@ const ACT_VAT = sql`(CASE WHEN act.cat = 'vendor' AND act.evidence = 'tax_invoic
 const PLATFORM_AMOUNT = sql`(act.payment_status IS NOT NULL AND act.payment_status <> 'paid'
     AND NOT coalesce(substring(source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') <= ${LEGACY_PAID_DELIVERY_CUTOFF}, false)
     AND coalesce(act.cost, 0) > 0
-    AND ((act.cat = 'vendor' AND act.vid IS NOT NULL AND act.evidence IS NOT NULL) OR ${CRM_PRETAX} = 0))`;
+    AND ((act.cat = 'vendor' AND act.vid IS NOT NULL AND act.evidence IS NOT NULL) OR ${CRM_PRETAX} = 0
+      -- ③ 개인 + 현재 수행정보 세금처리 '원천징수 제외(exempt)' — CRM 원본의 3.3% 공제 기록 대신 현재 설정(원천세 0)을 반영(공식 지급회차와 같은 기준).
+      --   수행정보 설정이 exempt 로 명시된 건만. 명부 상세정보 문구·해외 거주 여부로는 판단하지 않는다. 지급완료 행은 위 조건으로 제외(변경 없음).
+      OR (act.cat = 'individual' AND act.treatment = 'exempt')))`;
 
 // 과거 진행관리(progress) 정규화 — 원본 불변. 입금일/입금내역 = 고객 수금 기록(지급 증빙 아님).
 export const PROG = sql`

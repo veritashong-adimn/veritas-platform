@@ -33,6 +33,7 @@ export function individualRate(treatment?: string | null, rate?: number | string
   switch (treatment) {
     case "domestic_3_3": return 3.3;
     case "domestic_2_2": return 2.2;
+    case "exempt": return 0;   // 원천징수 제외(확정 0%) — CRM 원천세 공제 기록과 다르면 확인 필요로 표시(공식 지급회차 calcPayoutWithholding 과 같은 0%)
     case "nonresident_custom":
     case "treaty_reduction_or_exemption": { const n = Number(rate); return Number.isFinite(n) ? n : null; }
     default: return null;   // tax_review_required·미설정 — 확정 세율 없음
