@@ -114,6 +114,8 @@ const FOOT_LBL = { font: { bold: true, sz: 10 }, fill: { patternType: 'solid', f
 const FOOT_NUM = { font: { bold: true, sz: 10 }, numFmt: '#,##0', fill: { patternType: 'solid', fgColor: { rgb: 'F3F4F6' } }, alignment: { horizontal: 'right', vertical: 'center' } };
 // 최종 실지급액 — 브랜드 강조(가장 명확).
 const FINAL_LBL = { font: { bold: true, sz: 12, color: { rgb: 'FFFFFF' } }, fill: { patternType: 'solid', fgColor: { rgb: BRAND } }, alignment: { horizontal: 'right', vertical: 'center' } };
+// 정수가 아닌 금액(실제 원천세 공제액·원 단위 조정 등)은 소수 2자리 서식 — 정수 금액 표시는 기존 그대로(#,##0).
+const fracFmt = <T extends { numFmt: string }>(style: T, v: number): T => (Number.isInteger(v) ? style : { ...style, numFmt: '#,##0.00' });
 const FINAL_NUM = { font: { bold: true, sz: 12, color: { rgb: 'FFFFFF' } }, numFmt: '#,##0', fill: { patternType: 'solid', fgColor: { rgb: BRAND } }, alignment: { horizontal: 'right', vertical: 'center' } };
 
 /**
@@ -165,7 +167,7 @@ export function downloadStatementExcel(opts: {
   columns.forEach((c, i) => {
     const raw = totals[i];
     if (raw == null || raw === '') { put(r, i, '', TOT_BLANK, 's'); return; }
-    if (c.type === 'number' && typeof raw === 'number') put(r, i, raw, TOT_NUM, 'n');
+    if (c.type === 'number' && typeof raw === 'number') put(r, i, raw, fracFmt(TOT_NUM, raw), 'n');
     else put(r, i, String(raw), TOT_LBL, 's');
   });
   rowHeights[r] = { hpt: 18 };
@@ -179,7 +181,7 @@ export function downloadStatementExcel(opts: {
     put(r, lblStart, label, isFinal ? FINAL_LBL : FOOT_LBL, 's');
     put(r, ncols - 2, '', isFinal ? FINAL_LBL : FOOT_LBL, 's');   // 병합 우측 셀 — 배경 연속(값 아님)
     merges.push({ s: { r, c: lblStart }, e: { r, c: ncols - 2 } });
-    if (typeof value === 'number') put(r, ncols - 1, value, isFinal ? FINAL_NUM : FOOT_NUM, 'n');
+    if (typeof value === 'number') put(r, ncols - 1, value, fracFmt(isFinal ? FINAL_NUM : FOOT_NUM, value), 'n');
     else put(r, ncols - 1, value == null ? '' : String(value), isFinal ? FINAL_LBL : FOOT_LBL, 's');
     rowHeights[r] = { hpt: isFinal ? 22 : 18 };
     r++;

@@ -47,7 +47,8 @@ type PayeeAgg = {
   payeeType: "individual" | "vendor" | "none";
   payeeId: number | null;
   payeeName: string | null;
-  amount: number;         // Σ netAmount(실지급액)
+  amount: number;         // 송금액 = Σ netAmount(실지급액)의 원 단위 반올림
+  amountExact?: number;   // Σ netAmount 소수 2자리(원 단위 처리 전) — 기존 방식 송금건 대조용
   assignmentCount: number;
 };
 
@@ -75,8 +76,9 @@ function aggregateByPayee(rows: (typeof payoutRoundItemsTable.$inferSelect)[]): 
     g.assignmentCount += 1;
     if (!g.payeeName && r.payeeName) g.payeeName = r.payeeName;
   }
-  // 부동소수 누적 오차 정리(원 단위 2소수).
-  for (const g of groups.values()) g.amount = Math.round(g.amount * 100) / 100;
+  // 수취인별 송금액 = 원 단위 반올림(2026-11-25 — 지급회차 화면·지급명세서 최종 지급액·IBK 파일과 같은 값).
+  //   건별 실지급(소수 2자리) 합계를 먼저 정리한 뒤 반올림. amountExact 는 기존 방식(소수 2자리) 송금건 대조용.
+  for (const g of groups.values()) { g.amountExact = Math.round(g.amount * 100) / 100; g.amount = Math.round(g.amountExact); }
   return [...groups.values()];
 }
 
@@ -222,8 +224,10 @@ export async function generatePayoutTransfers(
         if (t.status !== "paid" && t.status !== "cancelled" && num(t.amount) !== 0) orphaned.push({ payeeKey: t.payeeKey, payeeName: t.payeeName, amount: num(t.amount), status: t.status });
         continue;
       }
-      const expected = Math.round(a.amount * 100) / 100;
-      if (Math.abs(num(t.amount) - expected) < 0.005 && t.assignmentCount === a.assignmentCount) continue;
+      const expected = a.amount;
+      // 기존 방식(소수 2자리 합계)으로 만들어진 송금건도 같은 금액으로 인정 — 확정 회차·송금파일 생성 건을 바꾸지 않는다.
+      const sameAmount = Math.abs(num(t.amount) - expected) < 0.005 || (a.amountExact != null && Math.abs(num(t.amount) - a.amountExact) < 0.005);
+      if (sameAmount && t.assignmentCount === a.assignmentCount) continue;
       const mutable = t.status !== "paid" && t.status !== "failed" && t.status !== "cancelled" && !t.ibkFileGenerated && t.paidAt == null;
       if (mutable) {
         await db.update(payoutTransfersTable)

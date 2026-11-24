@@ -10,6 +10,8 @@
 
 // 천 단위 쉼표 + '원'. 순수 포맷(계산 아님).
 const won = (n: unknown) => `${Math.round(Number(n ?? 0)).toLocaleString('ko-KR')}원`;
+// 실제 공제액(원천세) — 소수 2자리까지 그대로(원 단위 처리 차이는 '원 단위 조정'으로 분리)
+const won2 = (n: unknown) => `${Number(n ?? 0).toLocaleString('ko-KR', { maximumFractionDigits: 2 })}원`;
 const esc = (s: unknown) => String(s ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
@@ -47,7 +49,9 @@ export interface PayoutStatementPdfData {
   rows: PayoutStatementPdfRow[];
   totals: { base: number; expense: number; deduction: number; gross: number; withholding: number; net: number;
     /** 외주업체 부가세(재현 명세서만 전달). 지정 + payeeType '외주업체'일 때만 외주 표기(공급가/부가세/지급합계)로 바꾼다 — 미지정 호출(지급회차 정식 명세서)은 기존과 동일. */
-    vat?: number };
+    vat?: number;
+    /** 원 단위 조정(수취인별 최종 지급액 원 단위 반올림 − 건별 실지급 합계). 0·미지정이면 표시하지 않음. */
+    rounding?: number };
 }
 
 // ── 페이지 나눔 ─────────────────────────────────────────────────────────────────
@@ -138,7 +142,9 @@ export function buildPayoutStatementHtml(data: PayoutStatementPdfData): string {
     ...(vendorMode
       ? [['공급가 합계', won(data.totals.gross)], ['부가세', won(data.totals.vat ?? 0)],
          ...(data.totals.withholding > 0 ? [['CRM 공제 기록(세금 확인 필요)', won(data.totals.withholding), true]] : [])] as [string, string, boolean?][]
-      : [['세전금액 합계', won(data.totals.gross)], ['원천세공제(3.3%)', won(data.totals.withholding), true]] as [string, string, boolean?][]),
+      : [['세전금액 합계', won(data.totals.gross)], ['원천세공제(3.3%)', won2(data.totals.withholding), true]] as [string, string, boolean?][]),
+    ...(data.totals.rounding && Math.round(data.totals.rounding * 100) !== 0
+      ? [['원 단위 조정', `${data.totals.rounding > 0 ? '+' : ''}${won2(Math.round(data.totals.rounding * 100) / 100)}`]] as [string, string, boolean?][] : []),
   ];
 
   return `<!DOCTYPE html>

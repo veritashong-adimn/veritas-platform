@@ -100,7 +100,18 @@ function selectItems(whereClause: any, dbx: any = db) {
       payeeType: performanceAssignmentsTable.payeeType,
       individualUserId: performanceAssignmentsTable.individualUserId,
       vendorCompanyId: performanceAssignmentsTable.vendorCompanyId,
-      performerName: performanceAssignmentsTable.performerNameSnapshot,
+      // 수취인 이름(2026-11-25) — 현재 연결된 명부 기준: 개인 = 통번역사 Master 현재 이름(통합된 Master 는 대표 Master),
+      //   외주업체 = 현재 외주업체 상호. 명부 미연결·삭제·이름 없음이면 수행정보 스냅샷 이름. 원래 스냅샷은 performerNameSnapshot 으로 보존.
+      //   지급회차 화면·지급명세서(PDF·Excel)·확정 스냅샷(이후 확정분)·송금건 이름 공통. 지급대상 묶음 키(ID)는 그대로.
+      performerName: sql<string | null>`COALESCE(
+        CASE ${performanceAssignmentsTable.performerCategory}
+          WHEN 'individual' THEN (SELECT nullif(btrim(u.name), '') FROM users u
+            WHERE u.deleted_at IS NULL AND u.id = COALESCE((SELECT m.representative_master_id FROM translator_merges m
+              WHERE m.merged_master_id = ${performanceAssignmentsTable.individualUserId} AND m.status = 'active' LIMIT 1), ${performanceAssignmentsTable.individualUserId}))
+          WHEN 'vendor' THEN (SELECT nullif(btrim(c.name), '') FROM companies c WHERE c.id = ${performanceAssignmentsTable.vendorCompanyId} AND c.deleted_at IS NULL)
+        END,
+        ${performanceAssignmentsTable.performerNameSnapshot})`,
+      performerNameSnapshot: performanceAssignmentsTable.performerNameSnapshot,
       // 지급대상 이메일(동명이인 식별용 표시정보) — 개인=users.email / 외주=companies.email. 정산 계산과 무관(표시 전용).
       //  · 서브쿼리로 조회해 기존 조인·행수에 영향 없음. 미등록이면 null → 프론트에서 '-' 표시.
       payeeEmail: sql<string | null>`COALESCE(
@@ -230,6 +241,18 @@ function wonVendorVat<T extends { vat: number; gross: number; net: number }>(it:
   return { ...tax, vat, net: tax.gross + vat };
 }
 
+// 원화 수취인별 최종 지급액(2026-11-25 대표 결정) — 건별 계산(세전 × 0.967 등 기존 세율·round2)은 그대로 두고,
+//   수취인 합계만 IBK 송금파일과 같은 원 단위 반올림으로 확정한다. 지급회차 화면·지급명세서(PDF·Excel)·송금건·IBK 파일 공통 값.
+//   · netTotal = 원 단위 최종 지급액(송금액) / netTotalExact = 건별 실지급 합계(소수 2자리) / roundingAdjustment = 원 단위 처리 차이.
+//   · 원천세(withholdingTotal)는 실제 공제액 그대로(조정 차이를 원천세에 섞지 않음 — 세무신고 자료 불변).
+//   · 지급회차는 원화 전용(외화 지급은 수집 대상 아님).
+const r2won = (n: number) => Math.round(n * 100) / 100;
+function withWonPayTotal<T extends { netTotal: number }>(g: T): T & { netTotalExact: number; roundingAdjustment: number } {
+  const exact = r2won(g.netTotal);
+  const pay = Math.round(exact);
+  return { ...g, netTotalExact: exact, roundingAdjustment: r2won(pay - exact), netTotal: pay };
+}
+
 function aggregate(items: any[]) {
   const groups = new Map<string, any>();
   for (const it of items) {
@@ -272,7 +295,7 @@ function aggregate(items: any[]) {
       rate: tax.rate, rateConfirmed: tax.rateConfirmed, isVatIncluded: tax.isVatIncluded,
     });
   }
-  return Array.from(groups.values()).map((g) => ({
+  return Array.from(groups.values()).map((g) => withWonPayTotal({
     ...g,
     treatments: Array.from(g.treatments),
     mixedTreatment: g.treatments.size > 1,   // §11 서로 다른 세금처리 혼재 경고
@@ -296,7 +319,9 @@ function computeTotals(summary: any[]) {
     withholdingTotal: t.withholdingTotal + g.withholdingTotal,
     vatTotal: t.vatTotal + g.vatTotal,
     netTotal: t.netTotal + g.netTotal,
-  }), { assignments: 0, adjustmentCount: 0, payees: 0, individualCount: 0, vendorCount: 0, baseTotal: 0, expenseTotal: 0, deductionTotal: 0, grossTotal: 0, withholdingTotal: 0, vatTotal: 0, netTotal: 0 });
+    netTotalExact: r2won(t.netTotalExact + (g.netTotalExact ?? g.netTotal)),
+    roundingAdjustment: r2won(t.roundingAdjustment + (g.roundingAdjustment ?? 0)),
+  }), { assignments: 0, adjustmentCount: 0, payees: 0, individualCount: 0, vendorCount: 0, baseTotal: 0, expenseTotal: 0, deductionTotal: 0, grossTotal: 0, withholdingTotal: 0, vatTotal: 0, netTotal: 0, netTotalExact: 0, roundingAdjustment: 0 });
 }
 
 // 실제지급일 부착(10차 §1·§3) — 지급완료 건은 payout_transfers.paid_at 를 '실제지급일'로 사용한다.
@@ -457,7 +482,7 @@ async function loadRoundDetailFromSnapshot(round: any) {
     if (!r.vatIncluded) g.allVat = false;
     g.items.push(snapRowToItem(round, r, r.adjustmentId != null ? defaultPs : (payMap.get(r.performanceAssignmentId) ?? defaultPs), emailOf(r)));
   }
-  const summary = Array.from(groups.values()).map((g) => ({
+  const summary = Array.from(groups.values()).map((g) => withWonPayTotal({
     ...g,
     treatments: Array.from(g.treatments),
     mixedTreatment: g.treatments.size > 1,

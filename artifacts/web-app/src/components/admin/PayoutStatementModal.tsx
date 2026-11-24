@@ -15,6 +15,10 @@ import './readTableView.css';   // 목록 테이블 헤더를 플랫폼 공통 r
 
 // ── 표시 헬퍼(PayoutRoundsTab 와 동일 — 순수 포맷/라벨. 계산 없음) ──
 const won = (n: unknown) => Math.round(Number(n ?? 0)).toLocaleString('ko-KR');
+// 실제 공제액(원천세)은 소수 2자리까지 그대로 표시 — 원 단위 처리 차이는 '원 단위 조정'으로 따로 표시(세무신고 원천세 불변).
+const won2 = (n: unknown) => Number(n ?? 0).toLocaleString('ko-KR', { maximumFractionDigits: 2 });
+const r2 = (n: number) => Math.round(n * 100) / 100;
+const signedWon2 = (n: unknown) => { const v = r2(Number(n ?? 0)); return `${v > 0 ? '+' : ''}${won2(v)}`; };
 const numOf = (v: unknown) => { const n = Number(v ?? 0); return Number.isFinite(n) ? n : 0; };
 const dateVal = (v?: string | null) => (v ? String(v).slice(0, 10) : '');
 const nfmt = (v: unknown) => { const n = Number(v); return Number.isFinite(n) ? n.toLocaleString('ko-KR') : String(v); };
@@ -152,7 +156,7 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
       Math.round(numOf(g.baseTotal)),
       '', Math.round(numOf(g.expenseTotal)),
       '', Math.round(numOf(g.deductionTotal)),
-      Math.round(numOf(g.grossTotal)), '', Math.round(numOf(g.withholdingTotal)), Math.round(numOf(g.netTotal)),
+      Math.round(numOf(g.grossTotal)), '', r2(numOf(g.withholdingTotal)), Math.round(numOf(g.netTotal)),
     ];
     // 하단 라벨형 합계(전체 정산 합계) — 추가비용/차감/세전/공제/실지급 명확 구분.
     const footerRows: [string, ExcelCell][] = [
@@ -160,7 +164,9 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
       ['기타비용 합계', Math.round(numOf(g.expenseTotal))],
       ['차감 합계', Math.round(numOf(g.deductionTotal))],
       ['세전금액 합계', Math.round(numOf(g.grossTotal))],
-      ['원천세공제(3.3%)', Math.round(numOf(g.withholdingTotal))],
+      ['원천세공제(3.3%)', r2(numOf(g.withholdingTotal))],
+      // 원 단위 처리 차이(수취인별 최종 지급액 = IBK 송금액, 원 단위 반올림) — 0이면 표시하지 않음
+      ...(r2(numOf(g.roundingAdjustment)) !== 0 ? [['원 단위 조정', r2(numOf(g.roundingAdjustment))] as [string, ExcelCell]] : []),
       ['최종 실지급액', Math.round(numOf(g.netTotal))],
     ];
     downloadStatementExcel({
@@ -214,6 +220,7 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
       totals: {
         base: numOf(g.baseTotal), expense: numOf(g.expenseTotal), deduction: numOf(g.deductionTotal),
         gross: numOf(g.grossTotal), withholding: numOf(g.withholdingTotal), net: numOf(g.netTotal),
+        rounding: numOf(g.roundingAdjustment),
       },
     });
     if (!ok) onToast('팝업 차단을 해제한 후 다시 시도해 주세요. (PDF 인쇄 창)');
@@ -339,7 +346,7 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
                 <td style={{ ...tdR, fontWeight: 800, background: C.primaryBg }}>{won(group.deductionTotal)}</td>
                 <td style={{ ...tdR, fontWeight: 800, background: C.primaryBg }}>{won(group.grossTotal)}</td>
                 <td style={{ ...td, background: C.primaryBg }}></td>
-                <td style={{ ...tdR, fontWeight: 800, background: C.primaryBg, color: C.danger }}>{won(group.withholdingTotal)}</td>
+                <td style={{ ...tdR, fontWeight: 800, background: C.primaryBg, color: C.danger }}>{won2(group.withholdingTotal)}</td>
                 <td style={{ ...tdR, fontWeight: 800, background: C.primaryBg, color: C.primaryText }}>{won(group.netTotal)}</td>
               </tr></tfoot>
             </table>
@@ -352,7 +359,8 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
                 ['기타비용 합계', won(group.expenseTotal)],
                 ['차감 합계', won(group.deductionTotal)],
                 ['세전금액 합계', won(group.grossTotal)],
-                ['공제액', won(group.withholdingTotal), C.danger],
+                ['공제액', won2(group.withholdingTotal), C.danger],
+                ...(r2(numOf(group.roundingAdjustment)) !== 0 ? [['원 단위 조정', signedWon2(group.roundingAdjustment)]] : []),
               ].map(([k, v, color]) => (
                 <div key={k as string} style={{ display: 'flex', justifyContent: 'space-between', gap: SP[5] }}>
                   <span style={TYPO.helper}>{k}</span><span style={{ fontWeight: 700, color: (color as string) || undefined }}>{v}원</span>
