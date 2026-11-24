@@ -71,6 +71,21 @@ function phoneFull(raw: string | null | undefined): string | null {
 }
 function emailFull(raw: string | null | undefined): string | null { if (isLegacyPlaceholderEmail(raw)) return null; const e = (raw ?? "").trim(); return e || null; }
 
+// CRM 원본 지급액(세전·세후) — 원본 문자열에서 숫자만
+const CRM_PRETAX = sql`coalesce(nullif(regexp_replace(coalesce(source_raw->>'지급액(세전)',''), '[^0-9.-]', '', 'g'), '')::numeric, 0)`;
+const CRM_POSTTAX = sql`coalesce(nullif(regexp_replace(coalesce(source_raw->>'지금액(세후)',''), '[^0-9.-]', '', 'g'), '')::numeric, 0)`;
+// 전환 수행정보(act) 세금 — CUR_DEDUCTION/CUR_VAT 와 같은 규칙(calcPayoutWithholding SQL 미러)
+const ACT_DEDUCTION = sql`(CASE WHEN act.cat = 'individual' THEN round(act.cost * (CASE act.treatment
+    WHEN 'domestic_3_3' THEN 3.3 WHEN 'domestic_2_2' THEN 2.2
+    WHEN 'nonresident_custom' THEN coalesce(act.wrate, 0) WHEN 'treaty_reduction_or_exemption' THEN coalesce(act.wrate, 0)
+    ELSE 0 END) / 100, 2) ELSE 0 END)`;
+const ACT_VAT = sql`(CASE WHEN act.cat = 'vendor' AND act.evidence = 'tax_invoice' THEN round(act.cost * 0.1, 2) ELSE 0 END)`;
+// 현재 수행정보 금액 기준 적용 여부(미지급 전환 행만)
+const PLATFORM_AMOUNT = sql`(act.payment_status IS NOT NULL AND act.payment_status <> 'paid'
+    AND NOT coalesce(substring(source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') <= ${LEGACY_PAID_DELIVERY_CUTOFF}, false)
+    AND coalesce(act.cost, 0) > 0
+    AND ((act.cat = 'vendor' AND act.vid IS NOT NULL AND act.evidence IS NOT NULL) OR ${CRM_PRETAX} = 0))`;
+
 // 과거 진행관리(progress) 정규화 — 원본 불변. 입금일/입금내역 = 고객 수금 기록(지급 증빙 아님).
 export const PROG = sql`
   prog AS (
@@ -120,8 +135,15 @@ export const PROG = sql`
       coalesce(substring(source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') <= ${LEGACY_PAID_DELIVERY_CUTOFF}, false) AS legacy_paid_cutoff,
       -- 지급예정: 지급일이 오늘(KST) 당일 또는 이후. 지급일 미상은 지급확인 필요(지급일 경과는 위 legacy_paid).
       coalesce(coalesce(substring(source_raw->>'통번역사지급일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}'), act.expected_payment_date) >= to_char((now() AT TIME ZONE 'Asia/Seoul')::date, 'YYYY-MM-DD'), false) AS payout_future,
-      coalesce(nullif(regexp_replace(coalesce(source_raw->>'지급액(세전)',''), '[^0-9.-]', '', 'g'), '')::numeric, 0) AS pretax,
-      coalesce(nullif(regexp_replace(coalesce(source_raw->>'지금액(세후)',''), '[^0-9.-]', '', 'g'), '')::numeric, 0) AS posttax
+      -- 지급금액(2026-11-24): 기본은 CRM 원본 세전·세후. 운영 판매로 전환된 미지급 행은 현재 수행정보 등록값이 정상이면 그 값을 기준으로 한다
+      --   (공식 지급회차 calcPayoutWithholding 과 같은 계산 — 개인 원천세율 / 외주 세금계산서면 부가세 10%·원천세 없음).
+      --   ① 외주업체: 업체 지정 + 지급액 > 0 + 증빙(세금처리) 지정 → 공급가액 + 부가세 = 지급합계(CRM 의 3.3% 공제 기록 대신)
+      --   ② 그 외: CRM 원본 지급액이 0원(미기재)이고 수행정보 지급액 > 0
+      --   지급완료(전환 수행정보 paid 또는 대표 확인 cutoff 이전 납품) 행은 재계산하지 않고 CRM 기록 그대로. CRM 원본 값은 crm_pretax·crm_posttax 로 보존.
+      CASE WHEN ${PLATFORM_AMOUNT} THEN act.cost ELSE ${CRM_PRETAX} END AS pretax,
+      CASE WHEN ${PLATFORM_AMOUNT} THEN act.cost - ${ACT_DEDUCTION} + ${ACT_VAT} ELSE ${CRM_POSTTAX} END AS posttax,
+      CASE WHEN ${PLATFORM_AMOUNT} THEN 'platform' ELSE 'crm' END AS amount_source,
+      ${CRM_PRETAX} AS crm_pretax, ${CRM_POSTTAX} AS crm_posttax
     FROM legacy_archive_rows
     -- 운영 판매 전환 계보(원본 불변) — 원본 행 기준으로 한 번만 모아 해시 조인.
     --   · CRM 재업로드로 원본 행이 새 버전으로 바뀌어도(superseded_by_id) 이전 버전의 전환 계보를 이어받는다(재조회 시 '확인 필요' 원본으로 되돌아가지 않게).
@@ -138,7 +160,7 @@ export const PROG = sql`
           EXISTS (SELECT 1 FROM legacy_master_mappings m WHERE m.source_system = 'old_crm' AND m.entity_type = 'sale' AND m.entity_id = xpa.project_id AND m.status = 'active') AS active_sale,
           xpa.payment_status::text AS payment_status, xpa.actual_payment_date, xpa.individual_user_id AS uid,
           xpa.performer_category::text AS cat, xpa.vendor_company_id AS vid, xpa.withholding_treatment::text AS treatment,
-          xpa.withholding_rate AS wrate, xpa.purchase_evidence_type::text AS evidence,
+          xpa.withholding_rate AS wrate, xpa.purchase_evidence_type::text AS evidence, coalesce(xpa.cost_total, 0) AS cost,
           to_char(coalesce(xpa.expected_payment_date, xpa.expected_payment_date_auto), 'YYYY-MM-DD') AS expected_payment_date,
           to_char(coalesce(xpa.delivery_date, xpa.delivery_date_auto), 'YYYY-MM-DD') AS delivery_date
         FROM ch JOIN import_row_sources s ON s.module = 'legacy_sale_activation' AND s.row_key = 'progress:' || ch.src
@@ -155,7 +177,8 @@ export const PROG = sql`
         (array_agg(vid ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS vid,
         (array_agg(treatment ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS treatment,
         (array_agg(wrate ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS wrate,
-        (array_agg(evidence ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS evidence
+        (array_agg(evidence ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS evidence,
+        (array_agg(cost ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS cost
       FROM l GROUP BY row_id
     ) act ON act.row_id = legacy_archive_rows.id
     WHERE source_type = 'progress' AND is_effective = true
@@ -432,8 +455,11 @@ export async function collectUnifiedItems(opts: {
         matchStatus = "vendor"; matchedUserId = null; matchedUserName = null; masterEmail = null; masterPhone = null;
         masterKey = r.act_vendor_id != null ? `v:${r.act_vendor_id}` : `n:${r.translator ?? "?"}`;
       }
-      const amt = splitPayAmount({ payeeType, source: "legacy", pretax, posttax,
-        current: r.act_cat ? { category: r.act_cat, treatment: r.act_treatment, rate: r.act_rate, evidence: r.act_evidence } : null });
+      // 현재 수행정보 기준 금액(PROG amount_source='platform')은 플랫폼 계산값으로 분해 — CRM 세금 충돌 판정 대상 아님
+      const fromPlatform = r.amount_source === "platform";
+      const amt = splitPayAmount({ payeeType, source: fromPlatform ? "current" : "legacy", pretax, posttax,
+        withholding: fromPlatform ? (payeeType === "vendor" ? 0 : Math.round((pretax - posttax) * 100) / 100) : null,
+        current: !fromPlatform && r.act_cat ? { category: r.act_cat, treatment: r.act_treatment, rate: r.act_rate, evidence: r.act_evidence } : null });
       // 지급상태(과거 CRM, PROG 판정과 동일) — 지급완료는 납품일 ≤ cutoff(대표 확인)만. 입금내역(고객 수금)은 근거 아님.
       const status: PayStatus = legacyStatus(r);
       const paidBasis: string | null = !r.legacy_paid ? null : r.legacy_paid_confirmed ? `VERITAS OS 지급완료 확인(실제 지급일 ${r.actual_payment_date})` : r.legacy_paid_cutoff ? LEGACY_PAID_BASIS : LEGACY_PAID_BY_ROUND_BASIS;

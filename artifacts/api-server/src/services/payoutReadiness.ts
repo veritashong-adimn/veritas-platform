@@ -21,7 +21,6 @@ import { loadSaleIdentities } from "./saleIdentity";
 import { decrypt } from "../lib/encrypt";
 import { splitPayAmount, type PayeeType } from "../lib/payoutAmount";
 import { isLegacyPlaceholderEmail } from "../lib/mailer";
-import { calcPayoutWithholding } from "@workspace/db";
 
 // 주민등록번호(통번역사 명부 translator_sensitive, AES-256-GCM) — 수행자 ID(users.id) 기준.
 //   full=false: '900101-*******'(생년월일만) / full=true: '900101-1234567'(관리자 전용 경로에서만 호출).
@@ -111,12 +110,14 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
   const base = await rows(dbx, sql`WITH ${PROG}, ${CUR}
     SELECT 'legacy' AS source, prog.id, prog.source_key, prog.translator, prog.client, prog.delivery_date, prog.payout_date,
       prog.actual_payment_date, prog.pretax, prog.posttax, (prog.pretax - prog.posttax) AS withholding, prog.legacy_paid, prog.act_user_id,
-      prog.crm_delivery_date, prog.platform_delivery_date, prog.delivery_mismatch, prog.crm_payout_date, prog.platform_payout_date, prog.payout_mismatch
+      prog.crm_delivery_date, prog.platform_delivery_date, prog.delivery_mismatch, prog.crm_payout_date, prog.platform_payout_date, prog.payout_mismatch,
+      prog.amount_source, prog.crm_pretax, prog.crm_posttax
     FROM prog WHERE ${legacyWhere}
     UNION ALL
     SELECT 'current', cur.id, cur.source_key, cur.translator, cur.client, cur.delivery_date, cur.payout_date,
       cur.actual_payment_date, cur.pretax, cur.posttax, cur.withholding_tax, false, NULL::int,
-      NULL, NULL, false, NULL, NULL, false
+      NULL, NULL, false, NULL, NULL, false,
+      'platform', NULL::numeric, NULL::numeric
     FROM cur WHERE ${curWhere}`);
   const legacyIds = base.filter(b => b.source === "legacy").map(b => Number(b.id));
   const curIds = base.filter(b => b.source === "current").map(b => Number(b.id));
@@ -227,15 +228,12 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
       if (p.cat === "vendor") vendorId = p.vendor_company_id != null ? Number(p.vendor_company_id) : null;
       else masterId = p.individual_user_id != null ? Number(p.individual_user_id) : masterId;
     }
-    // 지급금액 출처: 기본은 집계 행(플랫폼 = 수행정보 / CRM = 원본). CRM 전환 건에서 CRM 원본 지급액이 0원(미기재)이고
-    //   현재 수행정보에 지급액이 등록돼 있으면 수행정보 지급액·세금(공식 지급회차 calcPayoutWithholding 과 같은 계산)을 쓴다.
-    //   (전환 건이 CRM 원본 0원으로만 집계돼 세후 0원·지급액 미입력으로 표시되던 오류 수정 — 판매금액으로 추정하지 않음)
-    let amountSource: "platform" | "crm" | "platform_fallback" = b.source === "current" ? "platform" : "crm";
-    let pretaxV = num(b.pretax), posttaxV = num(b.posttax), withholdingV = num(b.withholding);
-    if (kind === "crm_converted" && p && pretaxV === 0 && num(p.cost_total) > 0) {
-      const t = calcPayoutWithholding(num(p.cost_total), p.cat === "vendor" ? "vendor" : "individual", p.treatment, p.wrate != null ? Number(p.wrate) : null, p.evidence);
-      pretaxV = t.gross; withholdingV = t.deduction; posttaxV = t.net; amountSource = "platform_fallback";
-    }
+    // 지급금액 출처(통합 집계 PROG 와 같은 기준 — 지급회차 통합조회·지급명세서와 일치):
+    //   platform = 플랫폼 수행정보 / platform_fallback = CRM 전환 미지급 건을 현재 수행정보 등록값(외주 공급가+부가세, CRM 0원 건)으로 / crm = CRM 원본
+    const amountSource: "platform" | "crm" | "platform_fallback" = b.source === "current" ? "platform" : b.amount_source === "platform" ? "platform_fallback" : "crm";
+    const pretaxV = num(b.pretax), posttaxV = num(b.posttax);
+    // 원천세: 플랫폼 기준 개인 = 세전−세후, 외주 = 0(부가세는 세후−세전)
+    const withholdingV = b.source === "current" ? num(b.withholding) : amountSource === "platform_fallback" ? (p?.cat === "vendor" ? 0 : Math.round((pretaxV - posttaxV) * 100) / 100) : num(b.withholding);
     const amount = pretaxV;
     const paid = p ? p.payment_status === "paid" : b.legacy_paid === true;
     // 외화 지급(개인 지급통화 외화 / 외주 해외송금 외화 계약) — 외화 금액은 원화 합계와 따로 집계, 원화 송금(IBK) 대상 아님
@@ -284,7 +282,8 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
       add("I", "foreign_pay", `외화 지급 ${payCurrency}${foreignAmount != null ? " " + foreignAmount.toLocaleString("ko-KR", { maximumFractionDigits: 2 }) : ""} — 원화 합계·국내 원화 송금파일 제외(별도 해외송금)`, "해외송금으로 별도 지급");
       if (!(amount > 0)) add("I", "foreign_krw_unconfirmed", "환율 미확정 — 원화 원가·이익률 미확정", "송금 시 적용환율 확인");
     } else if (amount <= 0) add("C", "amount_missing", "지급액 미입력(0원)", "수행정보 지급액 입력(무상이면 사유 기록)");
-    if (amountSource === "platform_fallback") add("I", "amount_from_platform", `CRM 원본 지급액 0원 — 현재 수행정보 지급액(세전 ${Math.round(amount).toLocaleString("ko-KR")}원) 반영`, "수행정보 지급액 확인");
+    if (amountSource === "platform_fallback") add("I", "amount_from_platform",
+      `현재 수행정보 기준 지급액 반영(${p?.cat === "vendor" ? `공급가 ${Math.round(amount).toLocaleString("ko-KR")}원 + 부가세 → 지급합계 ${Math.round(posttaxV).toLocaleString("ko-KR")}원` : `세전 ${Math.round(amount).toLocaleString("ko-KR")}원`}) · CRM 원본 세전 ${Math.round(num(b.crm_pretax)).toLocaleString("ko-KR")}원/세후 ${Math.round(num(b.crm_posttax)).toLocaleString("ko-KR")}원 보존`, "수행정보 등록값 확인");
     if (kind === "crm_converted" && p && amountSource === "crm" && !paid && num(p.cost_total) > 0 && Math.abs(num(p.cost_total) - amount) >= 1)
       add("C", "amount_mismatch", `CRM 원본 지급액(세전 ${Math.round(amount).toLocaleString("ko-KR")}원) ≠ 현재 수행정보 지급액(${Math.round(num(p.cost_total)).toLocaleString("ko-KR")}원)`, "실제 지급액 확인 후 CRM·수행정보 정리");
     if (!dd) add("C", "no_delivery", "납품일 누락", "납품일 입력(원본 확인 — 추정 입력 금지)");
@@ -353,6 +352,8 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
         crmPayout: b.crm_payout_date ?? null, platformPayout: b.platform_payout_date ?? null } : null,
       dateMismatch: b.delivery_mismatch === true || b.payout_mismatch === true || (kind === "platform" && !!p?.crm_delivery && !!dd && p.crm_delivery !== dd),
       pretax: amount, withholding: Math.round(withholdingV * 100) / 100, posttax: Math.round(posttaxV * 100) / 100, amountSource,
+      // CRM 원본 지급액(보존·참고) — 현재 수행정보 기준으로 표시한 전환 건에서 원본과 비교용
+      crmPretax: b.source === "legacy" ? num(b.crm_pretax) : null, crmPosttax: b.source === "legacy" ? num(b.crm_posttax) : null,
       // 지급통화(KRW 기본)·외화 지급금액 — 외화 건은 원화 합계와 별도(foreignTotals), 원화 송금파일 제외
       payCurrency: payCurrency ?? "KRW", foreignAmount,
       // 지급금액 구분(2026-11-23): 개인 = 세전/원천세/세후, 외주업체 = 공급가/부가세/지급합계 — 화면·엑셀·지급명세서 공통

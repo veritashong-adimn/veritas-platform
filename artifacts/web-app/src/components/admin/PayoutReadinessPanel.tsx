@@ -25,6 +25,7 @@ type Item = {
   pretax: number; withholding: number; posttax: number;
   // 지급통화(KRW 기본)·외화 지급금액 — 외화 건은 원화 합계와 별도 집계·원화 송금파일 제외. amountSource: 금액 출처(platform_fallback = CRM 0원 → 수행정보)
   payCurrency?: string; foreignAmount?: number | null; amountSource?: 'platform' | 'crm' | 'platform_fallback';
+  crmPretax?: number | null; crmPosttax?: number | null;   // CRM 원본 지급액(보존·참고)
   // 지급금액 구분(서버 lib/payoutAmount — 지급명세서와 같은 기준): 개인 세전/원천세/세후 · 외주업체 공급가/부가세/지급합계
   payeeType?: 'individual' | 'vendor'; payeeTypeLabel?: string; vendorName?: string | null;
   performerName?: string | null;
