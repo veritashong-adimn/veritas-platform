@@ -229,6 +229,11 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
     const k = normName(c.name); if (k && !vendorByName.has(k)) vendorByName.set(k, { id: Number(c.id), name: String(c.name) });
   }
 
+  // 베리타스 내부용 기록(2026-11-25 대표 결정) — 수행자가 회사 자체(베리타스)이고 지급액 0원인 개인 건은 외부 지급 대상이 아니다.
+  //   지급준비점검(지급일·전체 기간)에서 제외하고 경고를 만들지 않는다. 데이터·이력 보존. 지급액이 있으면 제외하지 않는다(일반 검증).
+  const INTERNAL_PAYEE = "베리타스";
+  const internalIds = new Set((await rows(dbx, sql`SELECT id FROM users WHERE btrim(name) = ${INTERNAL_PAYEE}`)).map(r => Number(r.id)));
+  let excludedInternal = 0;
   const out: any[] = [];
   for (const b of base) {
     const bl: Blocker[] = [];
@@ -315,19 +320,19 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
       add("C", "amount_mismatch", `CRM 원본 지급액(세전 ${Math.round(amount).toLocaleString("ko-KR")}원) ≠ 현재 수행정보 지급액(${Math.round(num(p.cost_total)).toLocaleString("ko-KR")}원)`, "실제 지급액 확인 후 CRM·수행정보 정리");
     if (!dd) add("C", "no_delivery", "납품일 누락", "납품일 입력(원본 확인 — 추정 입력 금지)");
     if (!pd && !paid) add("C", "no_payout_date", amount > 0 ? "지급예정일 누락(지급액 있음)" : "지급예정일 누락", "지급예정일 확인·입력");
-    if (dd && pd && pd < dd) add("C", "date_order", `지급일(${pd})이 납품일(${dd})보다 이름`, "날짜 확인");
+    if (dd && pd && pd < dd) add("I", "date_order", `지급일(${pd})이 납품일(${dd})보다 이름`, "날짜 확인");
     // 날짜 불일치(덮어쓰지 않고 표시): 플랫폼 행 = 연결 CRM 원본 납품일 비교 / CRM 전환 행 = PROG 의 CRM·플랫폼 납품일·지급일 비교(같은 기준)
-    if (kind === "platform" && p?.crm_delivery && dd && p.crm_delivery !== dd) add("C", "date_mismatch", `납품일 불일치(플랫폼 ${dd} ≠ CRM ${p.crm_delivery})`, "실제 납품일 확인");
-    if (b.source === "legacy" && b.delivery_mismatch) add("C", "date_mismatch", `납품일 불일치(CRM ${b.crm_delivery_date} ≠ 플랫폼 ${b.platform_delivery_date})`, "실제 납품일 확인");
-    if (b.source === "legacy" && b.payout_mismatch) add("C", "payout_date_mismatch", `지급예정일 불일치(CRM ${b.crm_payout_date} ≠ 플랫폼 ${b.platform_payout_date})`, "실제 지급예정일 확인");
-    if (scope === "date" && candidate === "delivery_window" && pd && pd !== d) add("C", "window_mismatch", `${win!.from}~${win!.to} 납품인데 지급일 ${pd}`, "지급예정일 확인");
+    if (kind === "platform" && p?.crm_delivery && dd && p.crm_delivery !== dd) add("I", "date_mismatch", `납품일 불일치(플랫폼 ${dd} ≠ CRM ${p.crm_delivery})`, "실제 납품일 확인");
+    if (b.source === "legacy" && b.delivery_mismatch) add("I", "date_mismatch", `납품일 불일치(CRM ${b.crm_delivery_date} ≠ 플랫폼 ${b.platform_delivery_date})`, "실제 납품일 확인");
+    if (b.source === "legacy" && b.payout_mismatch) add("I", "payout_date_mismatch", `지급예정일 불일치(CRM ${b.crm_payout_date} ≠ 플랫폼 ${b.platform_payout_date})`, "실제 지급예정일 확인");
+    if (scope === "date" && candidate === "delivery_window" && pd && pd !== d) add("I", "window_mismatch", `${win!.from}~${win!.to} 납품인데 지급일 ${pd}`, "지급예정일 확인");
     if (kind === "platform" && p && !paid) {
       if (!p.delivery_confirmed) add("C", "no_confirm", "납품확인 미완료", "담당 PM 납품확인");
       if (p.cat === "individual" && p.individual_user_id == null) add("C", "no_payee", "수행자 미연결(통번역사 Master 미지정)", "수행자 지정");
       if (p.cat === "vendor" && p.vendor_company_id == null) add("C", "no_payee", "수행자 미연결(외주업체 미지정)", "외주업체 지정");
       if (p.cat === "individual" && !p.treatment) add("C", "no_tax", "세금처리(원천징수) 미설정", "세금처리 지정");
       if (p.cat === "individual" && p.treatment === "tax_review_required") add("C", "tax_review", "세금처리 '세무 확인 필요' — 원천세 0으로 계산됨", "세율 확정");
-      if (p.cat === "vendor" && p.vendor_settlement_type === "overseas") add("C", "overseas", "해외송금 외주 — IBK 대량이체 제외", "별도 해외송금");
+      if (p.cat === "vendor" && p.vendor_settlement_type === "overseas") add("I", "overseas", "해외송금 외주 — IBK 대량이체 제외", "별도 해외송금");
       if (p.payout_round_id == null) add("I", "no_round", "지급회차 미배정", "지급회차 생성 시 자격 충족하면 자동 포함");
     }
     if (kind !== "platform" && masterId == null && vendorId == null && !paid) add("C", "no_payee", "수행자 미연결(과거 CRM 이름만)", "통번역사 Master 연결 확인");
@@ -351,6 +356,11 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
       }
     } else hasAccount = vendorId != null ? !!vAcct.get(vendorId)?.acct : masterId != null ? !!uAcct.get(masterId)?.acct : false;
 
+    // 베리타스 내부용 0원 기록 — 목록에서 제외(경고 없음)
+    if (payeeType === "individual" && !(amount > 0) && !(foreignAmount != null && foreignAmount > 0)
+      && (normName(b.translator) === normName(INTERNAL_PAYEE) || (masterId != null && internalIds.has(masterId)))) { excludedInternal++; continue; }
+    // 플랫폼 지급보류 — '지급보류'만 표시(금액·납품확인 등 부가 확인사항 숨김). 중복·과거 지급 여부(D) 등 지급 위험 검증은 유지.
+    if (manualHold) for (let i = bl.length - 1; i >= 0; i--) if ((bl[i].cat === "B" || bl[i].cat === "C") && bl[i].code !== "payment_hold") bl.splice(i, 1);
     const roundEligible = kind === "platform" && !!p && !payCurrency && p.payment_status === "unpaid" && p.has_delivery && p.delivery_confirmed && num(p.cost_total) > 0
       && ((p.cat === "individual" && p.individual_user_id != null && !!p.treatment) || (p.cat === "vendor" && p.vendor_company_id != null));
     const cats = new Set(bl.filter(x => x.cat !== "I").map(x => x.cat));
@@ -382,10 +392,9 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
         const rr = rawRowFromRecord(raw, "진행관리", 0);
         return rr.productName || rr.content || null;
       })(),
-      performerName: payeeType === "vendor" ? (() => {
-        const n = String((b.source === "legacy" ? b.translator : (p?.crm_translator ?? b.translator)) ?? "").trim();
-        return n && normName(n) !== normName(p?.vendor_name) ? n : null;
-      })() : null,
+      // 외주업체 건 실제 수행자: 수행정보에 연결된 수행자 Master 만(이름은 아래 명부 조회). CRM 원본 이름만으로 수행자를 판단하지 않는다.
+      //   외주업체 담당자(vendorContactName)는 외주업체 명부의 대표 담당자 기준(아래).
+      performerName: null, performerUserId: payeeType === "vendor" && p?.individual_user_id != null ? Number(p.individual_user_id) : null,
       deliveryDate: dd, payoutDate: pd, actualPaymentDate: b.actual_payment_date ?? null,
       // 날짜 출처(추가 필드): CRM 원본·플랫폼 값과 불일치 여부 — 화면·엑셀 공통
       dateSource: b.source === "legacy" ? { crmDelivery: b.crm_delivery_date ?? null, platformDelivery: b.platform_delivery_date ?? null,
@@ -441,7 +450,7 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
           FROM unnest(ARRAY[${inList(uIds)}]::int[]) AS i) x JOIN users u ON u.id = x.cid`)).map(r => [Number(r.id), r]));
   const vContact = new Map((await rows(dbx, sql`SELECT c.id,
       coalesce(nullif(btrim(c.phone), ''), nullif(btrim(c.mobile), ''), nullif(btrim(k.mobile), ''), nullif(btrim(k.phone), ''), nullif(btrim(k.office_phone), '')) AS phone,
-      coalesce(nullif(btrim(c.email), ''), nullif(btrim(k.email), '')) AS email
+      coalesce(nullif(btrim(c.email), ''), nullif(btrim(k.email), '')) AS email, nullif(btrim(k.name), '') AS contact_name
     FROM companies c LEFT JOIN LATERAL (SELECT * FROM contacts t WHERE t.company_id = c.id AND t.deleted_at IS NULL
       ORDER BY t.is_primary DESC, (coalesce(btrim(t.email), '') <> '' OR coalesce(btrim(t.mobile), '') <> '' OR coalesce(btrim(t.phone), '') <> '') DESC, t.id LIMIT 1) k ON true
     WHERE c.id IN (${inList(vIds)})`)).map(r => [Number(r.id), r]));
@@ -452,12 +461,19 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
   const pRoster = new Map((await rows(dbx, sql`SELECT x.id, nullif(btrim(tp.language_pairs), '') AS langs, nullif(btrim(tp.bio), '') AS detail
     FROM (SELECT i AS id, coalesce((SELECT m.representative_master_id FROM translator_merges m WHERE m.merged_master_id = i AND m.status = 'active' LIMIT 1), i) AS cid
           FROM unnest(ARRAY[${inList(pIds)}]::int[]) AS i) x JOIN translator_profiles tp ON tp.user_id = x.cid`)).map(r => [Number(r.id), r]));
+  const perfIds = [...new Set(out.map(o => o.performerUserId).filter((v: unknown) => v != null))] as number[];
+  const pName = new Map((await rows(dbx, sql`SELECT x.id, nullif(btrim(u.name), '') AS name
+    FROM (SELECT i AS id, coalesce((SELECT m.representative_master_id FROM translator_merges m WHERE m.merged_master_id = i AND m.status = 'active' LIMIT 1), i) AS cid
+          FROM unnest(ARRAY[${inList(perfIds)}]::int[]) AS i) x JOIN users u ON u.id = x.cid AND u.deleted_at IS NULL`)).map(r => [Number(r.id), r.name as string | null]));
   const cleanEmail = (e: unknown) => { const s = String(e ?? "").trim(); return s && !isLegacyPlaceholderEmail(s) ? s : null; };
   for (const o of out) {
     const c = o.vendorId != null ? vContact.get(o.vendorId) : o.masterId != null ? uContact.get(o.masterId) : null;
     o.payeePhone = c?.phone ?? null; o.payeeEmail = cleanEmail(c?.email);
     const pr = o.performerMasterId != null ? pRoster.get(o.performerMasterId) : null;
     o.payeeLanguages = pr?.langs ?? null; o.payeeDetail = pr?.detail ?? null;
+    // 외주업체 담당자(외주업체 명부 대표 담당자) · 실제 수행자(수행정보 연결 Master 의 현재 명부 이름)
+    o.vendorContactName = o.vendorId != null ? (vContact.get(o.vendorId)?.contact_name ?? null) : null;
+    if (o.performerUserId != null) o.performerName = pName.get(o.performerUserId) ?? null;
     // 이름: 개인 수행자가 Master(삭제되지 않은, 통합 시 대표)에 연결돼 있으면 현재 명부 이름 우선. CRM 원본·수행정보 스냅샷 이름은 이력(sourcePayeeName)으로 보존.
     o.sourcePayeeName = null;
     if (o.vendorId == null && c?.name && !c.deleted && c.name !== String(o.payee ?? "").trim()) { o.sourcePayeeName = o.payee ?? null; o.payee = c.name; }
@@ -471,7 +487,7 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
   const issueCounts: Record<string, number> = {};
   for (const o of out) for (const b of o.blockers) issueCounts[b.code] = (issueCounts[b.code] ?? 0) + 1;
   return {
-    scope, payoutDate: scope === "date" ? d : null, deliveryWindow: win, today, items: out, excludedPrepaid, excludedByDecision,
+    scope, payoutDate: scope === "date" ? d : null, deliveryWindow: win, today, items: out, excludedPrepaid, excludedByDecision, excludedInternal,
     summary: { total: sum(out), foreignTotals: foreignTotalsOf(out), byState: by(x => x.state), byKind: by(x => x.kind), byCandidate: by(x => x.candidate),
       roundEligible: sum(out.filter(x => x.roundEligible)), duplicates: out.filter(x => x.blockers.some((b: Blocker) => b.code.startsWith("dup_"))).length, issueCounts },
   };

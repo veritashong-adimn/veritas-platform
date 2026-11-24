@@ -543,6 +543,17 @@ export async function collectUnifiedItems(opts: {
     }
   }
 
+  // ── 베리타스 내부용 0원 기록 제외(지급준비점검과 같은 기준, 2026-11-25 대표 결정) ──
+  //   수행자가 회사 자체(베리타스)인 개인 건 중 지급액 0원만. 외부 지급 대상 아님 → 지급회차 조회·명세서·연결 확인 경고에서 제외(데이터 보존).
+  {
+    const nz = (v: unknown) => String(v ?? "").replace(/\s/g, "");
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it: any = items[i];
+      if (it.payeeType === "vendor" || it.pretax !== 0 || it.posttax !== 0) continue;
+      if (nz(it.originalTranslator ?? it.translator) === "베리타스" || nz(it.translator) === "베리타스") items.splice(i, 1);
+    }
+  }
+
   // ── 중복 의심(§9) — 과거↔신규 교차. 동일 (Master, 납품일, 세전반올림, 거래처) → 양쪽 dup_suspect. 자동 삭제/제외 없음.
   const dupIndex = new Map<string, { legacy: number[]; current: number[] }>();
   items.forEach((it, idx) => {
