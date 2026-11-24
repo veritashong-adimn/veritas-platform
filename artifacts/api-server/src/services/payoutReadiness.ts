@@ -230,11 +230,11 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
     const k = normName(c.name); if (k && !vendorByName.has(k)) vendorByName.set(k, { id: Number(c.id), name: String(c.name) });
   }
 
-  // 베리타스 내부용 기록(2026-11-25 대표 결정) — 수행자가 회사 자체(베리타스)이고 지급액 0원인 개인 건은 외부 지급 대상이 아니다.
-  //   지급준비점검(지급일·전체 기간)에서 제외하고 경고를 만들지 않는다. 데이터·이력 보존. 지급액이 있으면 제외하지 않는다(일반 검증).
+  // 베리타스 명의 0원 기록(2026-11-25 대표 결정, 조회 복원) — 수행자가 회사 자체(베리타스)이고 지급액 0원인 미지급 개인 건은
+  //   목록에 그대로 표시하되 '지급액 없음'(무료 리시버와 같은 정상 0원)으로 두고 누락·확인필요 경고를 만들지 않는다.
+  //   실제 지급회차(지급액 > 0 조건)·송금 대상이 아닌 것은 기존과 같다. 지급액이 있는 건·지급완료 기록은 일반 기준 그대로.
   const INTERNAL_PAYEE = "베리타스";
   const internalIds = new Set((await rows(dbx, sql`SELECT id FROM users WHERE btrim(name) = ${INTERNAL_PAYEE}`)).map(r => Number(r.id)));
-  let excludedInternal = 0;
   const out: any[] = [];
   for (const b of base) {
     const bl: Blocker[] = [];
@@ -357,9 +357,13 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
       }
     } else hasAccount = vendorId != null ? !!vAcct.get(vendorId)?.acct : masterId != null ? !!uAcct.get(masterId)?.acct : false;
 
-    // 베리타스 내부용 0원 기록 — 목록에서 제외(경고 없음)
-    if (payeeType === "individual" && !(amount > 0) && !(foreignAmount != null && foreignAmount > 0)
-      && (normName(b.translator) === normName(INTERNAL_PAYEE) || (masterId != null && internalIds.has(masterId)))) { excludedInternal++; continue; }
+    // 베리타스 명의 0원 미지급 기록 — '지급액 없음'(경고 없음). 참고(I) 사유만 남긴다.
+    const internalZero = !paid && payeeType === "individual" && !(amount > 0) && !(foreignAmount != null && foreignAmount > 0)
+      && (normName(b.translator) === normName(INTERNAL_PAYEE) || (masterId != null && internalIds.has(masterId)));
+    if (internalZero) {
+      for (let i = bl.length - 1; i >= 0; i--) if (bl[i].cat !== "I") bl.splice(i, 1);
+      add("I", "internal_zero", "지급액 없음 — 베리타스 명의 0원 기록(외부 지급·송금 대상 아님)", "송금 제외");
+    }
     // 무료 제공 확인 0원(대표 확인) — 정상 0원 수행정보: 과거 지급 여부 확인·지급액 미입력 경고 없음(지급할 금액이 없음)
     if (freeService) for (let i = bl.length - 1; i >= 0; i--) if (["legacy_review", "crm_unconfirmed", "overdue", "amount_missing"].includes(bl[i].code)) bl.splice(i, 1);
     // 플랫폼 지급보류 — '지급보류'만 표시(금액·납품확인 등 부가 확인사항 숨김). 중복·과거 지급 여부(D) 등 지급 위험 검증은 유지.
@@ -370,7 +374,7 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
     // 지급상태 표시는 세금·구분 확인 사유(tax_conflict·payee_type_check)로 바꾸지 않는다(상태 자동 변경 금지) — 점검 분류(state)에만 반영
     const payCats = new Set(bl.filter(x => x.cat !== "I" && x.code !== "tax_conflict" && x.code !== "payee_type_check").map(x => x.cat));
     const payDisplay: PayDisplay = paid ? "paid"
-      : freeService ? "no_amount"
+      : (freeService || internalZero) ? "no_amount"
       : manualHold ? "hold"
       : (kind === "crm_only" || p?.payment_status === "payment_hold" || bl.some(x => x.code.startsWith("dup_"))) ? "review"
       : (payCats.has("B") || payCats.has("C")) ? "prep" : "scheduled";
@@ -490,7 +494,7 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
   const issueCounts: Record<string, number> = {};
   for (const o of out) for (const b of o.blockers) issueCounts[b.code] = (issueCounts[b.code] ?? 0) + 1;
   return {
-    scope, payoutDate: scope === "date" ? d : null, deliveryWindow: win, today, items: out, excludedPrepaid, excludedByDecision, excludedInternal,
+    scope, payoutDate: scope === "date" ? d : null, deliveryWindow: win, today, items: out, excludedPrepaid, excludedByDecision,
     summary: { total: sum(out), foreignTotals: foreignTotalsOf(out), byState: by(x => x.state), byKind: by(x => x.kind), byCandidate: by(x => x.candidate),
       roundEligible: sum(out.filter(x => x.roundEligible)), duplicates: out.filter(x => x.blockers.some((b: Blocker) => b.code.startsWith("dup_"))).length, issueCounts },
   };

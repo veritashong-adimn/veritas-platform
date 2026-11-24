@@ -266,7 +266,9 @@ export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (
                           {g.name}
                           {/* 연결(검증상태) — 지급상태와 무관(§1·§3). Master 연결된 건(active/confirmed)은 배지 없음.
                               거래처/업체는 개인 Master 대상이 아니므로 '거래처'로만 표시. 이름만 존재·미연결 개인만 '연결 확인필요'. */}
-                          {!g.confirmed && (g.matchStatus === 'vendor' || g.matchStatus === 'client')
+                          {!g.confirmed && g.matchStatus === 'internal'
+                            ? <span style={{ marginLeft: 5, fontSize: 10, color: '#475569', background: '#f1f5f9', padding: '1px 5px', borderRadius: 7 }} title="베리타스 명의 0원 기록 — 지급액 없음(송금 대상 아님)">지급액 없음</span>
+                            : !g.confirmed && (g.matchStatus === 'vendor' || g.matchStatus === 'client')
                             ? <span style={{ marginLeft: 5, fontSize: 10, color: '#475569', background: '#f1f5f9', padding: '1px 5px', borderRadius: 7 }} title="거래처/외주업체 — 개인 통번역사 Master 연결 대상이 아님">거래처</span>
                             : !g.confirmed
                               ? <span style={{ marginLeft: 5, fontSize: 10, color: '#1d4ed8', background: '#eff6ff', padding: '1px 5px', borderRadius: 7 }} title="검증상태: Master 연결 미확정(지급상태와 무관). 이름만 일치는 자동 연결하지 않음.">연결 확인필요</span>

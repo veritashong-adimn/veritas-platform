@@ -267,7 +267,7 @@ export function PayoutStatementSearchTab({ token, onToast }: { token: string; on
                         {s.name}
                         {s.payeeType === 'vendor' && <span data-testid={`ps-vendor-${s.key}`} style={{ marginLeft: 5, fontSize: 10, color: '#7c3aed', background: '#f5f3ff', padding: '1px 5px', borderRadius: 7 }}>외주업체</span>}
                         {homonyms.has(s.name) && <span style={{ marginLeft: 5, fontSize: 10, color: '#6d28d9', background: '#f5f3ff', padding: '1px 5px', borderRadius: 7 }} title="동명이인 — 통번역사 고유 ID로 구분">{s.matchedUserId != null ? `ID ${s.matchedUserId}` : '미연결'}</span>}
-                        {!s.confirmed && <span style={{ marginLeft: 5, fontSize: 10, color: '#1d4ed8', background: '#eff6ff', padding: '1px 5px', borderRadius: 7 }} title="Master 연결 미확정(이름 기준 표시)">{s.matchStatus === 'vendor' || s.matchStatus === 'client' ? '거래처' : '연결 확인필요'}</span>}
+                        {!s.confirmed && <span style={{ marginLeft: 5, fontSize: 10, color: '#1d4ed8', background: '#eff6ff', padding: '1px 5px', borderRadius: 7 }} title="Master 연결 미확정(이름 기준 표시)">{s.matchStatus === 'internal' ? '지급액 없음' : s.matchStatus === 'vendor' || s.matchStatus === 'client' ? '거래처' : '연결 확인필요'}</span>}
                       </td>
                       <td style={{ ...td, color: '#6b7280', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }} title={s.email ?? undefined}>{s.email ?? ''}</td>
                       <td style={td}>{s.payoutDate ?? <span style={{ color: '#b45309', fontWeight: 700 }}>지급일 미확인</span>}</td>
