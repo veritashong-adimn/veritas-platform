@@ -75,6 +75,7 @@ interface PayRow {
   _paidAuto?: boolean;    // 세금계산서 발행일 입력으로 청구금액이 자동 입력된 상태(미확인)
   _legacyPaid?: boolean;  // 입금기록 없이 기존 방식으로 입금완료 확정된 회차(보호 — 입금기록 신규 생성 안 함)
   _customType?: boolean;  // 결제구분 '직접입력' 선택(명칭 입력 중)
+  _advRate?: string;      // 선금 비율(%) 입력값(일반결제 선금 행) — 저장 시 deposit_item '선금비율:N'
   _cardFee?: string; _cardRate?: string;   // 카드결제 첫 입금: 카드사 수수료·수수료율 입력(실제 입금액은 _paidAmt)   // 첫 외화 입금: 적용환율(입력 단위)·은행확인 원화액·수수료·실제 입금일
 }
 
@@ -146,10 +147,26 @@ const payTypeKey = (r: { paymentType?: string | null; depositItem?: string | nul
   const it = (r.depositItem ?? '').trim();
   return it === ITEM_VAT ? 'vat' : it === ITEM_SUPPLY ? 'supply' : (!it || it === ITEM_TOTAL) ? 'other' : 'custom';
 };
+// 선금 비율(2026-11) — 스키마 변경 없이 일반결제 선금 행의 deposit_item 에 '선금비율:50' 형식으로 저장.
+//  · 비율 미입력(기존 선금 행 포함)은 deposit_item '전체금액' 그대로 → 표시 '선금'(기존과 동일). 비율은 표시·청구금액 계산 보조용일 뿐
+//    청구·입금·미수금 계산은 기존대로 amount 기준이며, 선금 등록만으로 입금확인하지 않는다.
+const ADV_RATE_PREFIX = '선금비율:';
+const parseAdvRateInput = (s: string | null | undefined): number | null => {
+  const t = String(s ?? '').trim();
+  if (!/^\d{1,3}(\.\d{1,2})?$/.test(t)) return null;
+  const n = Number(t);
+  return n > 0 && n <= 100 ? n : null;
+};
+const advRateOf = (r: { paymentType?: string | null; depositItem?: string | null }): number | null => {
+  if (r.paymentType !== 'advance') return null;
+  const it = (r.depositItem ?? '').trim();
+  return it.startsWith(ADV_RATE_PREFIX) ? parseAdvRateInput(it.slice(ADV_RATE_PREFIX.length)) : null;
+};
 const payTypeLabel = (r: { paymentType?: string | null; depositItem?: string | null; _customType?: boolean }): string => {
   const k = payTypeKey(r);
   if (k === 'custom') return (r.depositItem ?? '').trim() || '직접입력';
   if (k === 'other') return '기타';
+  if (k === 'advance') { const rate = advRateOf(r); if (rate != null) return `선금(${rate}%)`; }
   return PAY_TYPE_UI_OPTS.find(o => o.value === k)?.label ?? '—';
 };
 const DEPOSIT_ITEM_OPTS = [{ value: ITEM_SUPPLY, label: '공급가액' }, { value: ITEM_VAT, label: '부가세' }, { value: ITEM_TOTAL, label: '전체금액' }];
@@ -367,6 +384,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     supplyAmount: r.supplyAmount ?? '', vatAmount: r.vatAmount ?? '', amount: r.amount ?? '',
     depositStatus: r.depositStatus ?? 'scheduled', depositConfirmed: r.depositConfirmed ?? false,
     paymentCategory: r.paymentCategory ?? CAT_GENERAL, payer: r.payer ?? null, depositItem: r.depositItem ?? null,
+    _advRate: (() => { const v = advRateOf(r); return v != null ? String(v) : ''; })(),
     billingCompanyId: r.billingCompanyId ?? null, billingCompanyName: r.billingCompanyName ?? null,
     billingContactId: r.billingContactId ?? null, billingContactName: r.billingContactName ?? null,
     note: r.note ?? '',
@@ -473,7 +491,20 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     else if (key === 'supply') patchRow(i, { paymentType: 'other', depositItem: ITEM_SUPPLY, _customType: false });
     else if (key === 'custom') patchRow(i, { paymentType: 'other', depositItem: payTypeKey(r) === 'custom' ? r.depositItem : '', _customType: true });
     else if (key === 'other') patchRow(i, { paymentType: 'other', depositItem: ITEM_TOTAL, _customType: false });
-    else patchRow(i, { paymentType: key, depositItem: defItem, _customType: false });
+    else patchRow(i, { paymentType: key, depositItem: defItem, _customType: false, _advRate: '' });
+  };
+  // 선금 비율 입력(일반결제) — 유효(0 초과 100 이하)하면 청구금액 = 총 판매금액(VAT 포함) × 비율 / 100(원 단위 반올림),
+  //  공급가·부가세는 청구금액 입력과 같은 규칙으로 역산. 비우거나 범위 밖이면 금액은 그대로 두고 비율 저장 안 함('전체금액').
+  const patchAdvRate = (i: number, v: string) => {
+    const s = v.replace(/[^\d.]/g, '').slice(0, 6);
+    const rate = parseAdvRateInput(s);
+    setRows(prev => prev.map((r, idx) => {
+      if (idx !== i) return r;
+      const next: PayRow = { ...r, _advRate: s, depositItem: rate != null ? `${ADV_RATE_PREFIX}${rate}` : ITEM_TOTAL };
+      if (rate == null) return next;
+      const amt = Math.round(num(saleTotal) * rate / 100);
+      return { ...next, ...amountsFromTotal(String(amt), zeroVatSale || isZeroVatMethod(r.paymentMethod)) };
+    }));
   };
   // 세금계산서 발행일 → 입금액 자동입력(청구금액, 붉은색·미확인). 실제 입금기록·기존 확인값은 덮어쓰지 않는다. 발행일만으로는 입금 처리 안 함.
   const patchIssue = (i: number, v: string) => setRows(prev => prev.map((r, idx) => {
@@ -525,6 +556,8 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     if (busy) return;
     const noLabel = rows.findIndex(r => payTypeKey(r) === 'custom' && !(r.depositItem ?? '').trim());
     if (noLabel >= 0) { onToast(`${noLabel + 1}회차: 직접입력 결제구분 명칭을 입력하세요.`); return; }
+    const badRate = category === CAT_GENERAL ? rows.findIndex(r => payTypeKey(r) === 'advance' && (r._advRate ?? '').trim() !== '' && parseAdvRateInput(r._advRate) == null) : -1;
+    if (badRate >= 0) { onToast(`${badRate + 1}회차: 선금 비율은 0 초과 100 이하로 입력하세요(소수점 2자리까지).`); return; }
     setBusy(true);
     try {
       const isVoucherSave = category === CAT_VOUCHER;
@@ -884,6 +917,13 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
                   options={payTypeKey(r) === 'other' ? [...PAY_TYPE_UI_OPTS, { value: 'other', label: '기타' }] : PAY_TYPE_UI_OPTS} />
                 {payTypeKey(r) === 'custom' && <input style={inp} value={r.depositItem ?? ''} placeholder="결제구분 명칭" maxLength={50}
                   onChange={e => patchRow(i, { depositItem: e.target.value, _customType: true })} data-testid={`pay-type-label-${i}`} aria-label="결제구분 직접입력" />}
+                {payTypeKey(r) === 'advance' && !voucher && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <input style={{ ...inp, textAlign: 'right' }} inputMode="decimal" value={r._advRate ?? ''} placeholder="비율"
+                      onChange={e => patchAdvRate(i, e.target.value)} data-testid={`pay-adv-rate-${i}`} aria-label="선금 비율(%)" />
+                    <span style={{ fontSize: 12, color: '#6b7280' }}>%</span>
+                  </div>
+                )}
               </div>
             : <span data-testid={`pay-type-text-${i}`}>{payTypeLabel(r)}</span>}
         </td>
