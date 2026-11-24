@@ -49,6 +49,13 @@ const STATUS_LABEL: Record<string, string> = { unpaid: '미지급', payment_hold
 const payLabel = (r: Item) => r.payDisplayLabel ?? STATUS_LABEL[r.paymentStatus] ?? r.paymentStatus;
 const PAY_COLOR: Record<string, string> = { paid: '#15803d', review: '#b45309', prep: '#b91c1c', scheduled: '#1d4ed8' };
 const won = (n: number) => Math.round(n || 0).toLocaleString('ko-KR');
+// Excel 연락처 — 숫자만 있는 국내 휴대전화(010·011·016·017·018·019)만 하이픈 적용(01090444203 → 010-9044-4203).
+//   해외 번호·이미 형식이 있는 번호·마스킹 번호(*)는 그대로. 셀은 문자열로 출력(앞자리 0 유지).
+const excelPhone = (v: string | null | undefined): string => {
+  const t = String(v ?? '').trim();
+  if (!/^01[016789]\d{7,8}$/.test(t)) return t;
+  return t.length === 11 ? `${t.slice(0, 3)}-${t.slice(3, 7)}-${t.slice(7)}` : `${t.slice(0, 3)}-${t.slice(3, 6)}-${t.slice(6)}`;
+};
 const isFx = (r: Item) => !!r.payCurrency && r.payCurrency !== 'KRW';
 const fxAmt = (cur: string, v: number | null | undefined) => v == null ? `${cur} 미입력` : `${cur} ${v.toLocaleString('ko-KR', { minimumFractionDigits: cur === 'JPY' ? 0 : 2, maximumFractionDigits: 2 })}`;
 const isVendor = (r: Item) => r.payeeType === 'vendor';
@@ -112,24 +119,24 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast }: {
         { header: '판매번호', value: (r) => r.saleNo ?? r.quoteNumber ?? '', width: 16 },
         { header: '프로젝트', value: (r) => r.projectTitle ?? '', width: 22 },
         // 고객 판매금액(판매건 단위) — 지급금액과 혼동되지 않게 '판매' 표기
-        { header: '판매 공급가(고객)', value: (r) => amt(r, 'supply'), type: 'number', width: 14 },
-        { header: '판매 부가세(고객)', value: (r) => amt(r, 'vat'), type: 'number', width: 13 },
-        { header: '판매 총액(고객)', value: (r) => amt(r, 'total'), type: 'number', width: 14 },
+        { header: '공급가', value: (r) => amt(r, 'supply'), type: 'number', width: 14 },
+        { header: '부가세', value: (r) => amt(r, 'vat'), type: 'number', width: 13 },
+        { header: '총액', value: (r) => amt(r, 'total'), type: 'number', width: 14 },
         { header: '통번역사·외주업체', value: (r) => r.payee ?? '', width: 16 },
         { header: '언어', value: (r) => r.payeeLanguages ?? '', width: 18 },
         { header: '상세정보', value: (r) => r.payeeDetail ?? '', width: 30 },
-        { header: '연락처', value: (r) => r.payeePhone ?? '', width: 15 },
+        { header: '연락처', value: (r) => excelPhone(r.payeePhone), width: 15 },   // 문자열 셀(앞자리 0 유지)
         { header: '이메일', value: (r) => r.payeeEmail ?? '', width: 24 },
         { header: '주민등록번호', value: (r) => rrn(r), width: 16 },
         { header: '납품일', value: (r) => r.deliveryDate ?? '', width: 11 },
         { header: '지급예정일', value: (r) => r.payoutDate ?? '', width: 11 },
-        { header: '[개인 지급] 세전', value: (r) => indiv(r, 'pretax'), type: 'number', width: 13 },
-        { header: '[개인 지급] 원천세', value: (r) => indiv(r, 'withholding'), type: 'number', width: 13 },
-        { header: '[개인 지급] 세후', value: (r) => indiv(r, 'posttax'), type: 'number', width: 13 },
-        { header: '[외주 지급] 공급가', value: (r) => vend(r, 'supply'), type: 'number', width: 13 },
-        { header: '[외주 지급] 부가세', value: (r) => vend(r, 'vat'), type: 'number', width: 13 },
-        { header: '[외주 지급] 지급합계', value: (r) => vend(r, 'payTotal'), type: 'number', width: 14 },
-        { header: '지급금액(송금액)', value: (r) => (isFx(r) ? '' : (r.payAmount?.payTotal ?? r.posttax)), type: 'number', width: 14 },
+        { header: '세전', value: (r) => indiv(r, 'pretax'), type: 'number', width: 13 },
+        { header: '원천세', value: (r) => indiv(r, 'withholding'), type: 'number', width: 13 },
+        { header: '세후', value: (r) => indiv(r, 'posttax'), type: 'number', width: 13 },
+        { header: '외주 공급가', value: (r) => vend(r, 'supply'), type: 'number', width: 13 },
+        { header: '외주 부가세', value: (r) => vend(r, 'vat'), type: 'number', width: 13 },
+        { header: '외주 합계', value: (r) => vend(r, 'payTotal'), type: 'number', width: 14 },
+        { header: '최종 지급액', value: (r) => (isFx(r) ? '' : (r.payAmount?.payTotal ?? r.posttax)), type: 'number', width: 14 },
         // 지급통화(KRW 기본)·외화 지급금액 — 외화 건은 원화 합계와 별도, 국내 원화 송금파일 제외. 환율 미확정 원화 원가는 확정값 아님.
         { header: '지급통화', value: (r) => r.payCurrency ?? 'KRW', width: 8 },
         { header: '외화 지급금액', value: (r) => (isFx(r) ? (r.foreignAmount ?? '') : ''), type: 'number', width: 13 },
