@@ -21,6 +21,7 @@ import { loadSaleIdentities } from "./saleIdentity";
 import { decrypt } from "../lib/encrypt";
 import { splitPayAmount, type PayeeType } from "../lib/payoutAmount";
 import { isLegacyPlaceholderEmail } from "../lib/mailer";
+import { rawRowFromRecord } from "../routes/pastWorkImport";
 
 // 주민등록번호(통번역사 명부 translator_sensitive, AES-256-GCM) — 수행자 ID(users.id) 기준.
 //   full=false: '900101-*******'(생년월일만) / full=true: '900101-1234567'(관리자 전용 경로에서만 호출).
@@ -134,13 +135,14 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
     SELECT r.id AS row_id, coalesce(
       (SELECT rl.entity_id FROM legacy_master_mappings rl WHERE rl.source_system = 'old_crm' AND rl.entity_type = 'translator_row' AND rl.status <> 'rolled_back' AND rl.legacy_id = 'progress:' || r.id LIMIT 1),
       (SELECT m.entity_id FROM legacy_master_mappings m WHERE m.source_system = 'old_crm' AND m.entity_type = 'translator' AND m.status <> 'rolled_back' AND btrim(m.legacy_id) = btrim(r.source_raw->>'통번역사명') LIMIT 1)) AS master_id,
-      (SELECT s.source_raw->>'판매번호' FROM legacy_sales_progress_links l JOIN legacy_archive_rows s ON s.id = l.sale_row_id AND s.is_effective WHERE l.progress_row_id = r.id AND l.decision = 'confirmed' ORDER BY s.id DESC LIMIT 1) AS sale_no
+      (SELECT s.source_raw->>'판매번호' FROM legacy_sales_progress_links l JOIN legacy_archive_rows s ON s.id = l.sale_row_id AND s.is_effective WHERE l.progress_row_id = r.id AND l.decision = 'confirmed' ORDER BY s.id DESC LIMIT 1) AS sale_no,
+      r.source_raw AS source_raw
     FROM legacy_archive_rows r WHERE r.id IN (${inList(legacyIds)})`)).map(r => [Number(r.row_id), r]));
 
   // ③ 플랫폼 수행정보(현재 행 + 전환 행) — 공식 지급회차 자격조건과 같은 항목 + 전환 원본 납품일(불일치 확인)
   const paIds = [...curIds, ...[...lin.values()].map(l => Number(l.pa_id)).filter(Boolean)];
   const pa = new Map((await rows(dbx, sql`
-    SELECT pa.id, pa.project_id, p.title AS project_title, pa.performer_category::text AS cat, pa.individual_user_id, pa.vendor_company_id,
+    SELECT pa.id, pa.project_id, p.title AS project_title, pa.product_name_snapshot AS product_name, pa.performer_category::text AS cat, pa.individual_user_id, pa.vendor_company_id,
       pa.payment_status::text AS payment_status, pa.status::text AS work_status, pa.payout_round_id,
       pa.delivery_date IS NOT NULL AS has_delivery, pa.delivery_confirmed, coalesce(pa.cost_total, 0) AS cost_total,
       pa.withholding_treatment::text AS treatment, pa.vendor_settlement_type, pa.withholding_rate AS wrate, pa.purchase_evidence_type::text AS evidence,
@@ -342,6 +344,14 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
       // 지급 대상(payee): 외주업체 지급 건은 외주업체 Master 명으로 통일(판매건·출처 무관). 실제 수행자(performerName)는 따로 표시 —
       //   CRM 전환·원본 = CRM 통번역사명, 플랫폼 = 연결 CRM 원본 통번역사명 › 수행자명 스냅샷. 업체명과 같으면 공란.
       payee: payeeType === "vendor" && p?.vendor_name ? p.vendor_name : b.translator,
+      // 상품·업무(엑셀 전용) — 판매상세 C. 수행정보 '상품·업무' 원문 그대로(플랫폼·CRM 전환 = 현재 수행정보).
+      //   CRM 원본만 있는 건 = 원본 진행관리 행의 상품명 › 내용(전환 시 수행정보 상품·업무와 같은 기준). 요약·생략 없음, 없으면 null.
+      productWork: p ? (p.product_name ?? null) : (() => {
+        const raw = legacyMaster.get(Number(b.id))?.source_raw;
+        if (!raw || typeof raw !== "object") return null;
+        const rr = rawRowFromRecord(raw, "진행관리", 0);
+        return rr.productName || rr.content || null;
+      })(),
       performerName: payeeType === "vendor" ? (() => {
         const n = String((b.source === "legacy" ? b.translator : (p?.crm_translator ?? b.translator)) ?? "").trim();
         return n && normName(n) !== normName(p?.vendor_name) ? n : null;
