@@ -9,7 +9,7 @@
 //   · Current/Legacy 쿼리를 독립 실행(try/catch) → 부분 실패 격리. degraded 시 가짜 total 만들지 않는다.
 //   · Current Master 생성/mapping 없음. 날짜/금액/상태 추측 없음.
 import { Router, type IRouter } from "express";
-import { activatedSaleExists } from "../services/legacyActivationLineage";
+import { convertedSaleExists, supersededCancelledConvertedSaleIds } from "../services/legacyActivationLineage";
 import { RESTORE_MODULE, restoredCustomerNameOfProject } from "../services/legacyContactRestore";
 import { db, legacyArchiveRowsTable, legacySalesProgressLinksTable } from "@workspace/db";
 import { eq, and, or, ilike, gte, lte, count, desc, sql, type SQL } from "drizzle-orm";
@@ -121,6 +121,29 @@ function mapCurrentRow(p: any): SalesHistoryRow {
     paymentStatus: null,
   };
 }
+// 판매취소된 과거 CRM 전환 판매 — 최초 계약금액(원본 CRM 판매목록 총액) 보존 표시.
+//   취소 후 승인대기 견적이 수정(재견적)되어 현재 견적 합계가 원본 총액과 달라진 경우에만 원본 총액으로 표시한다
+//   (같으면 견적 품목의 공급가·부가세 구분을 그대로 유지). 원본·견적 데이터는 변경하지 않는다(조회 표시만).
+async function fillCancelledOriginalAmounts(dbx: any, list: SalesHistoryRow[]) {
+  const targets = list.filter(r => r.source === "current" && r.workflowStatus === "cancelled" && r.origin === "legacy_crm" && r.saleNumber);
+  if (!targets.length) return;
+  const nos = [...new Set(targets.map(r => String(r.saleNumber)))];
+  const rows = (await dbx.execute(sql`SELECT DISTINCT ON (source_raw->>'판매번호') source_raw->>'판매번호' AS no,
+      coalesce(total_amount, nullif(regexp_replace(coalesce(source_raw->>'총액', ''), '[^0-9.-]', '', 'g'), '')::numeric) AS total
+    FROM legacy_archive_rows WHERE source_type = 'sales_list' AND is_effective = true
+      AND source_raw->>'판매번호' IN (${sql.join(nos.map(n => sql`${n}`), sql`, `)})
+    ORDER BY source_raw->>'판매번호', id DESC`)).rows as any[];
+  const byNo = new Map(rows.map(x => [String(x.no), toNum(x.total)]));
+  for (const r of targets) {
+    const orig = byNo.get(String(r.saleNumber));
+    if (orig == null) continue;
+    const cur = r.totalAmount ?? r.amount;
+    if (cur != null && Math.abs(cur - orig) < 1) continue;
+    r.amount = orig; r.totalAmount = orig;
+    r.supplyAmount = null; r.vatAmount = null; r.vatMode = "unknown";
+  }
+}
+
 // 담당PM 표시명(내부 직원 admin/staff) — 화면의 관리자 목록에 없는 직원 PM 도 표시되도록 current 행에 채운다(additive).
 async function fillPmNames(dbx: any, list: SalesHistoryRow[]) {
   const ids = [...new Set(list.map(r => r.adminId).filter((v): v is number => v != null))];
@@ -324,8 +347,10 @@ function mapLegacyRow(r: any): SalesHistoryRow {
 //   superseded 과거 version 은 통합목록에서 제외(중복 방지). Current Sales schema/데이터는 불변.
 function legacyWhere(q: Record<string, string | undefined>): SQL {
   const conds: SQL[] = [eq(LA.sourceType, "sales_list"), eq(LA.isEffective, true),
-    // 운영 판매건으로 전환된 판매번호는 current 행 1건으로만 표시(중복 표시 방지). 전환 판매가 취소되면 다시 과거 행으로 표시.
-    sql`NOT ${activatedSaleExists(sql`${LA.sourceRaw} ->> '판매번호'`)}`];
+    // 운영 판매건으로 전환된 판매번호는 current 행 1건으로만 표시(중복 표시 방지).
+    //   전환 판매가 판매취소되어도 원본 CRM 행을 정상 과거 판매로 다시 노출하지 않는다 — 취소된 운영 판매(취소 표시) 1건으로 표시.
+    //   과거 CRM 으로 원복(매핑 rolled_back)된 판매는 기존대로 원본 행 표시.
+    sql`NOT ${convertedSaleExists(sql`${LA.sourceRaw} ->> '판매번호'`)}`];
   if (q.search?.trim() || q.q?.trim()) {
     const term = likeTerm((q.search || q.q || "").trim());
     const orExpr = or(ilike(LA.companyName, term), ilike(LA.contactName, term), ilike(LA.productName, term),
@@ -386,20 +411,42 @@ export async function getSalesHistory(dbx: any, q: Record<string, string | undef
       //  (변경견적 보관용 project·삭제된 견적의 project 가 판매번호·금액 없는 행으로 섞이던 문제 방지).
       //  status 필터를 명시한 경우는 기존과 동일하게 그 필터를 따른다(buildFilteredSalesProjectList 규칙).
       q = { ...q, salesOnly: "true" };
-      const list = await buildFilteredSalesProjectList(q);
-      currentRows = (list as any[]).map(mapCurrentRow);
+      // [전체자료] 판매취소 건도 조회 — 일반 판매취소·과거 CRM 전환 판매취소 공통 기준(붉은색 '취소' 표시는 화면):
+      //   ① 유효 견적(현재 유효본·미삭제)이 남아 있는 판매만 — 판매번호·최초 계약금액이 있는 실제 판매취소 건.
+      //      견적 단계에서 정리된 프로젝트(견적 삭제 후 남은 프로젝트·테스트 정리·과거 CRM 원복)는 판매가 아니므로 제외.
+      //   ② 중복 방지 — 같은 원본 판매번호에 살아 있는 전환 판매나 더 최신의 취소 전환 판매가 있으면 제외,
+      //      그리고 아래에서 판매번호가 같은 정상 판매가 있으면 취소 행을 숨긴다(판매번호당 1건).
+      //   Current 전용 필터·상태 필터가 있으면 기존 규칙 그대로(취소 건 기본 제외).
+      const showCancelled = effRange === "all" && !forcedCurrentOnly && q.includeCancelled !== "true";
+      const superseded = showCancelled ? await supersededCancelledConvertedSaleIds(dbx) : new Set<number>();
+      if (showCancelled) q = { ...q, includeCancelled: "true" };
+      const keepRow = (p: any) => !showCancelled || p.status !== "cancelled"
+        || (p.quoteStatus != null && !superseded.has(Number(p.id)));
+      const list = (await buildFilteredSalesProjectList(q) as any[]).filter(keepRow);
+      currentRows = list.map(mapCurrentRow);
       // 판매번호 검색 — 기존 검색(판매명=프로젝트명·거래처·담당자 등) 결과에 판매번호/견적번호/원본 판매번호 일치 판매를 더한다(전체 대상, 페이지 분할 전).
       const term = (q.search || q.q || "").trim();
       let extra: SalesHistoryRow[] = [];
       if (term) {
         const seen = new Set(currentRows.map(r => Number(r.id)));
         extra = ((await buildFilteredSalesProjectList({ ...q, search: undefined, q: undefined })) as any[])
-          .filter(p => !seen.has(Number(p.id))).map(mapCurrentRow);
+          .filter(keepRow).filter(p => !seen.has(Number(p.id))).map(mapCurrentRow);
       }
       const idMap = await loadSaleIdentities(dbx, [...currentRows, ...extra].map(r => Number(r.id)));
       if (extra.length) currentRows = [...currentRows, ...extra.filter(r => saleIdentityMatches(idMap.get(Number(r.id)), term))];
       quoteIdByProject = fillSaleDates(currentRows, idMap);
       await markLegacyOrigin(dbx, currentRows);   // 과거 CRM 전환 판매는 원본 판매번호 날짜 유지(기존 규칙)
+      if (showCancelled) {
+        // 판매번호 기준 중복 방지(공통) — 정상 판매와 같은 판매번호의 취소 행은 숨기고, 취소 행끼리는 최신 1건만.
+        const liveNos = new Set(currentRows.filter(r => r.workflowStatus !== "cancelled" && r.saleNumber).map(r => String(r.saleNumber)));
+        const seenCancelled = new Set<string>();
+        currentRows = [...currentRows].sort((a, b) => Number(b.id) - Number(a.id)).filter(r => {
+          if (r.workflowStatus !== "cancelled" || !r.saleNumber) return true;
+          const no = String(r.saleNumber);
+          if (liveNos.has(no) || seenCancelled.has(no)) return false;
+          seenCancelled.add(no); return true;
+        });
+      }
       await fillPmNames(dbx, currentRows);
       sources.current = { ok: true, count: currentRows.length };
     } catch (e: any) {
@@ -462,6 +509,7 @@ export async function getSalesHistory(dbx: any, q: Record<string, string | undef
   // 현재 페이지의 current 판매만 청구정보(발행일·입금) 조회 — 실패해도 목록은 표시(해당 칸 '-')
   try { await fillBillingInfo(dbx, pageRows.filter(r => r.source === "current")); } catch (e) { console.error("sales-history 청구정보 조회 실패", e); }
   try { await fillProductNames(dbx, pageRows.filter(r => r.source === "current"), quoteIdByProject); } catch (e) { console.error("sales-history 상품 요약 조회 실패", e); }
+  try { await fillCancelledOriginalAmounts(dbx, pageRows); } catch (e) { console.error("sales-history 취소 판매 원 계약금액 조회 실패", e); }
 
   return {
     rows: pageRows,

@@ -562,13 +562,22 @@ export const FINANCIAL_STATUS_LABEL: Record<string, string> = {
   billed:     "청구 완료",
   receivable: "미수금",
   paid:       "입금 완료",
+  sale_cancelled: "판매취소(청구 무효)",   // 표시 전용 — financialStatusDisplayKey
 };
 export const FINANCIAL_STATUS_STYLE: Record<string, React.CSSProperties> = {
   unbilled:   { background: "#f3f4f6", color: "#6b7280" },
   billed:     { background: "#eff6ff", color: "#2563eb" },
   receivable: { background: "#fef3c7", color: "#b45309" },
   paid:       { background: "#f0fdf4", color: "#15803d" },
+  // 표시 전용 — 판매취소 건(DB financial_status 는 변경하지 않음)
+  sale_cancelled: { background: "#fef2f2", color: "#dc2626" },
 };
+// 청구 상태 표시 키 — 판매취소 건은 저장된 청구 상태(예: 전환 당시 'billed')를 정상 청구건처럼 보이지 않게 '판매취소'로 표시.
+//   실제 금융 이력·DB 값은 변경하지 않는 화면 표시 규칙.
+export function financialStatusDisplayKey(projectStatus: string | null | undefined, financialStatus: string | null | undefined): string {
+  if (projectStatus === "cancelled") return "sale_cancelled";
+  return financialStatus ?? "unbilled";
+}
 export const STATUS_STYLE: Record<string, React.CSSProperties> = {
   // 프로젝트 상태
   created:     { background: "#f3f4f6", color: "#6b7280" },

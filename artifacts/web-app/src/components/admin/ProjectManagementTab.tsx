@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { formatDisplayDate } from '../../lib/dateFormat';
 import {
   api, User, AdminProject, AdminUser, AdminCustomer, Company, Contact,
-  STATUS_LABEL, FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE,
+  STATUS_LABEL, FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE, financialStatusDisplayKey,
 } from '../../lib/constants';
 import { StatusBadge, Card, PrimaryBtn, GhostBtn, FilterPill, ClickSelect } from '../ui';
 import { bulkBtnStyle } from './product/productShared';
@@ -1205,7 +1205,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
                             {/* 입금현황 */}
                             <td style={{ ...tableTd }}>
                               {(() => {
-                                const fs = p.financialStatus ?? "unbilled";
+                                const fs = financialStatusDisplayKey(p.status, p.financialStatus);   // 판매취소 건은 '판매취소' 표시(DB 값 불변)
                                 const fStyle = FINANCIAL_STATUS_STYLE[fs] ?? { background: "#f3f4f6", color: "#6b7280" };
                                 return (
                                   <span style={{ ...fStyle, fontSize: 10, fontWeight: 700, borderRadius: 6, padding: "2px 6px", display: "inline-block" }}>

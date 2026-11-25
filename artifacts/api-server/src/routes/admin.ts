@@ -955,9 +955,16 @@ router.get("/admin/projects/:id/performance-summary", ...adminGuard, async (req,
       .reduce((s, r) => s + num(r.costTotal), 0);
     const actualCostBasis = paidCost;
 
+    // 판매취소 건 — 유효 매출 0원, 실제 발생 원가는 그대로 → 손익 = 0 − 원가, 수익률은 계산하지 않음(null → 화면 '—').
+    //   견적·품목·원가 데이터는 변경하지 않는다(조회 계산만). 최초 판매 공급가액은 originalSaleSupplyAmount 로 함께 제공.
+    const [projRow] = await db.select({ status: projectsTable.status }).from(projectsTable).where(eq(projectsTable.id, projectId));
+    const saleCancelled = projRow?.status === "cancelled";
+    const originalSaleSupplyAmount = saleSupplyAmount;
+    if (saleCancelled) saleSupplyAmount = 0;
+
     const estimatedProfit = saleSupplyAmount - totalCost;
     const actualProfit    = saleSupplyAmount - actualCostBasis;
-    const rate = (profit: number) => (saleSupplyAmount > 0 ? Math.round((profit / saleSupplyAmount) * 1000) / 10 : 0);
+    const rate = (profit: number): number | null => (saleCancelled ? null : saleSupplyAmount > 0 ? Math.round((profit / saleSupplyAmount) * 1000) / 10 : 0);
     const r0 = (n: number) => Math.round(n);
 
     res.json({
@@ -977,6 +984,8 @@ router.get("/admin/projects/:id/performance-summary", ...adminGuard, async (req,
       profit: {
         saleSupplyAmount: r0(saleSupplyAmount),
         saleSupplyBasis,
+        saleCancelled,
+        originalSaleSupplyAmount: r0(originalSaleSupplyAmount),
         totalCost: r0(totalCost),
         basePerformanceFeeTotal: r0(basePerformanceFeeTotal),
         expenseTotal: r0(expenseTotal),

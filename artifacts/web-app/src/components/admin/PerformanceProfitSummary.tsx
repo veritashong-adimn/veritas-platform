@@ -24,8 +24,10 @@ interface Summary {
     saleSupplyAmount: number; totalCost: number; basePerformanceFeeTotal: number;
     /** 공급가액 기준: items(현재 품목) | legacy_crm(과거 CRM 원본 공급가액) | legacy_unverified(과거 CRM 전환·공급가/부가세 미확인) */
     saleSupplyBasis?: 'items' | 'legacy_crm' | 'legacy_unverified';
-    expenseTotal: number; deductionTotal: number; estimatedProfit: number; estimatedMarginRate: number;
-    paidCost: number; actualProfit: number; actualMarginRate: number;
+    expenseTotal: number; deductionTotal: number; estimatedProfit: number; estimatedMarginRate: number | null;
+    paidCost: number; actualProfit: number; actualMarginRate: number | null;
+    /** 판매취소 건 — 유효 매출 0원·손익 = 0 − 원가·수익률 null('—'). originalSaleSupplyAmount = 최초 판매 공급가액(참고) */
+    saleCancelled?: boolean; originalSaleSupplyAmount?: number;
   };
 }
 
@@ -66,6 +68,8 @@ export default function PerformanceProfitSummary({ projectId, token, refreshKey 
   if (!data) return null;
   const { header, profit } = data;
   const profitColor = (n: number) => (n >= 0 ? C.successText : C.dangerText);
+  // 수익률 표시 — 판매취소(null)는 '—'
+  const pct = (v: number | null | undefined) => (v == null ? '—' : `${v}%`);
 
   return (
     <div style={{ marginTop: SP[6], display: 'flex', flexDirection: 'column', gap: SP[4] }}>
@@ -95,7 +99,7 @@ export default function PerformanceProfitSummary({ projectId, token, refreshKey 
             <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'baseline', gap: 4, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
               <span style={TYPO.helper}>예상이익</span>
               <span style={{ ...TYPO.inputValue, fontWeight: 800, color: profitColor(profit.estimatedProfit) }}>{won(profit.estimatedProfit)}원</span>
-              <span style={{ ...TYPO.helper, color: profitColor(profit.estimatedProfit) }}>({profit.estimatedMarginRate}%)</span>
+              <span style={{ ...TYPO.helper, color: profitColor(profit.estimatedProfit) }}>({pct(profit.estimatedMarginRate)})</span>
             </span>
           )}
         </button>
@@ -104,11 +108,16 @@ export default function PerformanceProfitSummary({ projectId, token, refreshKey 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: SP[6], padding: `${SP[4]}px ${SP[5]}px` }}>
           {/* 예상 */}
           <div>
-            {profitRow('총 판매 공급가액', `${won(profit.saleSupplyAmount)}원`)}
-            {profit.saleSupplyBasis === 'legacy_crm' && (
+            {profitRow(profit.saleCancelled ? '유효 판매 공급가액' : '총 판매 공급가액', `${won(profit.saleSupplyAmount)}원`, profit.saleCancelled ? { color: C.dangerText } : undefined)}
+            {profit.saleCancelled && (
+              <p style={{ margin: '2px 0 6px', fontSize: 11, color: '#dc2626' }} data-testid="profit-sale-cancelled">
+                판매취소 — 유효 매출 0원(최초 판매 공급가액 {won(profit.originalSaleSupplyAmount ?? 0)}원). 실제 발생 원가만 손익에 반영합니다.
+              </p>
+            )}
+            {!profit.saleCancelled && profit.saleSupplyBasis === 'legacy_crm' && (
               <p style={{ margin: '2px 0 6px', fontSize: 11, color: '#6b7280' }} data-testid="profit-supply-basis-legacy">과거 CRM 원본 공급가액 기준(판매 품목은 부가세 포함 총액 — 정정 전)</p>
             )}
-            {profit.saleSupplyBasis === 'legacy_unverified' && (
+            {!profit.saleCancelled && profit.saleSupplyBasis === 'legacy_unverified' && (
               <p style={{ margin: '2px 0 6px', fontSize: 11, color: '#b45309' }} data-testid="profit-supply-basis-unverified">과거 CRM 전환 — 공급가·부가세 구분 미확인(부가세 포함 총액일 수 있음)</p>
             )}
             {profitRow('기본 수행료 합계', `${won(profit.basePerformanceFeeTotal)}원`)}
@@ -117,7 +126,7 @@ export default function PerformanceProfitSummary({ projectId, token, refreshKey 
             {profitRow('총 수행원가', `${won(profit.totalCost)}원`, { strong: true })}
             <div style={{ borderTop: BD.grid, marginTop: 4, paddingTop: 4 }}>
               {profitRow('예상이익', `${won(profit.estimatedProfit)}원`, { strong: true, color: profitColor(profit.estimatedProfit) })}
-              {profitRow('예상이익률', `${profit.estimatedMarginRate}%`, { color: profitColor(profit.estimatedProfit) })}
+              {profitRow('예상이익률', pct(profit.estimatedMarginRate), { color: profit.estimatedMarginRate == null ? C.textSecondary : profitColor(profit.estimatedProfit) })}
             </div>
           </div>
           {/* 실제(지급완료 기준) */}
@@ -125,7 +134,7 @@ export default function PerformanceProfitSummary({ projectId, token, refreshKey 
             {profitRow('지급완료 원가', `${won(profit.paidCost)}원`)}
             <div style={{ borderTop: BD.grid, marginTop: 4, paddingTop: 4 }}>
               {profitRow('실제이익', `${won(profit.actualProfit)}원`, { strong: true, color: profitColor(profit.actualProfit) })}
-              {profitRow('실제이익률', `${profit.actualMarginRate}%`, { color: profitColor(profit.actualProfit) })}
+              {profitRow('실제이익률', pct(profit.actualMarginRate), { color: profit.actualMarginRate == null ? C.textSecondary : profitColor(profit.actualProfit) })}
             </div>
             <div style={{ ...TYPO.helper, marginTop: SP[3] }}>
               ※ 실제이익은 지급완료된 원가만 반영합니다.

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { chainStatusMap, QUOTE_CHAIN_STATUS_LABEL, QUOTE_CHAIN_STATUS_COLOR, QUOTE_CHAIN_STATUS_TITLE } from '../../lib/quoteChainStatus';
 import './readTableView.css';
-import { api, ProjectDetail, MatchCandidate, getActionLabel, COMM_TYPE_LABEL, COMM_TYPE_COLOR, STATUS_LABEL, PROJECT_STATUS_TRANSITIONS, ALL_FINANCIAL_STATUSES, FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE, AdminUser, BOARD_CATEGORY_LABEL, Product } from '../../lib/constants';
+import { api, ProjectDetail, MatchCandidate, getActionLabel, COMM_TYPE_LABEL, COMM_TYPE_COLOR, STATUS_LABEL, PROJECT_STATUS_TRANSITIONS, ALL_FINANCIAL_STATUSES, FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE, financialStatusDisplayKey, AdminUser, BOARD_CATEGORY_LABEL, Product } from '../../lib/constants';
 import { StatusBadge, PrimaryBtn, GhostBtn, ClickSelect, NumericInput, confirmDialog } from '../ui';
 import { ReviewMemoPanel } from './ReviewMemoPanel';
 import { DraggableModal } from './DraggableModal';
@@ -1071,7 +1071,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
               })()}
               {/* ── 재무 상태 — 읽기 전용 요약 배지 (상세 수정은 결제 탭에서) ── */}
               {(() => {
-                const fs = detail.financialStatus ?? "unbilled";
+                const fs = financialStatusDisplayKey(detail.status, detail.financialStatus);   // 판매취소 건은 '판매취소' 표시(DB 값 불변)
                 const fStyle = FINANCIAL_STATUS_STYLE[fs] ?? { background: "#f3f4f6", color: "#6b7280" };
                 const quotePrice = detail.quotes.length > 0
                   ? Number((detail.quotes[0] as any).price ?? (detail.quotes[0] as any).amount ?? 0)
@@ -1092,7 +1092,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                     <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 6, fontWeight: 700, background: fStyle.background as string, color: fStyle.color as string }}>
                       {FINANCIAL_STATUS_LABEL[fs]}
                     </span>
-                    {unpaid != null && unpaid > 0 && (
+                    {/* 판매취소 건은 견적금액 기준 미수금을 표시하지 않는다(유효 매출 없음) */}
+                    {fs !== "sale_cancelled" && unpaid != null && unpaid > 0 && (
                       <>
                         <span style={{ fontSize: 10, color: "#d1d5db" }}>|</span>
                         <span style={{ fontSize: 11, color: "#dc2626" }}>

@@ -172,6 +172,8 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
                     {r.recordDate ?? '-'}
                     {/* 과거 CRM 에서 운영 전환된 판매건 — 출처 표시(목록에는 운영 판매 1건만 표시) */}
                     {r.origin === 'legacy_crm' && <span style={{ marginLeft: 6, padding: '1px 5px', borderRadius: 4, background: '#fef3c7', color: '#92400e', fontSize: 10, fontWeight: 700 }} data-testid={`sh-origin-${r.key}`}>과거 CRM</span>}
+                    {/* 판매취소 — 판매번호·최초 계약금액은 그대로 표시, 취소 상태만 붉은색으로 구분 */}
+                    {!isLegacy && r.workflowStatus === 'cancelled' && <span style={{ marginLeft: 6, padding: '1px 5px', borderRadius: 4, background: '#fef2f2', color: '#dc2626', fontSize: 10, fontWeight: 700 }} data-testid={`sh-cancelled-${r.key}`} aria-label="판매취소">취소</span>}
                   </td>
                   {/* 판매번호 — 클릭 시 해당 판매 상세(행 클릭과 같은 경로: current=판매 ID, 과거 CRM=원본 행 ID). 이름·금액으로 연결하지 않음. */}
                   <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}

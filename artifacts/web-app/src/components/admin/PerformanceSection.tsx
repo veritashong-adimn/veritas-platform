@@ -45,11 +45,12 @@ interface Props {
   onToast: (msg: string) => void;
   projectAdminId?: number | null;   // 프로젝트 담당 PM(납품확인 권한 §9)
   saleMeta?: PerformanceExportMeta; // Excel Export 용 판매 메타(견적번호·거래처·프로젝트명·담당PM). read-only.
+  saleCancelled?: boolean;          // 판매취소 건 — 유효 매출 0원이므로 행별 수익률을 계산하지 않는다('—'). 원가·지급 데이터는 그대로.
 }
 
 type SortKey = 'deliveryDate' | 'expectedPaymentDate' | 'costTotal' | null;
 
-export default function PerformanceSection({ projectId, token, performances, onChanged, onToast, projectAdminId, saleMeta }: Props) {
+export default function PerformanceSection({ projectId, token, performances, onChanged, onToast, projectAdminId, saleMeta, saleCancelled = false }: Props) {
   const authH = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
   // 현재 사용자(납품확인 권한 판정 §9) — JWT payload 디코드(id·role). 서버가 최종 강제.
   const currentUser = useMemo(() => {
@@ -878,6 +879,8 @@ export default function PerformanceSection({ projectId, token, performances, onC
     if (r.performerCategory === 'vendor' && r.vendorSettlementType === 'overseas' && String(r.contractCurrency || 'USD').toUpperCase() !== 'KRW') profit = null;
     // 개인 외화 지급 — 환율이 없어 원화 원가가 확정되지 않으므로 수익률을 확정값처럼 표시하지 않는다.
     if (indivForeign(r)) profit = null;
+    // 판매취소 건 — 유효 매출 0원(판매 공급가액 스냅샷 기준 100% 등 오표시 방지)
+    if (saleCancelled) profit = null;
     const cat = r.performerCategory;
     const isIndiv = cat === 'individual';
     // 유형별 금액 컬럼 분기(§2·§9·§11) — 개인 통역/번역만 신규 구조 적용. 외주·경비·장비는 기존 표시 유지.
@@ -1217,7 +1220,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
           </div>
         </td>
         {/* 수익률%(§4·§5) — (공급가액 − 세전원가합계) ÷ 공급가액 × 100. 계산불가/미입력은 '—'. 적자(음수)만 붉은색(과도한 강조 없음 §13). */}
-        <td style={{ ...tdR, width: 92 }} data-testid={`perf-profit-${i}`} title={profit == null ? '판매 공급가액 없음 또는 원가 미입력 — 계산불가' : '(판매 공급가액 − 세전 수행원가 합계) ÷ 판매 공급가액'}>
+        <td style={{ ...tdR, width: 92 }} data-testid={`perf-profit-${i}`} title={profit == null ? (saleCancelled ? '판매취소 — 유효 매출 0원, 수익률 계산 안 함' : '판매 공급가액 없음 또는 원가 미입력 — 계산불가') : '(판매 공급가액 − 세전 수행원가 합계) ÷ 판매 공급가액'}>
           {profit == null
             ? muted
             : <span style={{ fontWeight: 600, color: profit < 0 ? C.danger : C.textPrimary }}>{profit.toFixed(1)}%</span>}

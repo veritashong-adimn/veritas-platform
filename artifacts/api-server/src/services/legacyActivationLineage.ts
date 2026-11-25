@@ -12,6 +12,27 @@ export function activatedSaleExists(saleNoExpr: any) {
     WHERE lsm.source_system = ${SRC} AND lsm.entity_type = ${ENTITY} AND lsm.status = 'active' AND lsm.legacy_id = ${saleNoExpr})`;
 }
 
+// 운영 판매로 전환된(매핑 active) 판매번호인지 — 전환 판매의 취소 여부와 무관.
+//   판매관리 목록 표시용: 전환 후 판매취소된 건은 원본 CRM 행이 아니라 운영 판매(취소 표시) 1건으로만 보여준다.
+//   (과거 CRM 으로 원복된 판매 = 매핑 rolled_back 은 해당 없음 → 원본 행 표시 유지)
+export function convertedSaleExists(saleNoExpr: any) {
+  return sql`EXISTS (SELECT 1 FROM legacy_master_mappings csm JOIN projects csp ON csp.id = csm.entity_id
+    WHERE csm.source_system = ${SRC} AND csm.entity_type = ${ENTITY} AND csm.status = 'active' AND csm.legacy_id = ${saleNoExpr})`;
+}
+
+// 판매관리 목록에서 숨길 '대체된' 취소 전환 판매 ID — 같은 원본 판매번호(매핑 active)에
+//   취소되지 않은 전환 판매가 있거나, 더 최신의 취소 전환 판매가 있는 경우(판매번호당 1건만 표시 — 중복 방지).
+export async function supersededCancelledConvertedSaleIds(dbx: any): Promise<Set<number>> {
+  const r = (await dbx.execute(sql`SELECT m.entity_id AS id
+    FROM legacy_master_mappings m JOIN projects p ON p.id = m.entity_id AND p.status = 'cancelled'
+    WHERE m.source_system = ${SRC} AND m.entity_type = ${ENTITY} AND m.status = 'active'
+      AND (${activatedSaleExists(sql`m.legacy_id`)}
+        OR EXISTS (SELECT 1 FROM legacy_master_mappings m2 JOIN projects p2 ON p2.id = m2.entity_id AND p2.status = 'cancelled'
+          WHERE m2.source_system = ${SRC} AND m2.entity_type = ${ENTITY} AND m2.status = 'active'
+            AND m2.legacy_id = m.legacy_id AND m2.entity_id > m.entity_id))`)).rows as any[];
+  return new Set(r.map(x => Number(x.id)));
+}
+
 
 // '과거 지급 확인 필요'(관리자 확인 전) 수행정보인지 — 이 건의 지급보류는 일반 수정으로 해제할 수 없다.
 export async function isPendingPayoutReview(dbx: any, assignmentId: number): Promise<boolean> {

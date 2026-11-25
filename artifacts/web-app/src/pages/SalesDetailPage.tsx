@@ -539,6 +539,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
             onChanged={() => fetchDetail({ silent: true })}
             onToast={setToast}
             projectAdminId={project.adminId ?? null}
+            saleCancelled={project.status === 'cancelled'}
             saleMeta={{
               quoteNumber: quote?.quoteNumber ?? '',
               companyName: companyName ?? '',

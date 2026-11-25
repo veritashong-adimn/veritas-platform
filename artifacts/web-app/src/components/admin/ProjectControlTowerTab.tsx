@@ -2,7 +2,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import './readTableView.css';
 import { formatWon } from "@/lib/utils";
-import { api, FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE } from "../../lib/constants";
+import { api, FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE, financialStatusDisplayKey } from "../../lib/constants";
 import { StatusBadge, confirmDialog } from "../ui";
 import { formatDisplayDate } from "../../lib/dateFormat";
 
@@ -253,9 +253,9 @@ export function ProjectControlTowerTab({
             <StatusBadge status={project.status} />
             <span style={{
               padding: "3px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600,
-              ...(FINANCIAL_STATUS_STYLE[project.financialStatus] ?? { background: "#f3f4f6", color: "#6b7280" }),
+              ...(FINANCIAL_STATUS_STYLE[financialStatusDisplayKey(project.status, project.financialStatus)] ?? { background: "#f3f4f6", color: "#6b7280" }),
             }}>
-              {FINANCIAL_STATUS_LABEL[project.financialStatus] ?? project.financialStatus}
+              {FINANCIAL_STATUS_LABEL[financialStatusDisplayKey(project.status, project.financialStatus)] ?? project.financialStatus}
             </span>
           </div>
         </div>
