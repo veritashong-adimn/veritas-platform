@@ -13,7 +13,10 @@ export type PayoutReviewItem = {
   assignmentId: number; performerName: string | null; costTotal: number | null; originalPreTax: number | null;
   expectedPaymentDate?: string | null; payDate?: string | null; suggestedPaidAmount?: number | null;
   payoutDisplay?: 'paid' | 'scheduled' | 'review' | null;
+  // 외화 지급(수행정보 지급통화·외화 지급금액) — 원화 지급 건은 null
+  payCurrency?: string | null; foreignAmount?: number | null;
 };
+const isForeign = (p?: PayoutReviewItem) => !!p?.payCurrency && p.payCurrency !== 'KRW';
 const won = (v: number | null | undefined) => (v == null ? '-' : `${Math.round(v).toLocaleString()}원`);
 const kstToday = () => new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
 const inp: React.CSSProperties = { fontSize: 12, padding: '3px 6px', border: '1px solid #e5e7eb', borderRadius: 6, fontFamily: 'inherit' };
@@ -23,10 +26,14 @@ export function LegacyPayoutReviewPanel({ projectId, token, items, onToast, onDo
   onUnpaid: (assignmentId: number) => void; busyId: number | null;
 }) {
   const today = kstToday();
-  const dueOf = (p: PayoutReviewItem) => p.expectedPaymentDate ?? p.payDate ?? null;
-  // 실제 지급일 기본값 = 지급예정일(이미 지난 경우만), 지급액 기본값 = 제안값(CRM 세후 → 세후 예상액). 담당자가 확인·수정
+  // 실제 지급일 기본값 = 과거 CRM 원본 지급일(확인된 기존 지급일 기록) › 없으면 지급예정일 — 이미 지난 경우만. 담당자가 확인·수정
+  //   지급액 기본값 = 제안값(CRM 세후 → 세후 예상액)
+  const dueOf = (p: PayoutReviewItem) => p.payDate ?? p.expectedPaymentDate ?? null;
   const [form, setForm] = useState<Record<number, { date: string; amount: string }>>(() =>
-    Object.fromEntries(items.map(p => { const d = dueOf(p); return [p.assignmentId, { date: d && d <= today ? d : '', amount: p.suggestedPaidAmount != null ? String(p.suggestedPaidAmount) : '' }]; })));
+    Object.fromEntries(items.map(p => { const d = dueOf(p);
+      // 외화 지급 건 = 수행정보 외화 지급금액이 기본값(원화 제안값 사용 안 함)
+      const amount = isForeign(p) ? (p.foreignAmount != null ? String(p.foreignAmount) : '') : p.suggestedPaidAmount != null ? String(p.suggestedPaidAmount) : '';
+      return [p.assignmentId, { date: d && d <= today ? d : '', amount }]; })));
   const [sel, setSel] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState(false);
   const [failures, setFailures] = useState<Array<{ assignmentId: number; error: string }>>([]);
@@ -39,14 +46,18 @@ export function LegacyPayoutReviewPanel({ projectId, token, items, onToast, onDo
   const [dialog, setDialog] = useState<PaidConfirmLine[] | null>(null);
   const confirmPaid = (ids: number[]) => {
     if (!ids.length) { onToast('지급완료 확인할 건을 선택하세요.'); return; }
-    setDialog(ids.map(id => ({ id, name: byId.get(id)?.performerName ?? null, date: f(id).date, amount: f(id).amount })));
+    setDialog(ids.map(id => { const p = byId.get(id);
+      // 외화 지급 건은 0원 건이 아니다 — 외화 금액·통화로 확인
+      const foreign = isForeign(p);
+      const zeroOk = !!p && !foreign && !(Number(p.costTotal ?? 0) > 0) && !(Number(p.originalPreTax ?? 0) > 0);
+      return { id, name: p?.performerName ?? null, date: f(id).date, amount: f(id).amount || (zeroOk ? '0' : ''), zeroOk, currency: foreign ? p!.payCurrency! : 'KRW' }; }));
   };
   const savePaid = async ({ lines, evidence }: { lines: PaidConfirmLine[]; evidence: string }) => {
     setBusy(true); setFailures([]);
     try {
       const r = await fetch(api(`/api/admin/projects/${projectId}/legacy-payout-review/bulk`), {
         method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason: evidence, items: lines.map(l => ({ assignmentId: l.id, actualPaymentDate: l.date, actualPaymentAmount: Number(l.amount.replace(/,/g, '')) })) }),
+        body: JSON.stringify({ reason: evidence, items: lines.map(l => ({ assignmentId: l.id, actualPaymentDate: l.date, actualPaymentAmount: Number(l.amount.replace(/,/g, '')), actualPaymentCurrency: l.currency ?? 'KRW' })) }),
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { onToast(`지급완료 확인 실패: ${d.error ?? r.status}`); return; }
@@ -86,12 +97,14 @@ export function LegacyPayoutReviewPanel({ projectId, token, items, onToast, onDo
               data-testid={`chk-legacy-payout-${p.assignmentId}`} aria-label={`${p.performerName ?? p.assignmentId} 선택`} />
             <span style={{ minWidth: 90 }}>{p.performerName ?? '-'}</span>
             <span style={{ padding: '1px 7px', borderRadius: 999, background: st.bg, color: st.c, fontWeight: 700 }} data-testid={`legacy-payout-status-${p.assignmentId}`}>{st.t}</span>
-            <span>원가 {won(p.costTotal)}</span>
+            {isForeign(p)
+              ? <span data-testid={`legacy-payout-foreign-${p.assignmentId}`} style={{ fontWeight: 700, color: '#1d4ed8' }}>외화 지급 {p.payCurrency} {p.foreignAmount != null ? p.foreignAmount.toLocaleString('ko-KR', { maximumFractionDigits: 2 }) : '미입력'}</span>
+              : <span>원가 {won(p.costTotal)}</span>}
             <span style={{ color: '#6b7280' }}>지급예정일 {due ?? '없음'}</span>
             <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>실제 지급일
               <DateField value={f(p.assignmentId).date} max={today} onChange={v => setF(p.assignmentId, { date: v })} style={inp}
                 testid={`input-legacy-paid-date-${p.assignmentId}`} ariaLabel={`${p.performerName ?? ''} 실제 지급일`} /></span>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>실제 지급액
+            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>실제 지급액{isForeign(p) ? `(${p.payCurrency})` : ''}
               <input value={f(p.assignmentId).amount} onChange={e => setF(p.assignmentId, { amount: e.target.value.replace(/[^0-9.,]/g, '') })} style={{ ...inp, width: 96, textAlign: 'right' }}
                 data-testid={`input-legacy-paid-amount-${p.assignmentId}`} aria-label={`${p.performerName ?? ''} 실제 지급액`} /></span>
             <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>

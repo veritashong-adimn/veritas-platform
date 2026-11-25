@@ -40,6 +40,8 @@ export type DetailRow = {
   paidBasis: string | null;
   conversion?: ConversionInfo; conversionEligible?: boolean;
   languageSource?: 'original' | 'master' | null; masterLanguages?: string | null;
+  payCurrency?: string | null; foreignAmount?: number | null;   // 외화 지급(원화 합계와 별도)
+  withholdingTreatment?: string | null; withholdingRate?: number | null;   // 수행정보 세금처리 유형(명세서 표기용)
 };
 export type PayeeGroup = {
   masterKey: string; name: string; confirmed: boolean; matchStatus: string; matchedUserId: number | null;
@@ -47,6 +49,7 @@ export type PayeeGroup = {
   pretaxTotal: number; posttaxTotal: number; withholdingImplied: number; payeeType?: 'individual' | 'vendor'; vatTotal?: number;
   paidPretax: number; unpaidPretax: number; paidCount: number; unpaidCount: number; needReviewCount: number; dupSuspectCount: number; sources: string[];
   scheduledCount?: number;
+  foreignTotals?: { currency: string; count: number; amount: number; missing: number }[];
 };
 // 지급상태 — 실제 '지급' 여부만(검증상태와 분리).
 export const STATUS_META: Record<string, { label: string; bg: string; fg: string }> = {
@@ -132,6 +135,8 @@ export function PayoutRoundDetail({ token, onToast, payoutDate, opRounds, reload
     ['원천세공제', `${won(totals.withholdingImpliedTotal)}원`, '개인 통번역사 실제 공제(세전−세후) 합계 · 외주업체 부가세 미포함'],
     ...(num(totals.vatTotal) > 0 ? [['부가세(외주업체)', `${won(totals.vatTotal)}원`]] as [string, string, string?][] : []),
     ['실지급액(세후)', `${won(totals.posttaxTotal)}원`, '세전 − 원천세공제 + 외주업체 부가세'],
+    ...((totals.foreignTotals ?? []) as { currency: string; count: number; amount: number; missing: number }[]).map(f =>
+      ['외화 지급', `${f.currency} ${f.amount.toLocaleString('ko-KR', { maximumFractionDigits: 2 })} · ${f.count}건`, '외화 지급 — 원화 합계 제외(별도 해외송금)'] as [string, string, string?]),
     ['지급완료(세전)', `${won(totals.paidTotal)}원 · ${stc.paid}건`],
     ['미지급(세전)', `${won(totals.unpaidTotal)}원 · ${stc.unpaid}건`],
     ['지급예정', `${stc.scheduled}건`], ['지급확인 필요', `${stc.review}건`],
@@ -192,7 +197,8 @@ function PayeeTable({ payees, items, payoutDate, loading, onToast, onPick }: { p
     const rows = items.filter(r => r.masterKey === g.masterKey);
     const payDate = rows.find(r => r.payoutDate)?.payoutDate ?? (payoutDate ?? '-');
     return { payeeType: g.payeeType === 'vendor' ? 'vendor' as const : 'individual' as const, payeeName: g.name, payeeLanguages: reproPayeeLanguages(rows), email: g.email, phone: g.phone ?? pickPhone(rows), scopeValue: `${payoutDate ?? '지급일 미확인'} 지급`, payDate,
-      rows: rows.map(r => ({ client: r.client, filename: r.filename, deliveryDate: r.deliveryDate, payoutDate: r.payoutDate, content: r.content, pretax: r.pretax, posttax: r.posttax })) };
+      rows: rows.map(r => ({ client: r.client, filename: r.filename, deliveryDate: r.deliveryDate, payoutDate: r.payoutDate, content: r.content, pretax: r.pretax, posttax: r.posttax, payCurrency: r.payCurrency ?? null, foreignAmount: r.foreignAmount ?? null,
+        withholdingTreatment: r.withholdingTreatment ?? null, withholdingRate: r.withholdingRate ?? null })) };
   };
   const badge = (text: string, fg: string, bg: string, title?: string) => <span style={{ fontSize: 10, color: fg, background: bg, padding: '1px 5px', borderRadius: 7 }} title={title}>{text}</span>;
   return (
@@ -222,7 +228,8 @@ function PayeeTable({ payees, items, payoutDate, loading, onToast, onPick }: { p
                 <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{won(g.pretaxTotal)}</div>
                 <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#dc2626' }}>{won(g.withholdingImplied)}
                   {g.payeeType === 'vendor' && <div style={{ fontSize: 10, color: '#7c3aed', fontWeight: 700 }} data-testid={`pu-vendor-vat-${g.masterKey}`}>외주업체 · 부가세 {won(num(g.vatTotal))}</div>}</div>
-                <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 800, color: '#111827' }}>{won(g.posttaxTotal)}</div>
+                <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 800, color: '#111827' }}>{won(g.posttaxTotal)}
+                  {(g.foreignTotals ?? []).map(f => <div key={f.currency} data-testid={`pu-payee-fx-${g.masterKey}-${f.currency}`} style={{ fontSize: 10, color: '#1d4ed8', fontWeight: 700 }} title="외화 지급 — 원화 합계 제외(별도 해외송금)">외화 {f.currency} {f.amount.toLocaleString('ko-KR', { maximumFractionDigits: 2 })}{f.missing ? ` · 미입력 ${f.missing}건` : ''}</div>)}</div>
                 <div style={{ textAlign: 'right', display: 'flex', gap: 4, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                   {g.paidCount > 0 && badge(`지급완료 ${g.paidCount}건`, '#1d4ed8', '#eff6ff')}
                   {g.needReviewCount > 0 && badge(`지급확인 필요 ${g.needReviewCount}건`, '#92400e', '#fef3c7', '지급일이 지났거나 미상인데 지급확정 기록이 없는 건')}
@@ -282,7 +289,8 @@ function ItemTable({ token, onToast, items, payees, loading, selPayee, setSelPay
                   <td style={{ ...td, maxWidth: 230 }} title={p.filename ?? undefined}><div style={clamp2}>{p.filename ?? '-'}</div></td>
                   <td style={td}>{p.deliveryDate ?? <span style={{ color: '#b45309' }}>(납품일 미상)</span>}</td>
                   <td style={td}>{p.payoutDate ?? <span style={{ color: '#b45309', fontWeight: 700 }}>(지급일 미확인)</span>}</td>
-                  <td style={tdR}>{won(p.pretax)}</td>
+                  <td style={tdR}>{won(p.pretax)}
+                    {p.payCurrency && p.payCurrency !== 'KRW' && <div data-testid={`pu-detail-fx-${i}`} style={{ fontSize: 10, color: '#1d4ed8', fontWeight: 700 }} title="외화 지급 — 원화 합계 제외(별도 해외송금)">외화 {p.payCurrency} {p.foreignAmount != null ? p.foreignAmount.toLocaleString('ko-KR', { maximumFractionDigits: 2 }) : '미입력'}</div>}</td>
                   <td style={tdR}>{won(p.posttax)}</td>
                   <td style={{ ...tdR, color: '#dc2626' }}>{won(p.withholdingImplied)}
                     {p.payeeType === 'vendor' && <div style={{ fontSize: 10, color: '#7c3aed' }}>외주 · 부가세 {p.vat != null ? won(p.vat) : '미확정'}</div>}
@@ -368,6 +376,8 @@ function OperationalTab({ token, onToast, payoutDate, opRounds, reloadOpRounds, 
     // 사유 우선순위: 서버 제외·확인 필요 사유(작성중 회차) → 지급상태 → 지급액 0원 → 새 회차 수집 가능(수집 예정) → 기타
     reason: warnReason.get(i.id)
       ?? (i.status === 'paid' ? '지급완료(다른 경로·다른 회차)' : i.status === 'excluded' ? '지급보류'
+        // 외화 지급 건은 원화 0원이어도 0원 건이 아니다 — 원화 지급회차·국내 송금파일 대상 아님(별도 해외송금)
+        : i.payCurrency && i.payCurrency !== 'KRW' ? `외화 지급(${i.payCurrency} ${i.foreignAmount != null ? i.foreignAmount.toLocaleString('ko-KR', { maximumFractionDigits: 2 }) : '금액 미입력'}) — 별도 해외송금(원화 지급회차 제외)`
         : num(i.pretax) <= 0 ? '지급액 0원(미확정)'
         : previewIds.has(i.id) ? '이 회차 확정 이후 지급대상이 됨 — 새 회차로 수집 가능'
         : roundSel && ACTIVE_OP.includes(roundSel.status) ? '이 회차에 수집되지 않음(다른 회차 포함·수집 후 제외 등)'

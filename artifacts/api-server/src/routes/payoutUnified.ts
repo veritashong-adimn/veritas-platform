@@ -80,8 +80,17 @@ const ACT_DEDUCTION = sql`(CASE WHEN act.cat = 'individual' THEN round(act.cost 
     WHEN 'nonresident_custom' THEN coalesce(act.wrate, 0) WHEN 'treaty_reduction_or_exemption' THEN coalesce(act.wrate, 0)
     ELSE 0 END) / 100, 2) ELSE 0 END)`;
 const ACT_VAT = sql`(CASE WHEN act.cat = 'vendor' AND act.evidence = 'tax_invoice' THEN round(act.cost * 0.1, 2) ELSE 0 END)`;
-// 현재 수행정보 금액 기준 적용 여부(미지급 전환 행만)
+// (2026-11-25 대표 확인) 전환 당시 '과거 지급 확인 필요'로 만들어진 지급보류(확인 전) — 계보 payout_review + 수행정보 payment_hold.
+//   이 보류는 판매 전환(고객 입금정보 등록 등) 시 자동으로 붙은 '확인 대기' 표시일 뿐 지급 여부 판단이 아니다.
+//   → 통번역사 지급완료 판정은 전환 전과 같은 과거 CRM 원본 규칙(LEGACY_ROW_PAID)을 그대로 따른다(고객 입금정보 변경과 지급완료 판정 분리).
+//   관리자가 [과거 지급 확인]으로 미지급 처리한 건(payout_review_unpaid → 운영 cur 집계)·지급완료 기록(paid)은 해당 기록이 우선한다.
+const ACT_REVIEW_PENDING = sql`(act.payment_status = 'payment_hold' AND act.lin_status = 'payout_review')`;
+// 과거 CRM 원본 지급완료 규칙(전환 전 원본 행과 동일): 납품일 ≤ cutoff(대표 확인) 또는 CRM 원본 지급일 < 오늘(KST). 운영 지급예정일은 사용하지 않는다.
+const LEGACY_ROW_PAID = sql`(coalesce(substring(source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') <= ${LEGACY_PAID_DELIVERY_CUTOFF}, false)
+        OR coalesce(substring(source_raw->>'통번역사지급일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') < to_char((now() AT TIME ZONE 'Asia/Seoul')::date, 'YYYY-MM-DD'), false))`;
+// 현재 수행정보 금액 기준 적용 여부(미지급 전환 행만 — 확인 전 보류지만 원본 규칙상 지급완료인 행은 CRM 기록 그대로)
 const PLATFORM_AMOUNT = sql`(act.payment_status IS NOT NULL AND act.payment_status <> 'paid'
+    AND NOT (${ACT_REVIEW_PENDING} AND ${LEGACY_ROW_PAID})
     AND NOT coalesce(substring(source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') <= ${LEGACY_PAID_DELIVERY_CUTOFF}, false)
     AND coalesce(act.cost, 0) > 0
     AND ((act.cat = 'vendor' AND act.vid IS NOT NULL AND act.evidence IS NOT NULL) OR ${CRM_PRETAX} = 0
@@ -123,10 +132,10 @@ export const PROG = sql`
       --   (2026-11-13 대표 결정) 운영 판매로 전환된 원본 행은 전환 수행정보의 실제 지급확정 기록만 따른다:
       --   지급완료 = 수행정보 payment_status='paid'(cutoff 지급완료 또는 [지급완료 확인] 기록). 지급예정일 경과만으로 지급완료 아님 → 확인 필요.
       --   전환되지 않은 원본 조회 판매는 기존 규칙(2026-11-08) 그대로.
-      CASE WHEN act.payment_status IS NOT NULL THEN act.payment_status = 'paid'
+      --   (2026-11-25) 단, 전환 시 자동으로 붙은 '과거 지급 확인 필요' 보류(확인 전, ACT_REVIEW_PENDING)는 지급 판단이 아니므로 원본 규칙 유지.
+      CASE WHEN act.payment_status IS NOT NULL AND NOT ${ACT_REVIEW_PENDING} THEN act.payment_status = 'paid'
         OR coalesce(substring(source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') <= ${LEGACY_PAID_DELIVERY_CUTOFF}, false)
-      ELSE (coalesce(substring(source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') <= ${LEGACY_PAID_DELIVERY_CUTOFF}, false)
-        OR coalesce(substring(source_raw->>'통번역사지급일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') < to_char((now() AT TIME ZONE 'Asia/Seoul')::date, 'YYYY-MM-DD'), false)) END AS legacy_paid,
+      ELSE ${LEGACY_ROW_PAID} END AS legacy_paid,
       (act.payment_status = 'paid' AND act.actual_payment_date IS NOT NULL) AS legacy_paid_confirmed,
       to_char(act.actual_payment_date, 'YYYY-MM-DD') AS actual_payment_date,
       -- 운영 판매로 전환된 행의 실제 수행자(담당자가 수행정보에서 바꾼 통번역사) — CRM 이름 매핑보다 우선(지급명세서 수취인 오귀속 방지, 2026-11)
@@ -135,6 +144,7 @@ export const PROG = sql`
       --   금액은 CRM 원본 그대로이며, 세금 설정과 다르면 '확인 필요'로만 표시(lib/payoutAmount).
       act.cat AS act_cat, act.vid AS act_vendor_id, act.treatment AS act_treatment, act.wrate AS act_rate, act.evidence AS act_evidence,
       act.payment_status AS act_payment_status,
+      act.pay_ccy AS pay_currency, CASE WHEN act.pay_ccy IS NOT NULL THEN act.famt END AS foreign_amount,
       coalesce(substring(source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') <= ${LEGACY_PAID_DELIVERY_CUTOFF}, false) AS legacy_paid_cutoff,
       -- 지급예정: 지급일이 오늘(KST) 당일 또는 이후. 지급일 미상은 지급확인 필요(지급일 경과는 위 legacy_paid).
       coalesce(coalesce(substring(source_raw->>'통번역사지급일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}'), act.expected_payment_date) >= to_char((now() AT TIME ZONE 'Asia/Seoul')::date, 'YYYY-MM-DD'), false) AS payout_future,
@@ -161,9 +171,11 @@ export const PROG = sql`
         SELECT ch.cur AS row_id, s.id AS sid, s.status IN ${OPERATIONAL_LINEAGE} AS op,
           (xpa.id IS NOT NULL AND xpa.deleted_at IS NULL AND coalesce(xp.status::text, '') <> 'cancelled') AS live,
           EXISTS (SELECT 1 FROM legacy_master_mappings m WHERE m.source_system = 'old_crm' AND m.entity_type = 'sale' AND m.entity_id = xpa.project_id AND m.status = 'active') AS active_sale,
-          xpa.payment_status::text AS payment_status, xpa.actual_payment_date, xpa.individual_user_id AS uid,
+          xpa.payment_status::text AS payment_status, xpa.actual_payment_date, s.status AS lin_status, xpa.individual_user_id AS uid,
           xpa.performer_category::text AS cat, xpa.vendor_company_id AS vid, xpa.withholding_treatment::text AS treatment,
           xpa.withholding_rate AS wrate, xpa.purchase_evidence_type::text AS evidence, coalesce(xpa.cost_total, 0) AS cost,
+          -- 외화 지급(lib/foreignPay 와 같은 기준) — 지급통화·외화 지급금액(수행정보 값 그대로, 원화와 합산하지 않음)
+          CASE WHEN coalesce(upper(nullif(btrim(xpa.contract_currency), '')), 'KRW') <> 'KRW' AND (xpa.performer_category = 'individual' OR (xpa.performer_category = 'vendor' AND xpa.vendor_settlement_type = 'overseas')) THEN upper(btrim(xpa.contract_currency)) END AS pay_ccy, xpa.contract_amount_foreign AS famt,
           to_char(coalesce(xpa.expected_payment_date, xpa.expected_payment_date_auto), 'YYYY-MM-DD') AS expected_payment_date,
           to_char(coalesce(xpa.delivery_date, xpa.delivery_date_auto), 'YYYY-MM-DD') AS delivery_date
         FROM ch JOIN import_row_sources s ON s.module = 'legacy_sale_activation' AND s.row_key = 'progress:' || ch.src
@@ -172,6 +184,7 @@ export const PROG = sql`
       SELECT row_id,
         bool_or(live AND op) AS has_op, bool_or(live) AS has_live, bool_or(active_sale) AS any_active_sale,
         (array_agg(payment_status ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS payment_status,
+        (array_agg(lin_status ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS lin_status,
         (array_agg(actual_payment_date ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS actual_payment_date,
         (array_agg(expected_payment_date ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS expected_payment_date,
         (array_agg(delivery_date ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS delivery_date,
@@ -181,7 +194,9 @@ export const PROG = sql`
         (array_agg(treatment ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS treatment,
         (array_agg(wrate ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS wrate,
         (array_agg(evidence ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS evidence,
-        (array_agg(cost ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS cost
+        (array_agg(cost ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS cost,
+        (array_agg(pay_ccy ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS pay_ccy,
+        (array_agg(famt ORDER BY sid DESC) FILTER (WHERE live AND NOT op))[1] AS famt
       FROM l GROUP BY row_id
     ) act ON act.row_id = legacy_archive_rows.id
     WHERE source_type = 'progress' AND is_effective = true
@@ -227,7 +242,10 @@ export const CUR = sql`
       -- 세후·원천세 = 공식 지급회차(payoutRounds)와 같은 계산 — 세전(cost_total)에 calcPayoutWithholding 규칙 적용(SQL 미러).
       --   (저장된 net_payment 는 구 개별항목(기본료 등) 기준이라 원가 방식 입력 건은 0으로 남아 세후 0원으로 표시되던 오류 수정)
       coalesce(pa.cost_total, 0) - ${CUR_DEDUCTION} + ${CUR_VAT} AS posttax,
-      ${CUR_DEDUCTION} AS withholding_tax
+      ${CUR_DEDUCTION} AS withholding_tax,
+      pa.withholding_treatment::text AS withholding_treatment, pa.withholding_rate AS withholding_rate,
+      CASE WHEN coalesce(upper(nullif(btrim(pa.contract_currency), '')), 'KRW') <> 'KRW' AND (pa.performer_category = 'individual' OR (pa.performer_category = 'vendor' AND pa.vendor_settlement_type = 'overseas')) THEN upper(btrim(pa.contract_currency)) END AS pay_currency,
+      CASE WHEN CASE WHEN coalesce(upper(nullif(btrim(pa.contract_currency), '')), 'KRW') <> 'KRW' AND (pa.performer_category = 'individual' OR (pa.performer_category = 'vendor' AND pa.vendor_settlement_type = 'overseas')) THEN upper(btrim(pa.contract_currency)) END IS NOT NULL THEN pa.contract_amount_foreign END AS foreign_amount
     FROM performance_assignments pa
     LEFT JOIN projects p ON p.id = pa.project_id
     LEFT JOIN companies pco ON pco.id = p.company_id
@@ -479,6 +497,10 @@ export async function collectUnifiedItems(opts: {
         payeeType, vendorId: payeeType === "vendor" && r.act_vendor_id != null ? num(r.act_vendor_id) : null,
         supply: amt.supply, vat: amt.vat, payTotal: amt.payTotal, taxConflict: amt.taxConflict,
         status, statusLabel: STATUS_LABEL[status], hasDeposit: r.has_deposit === true, paidBasis,
+        // 외화 지급(전환 수행정보 지급통화·외화 지급금액) — 원화 금액(pretax 등)과 합산하지 않는다. 원화 지급 건은 KRW·null.
+        payCurrency: r.pay_currency ?? "KRW", foreignAmount: r.pay_currency && r.foreign_amount != null ? num(r.foreign_amount) : null,
+        // 수행정보 세금처리 유형(전환 수행정보 등록값, 표시 전용 — 명세서 세금처리 표기). CRM 원본만 있는 건은 null.
+        withholdingTreatment: r.act_treatment ?? null, withholdingRate: r.act_rate != null ? num(r.act_rate) : null,
         // 통번역사 Master 가능언어(확정 연결 건만, 원문 그대로) — 지급명세서 상단 언어 표시용. 이름만 같은 후보는 사용하지 않음.
         masterLanguages: r.mapped_user_id != null ? (r.mapped_langpairs ?? null) : null,
       };
@@ -509,6 +531,8 @@ export async function collectUnifiedItems(opts: {
         supply: amt.supply, vat: amt.vat, payTotal: amt.payTotal, taxConflict: amt.taxConflict,
         status, statusLabel: STATUS_LABEL[status], hasDeposit: ps === "paid",
         // 지급완료 근거 — 실제 지급일 기록 / VERITAS OS 지급회차 / 대표 지급 확인(실제 지급일 미기록, 송금 증빙 없음)
+        payCurrency: r.pay_currency ?? "KRW", foreignAmount: r.pay_currency && r.foreign_amount != null ? num(r.foreign_amount) : null,
+        withholdingTreatment: r.withholding_treatment ?? null, withholdingRate: r.withholding_rate != null ? num(r.withholding_rate) : null,
         paidBasis: ps !== "paid" ? null : r.actual_payment_date ? `실제 지급일 ${r.actual_payment_date}` : r.payout_round_id != null ? "지급회차 지급완료 처리" : "대표 지급 확인(실제 지급일 미기록)",
       };
     }),
@@ -549,7 +573,8 @@ export async function collectUnifiedItems(opts: {
   {
     const nz = (v: unknown) => String(v ?? "").replace(/\s/g, "");
     for (const it of items as any[]) {
-      if (it.payeeType === "vendor" || it.pretax !== 0 || it.posttax !== 0 || it.status === "paid") continue;
+      // 외화 지급 건은 원화 0원이어도 0원 기록이 아니다(lib/foreignPay)
+      if (it.payeeType === "vendor" || it.pretax !== 0 || it.posttax !== 0 || it.status === "paid" || (it.foreignAmount ?? 0) > 0) continue;
       if (nz(it.originalTranslator ?? it.translator) !== "베리타스" && nz(it.translator) !== "베리타스") continue;
       it.internalZero = true; it.statusLabel = "지급액 없음";
       if (!it.confirmed) it.matchStatus = "internal";
@@ -614,13 +639,15 @@ router.get("/admin/payout-unified/payees", ...adminGuard, requireStaffPermission
     // ── 통번역사(Master)별 통합 집계(§8) — 확정 연결 기준 masterKey. 미확정은 이름키로 분리.
     const groups = new Map<string, any>();
     for (const it of items) {
-      const g = groups.get(it.masterKey) ?? { masterKey: it.masterKey, name: it.translator ?? "(이름 미상)", confirmed: it.confirmed, matchStatus: it.matchStatus, matchedUserId: it.matchedUserId, email: it.masterEmail ?? null, phone: it.masterPhone ?? it.originalPhone ?? null, count: 0, pretax: 0, posttax: 0, withholding: 0, vat: 0, payeeType: (it as any).payeeType, paidPretax: 0, unpaidPretax: 0, paidCount: 0, unpaidCount: 0, needReview: 0, dupSuspect: 0, scheduled: 0, sources: new Set<string>(), languages: new Set<string>() };
+      const g = groups.get(it.masterKey) ?? { masterKey: it.masterKey, name: it.translator ?? "(이름 미상)", confirmed: it.confirmed, matchStatus: it.matchStatus, matchedUserId: it.matchedUserId, email: it.masterEmail ?? null, phone: it.masterPhone ?? it.originalPhone ?? null, count: 0, pretax: 0, posttax: 0, withholding: 0, vat: 0, payeeType: (it as any).payeeType, paidPretax: 0, unpaidPretax: 0, paidCount: 0, unpaidCount: 0, needReview: 0, dupSuspect: 0, scheduled: 0, sources: new Set<string>(), languages: new Set<string>(), foreign: new Map<string, any>() };
       g.count++; g.pretax += it.pretax; g.posttax += it.posttax; g.withholding += it.withholdingImplied; g.vat += (it as any).vat ?? 0; g.sources.add(it.source); if (it.language) g.languages.add(it.language);
       if ((it as any).status === "paid") { g.paidPretax += it.pretax; g.paidCount++; }
       else if ((it as any).status === "pending") { g.unpaidPretax += it.pretax; g.unpaidCount++; }
       else if ((it as any).status === "deposit_unconfirmed") g.needReview++;
       else if ((it as any).status === "scheduled") g.scheduled++;
       if ((it as any).status === "dup_suspect") g.dupSuspect++;
+      if ((it as any).payCurrency && (it as any).payCurrency !== "KRW") { const k = (it as any).payCurrency as string; const f = g.foreign.get(k) ?? { currency: k, count: 0, amount: 0, missing: 0 };
+        f.count++; if ((it as any).foreignAmount != null) f.amount = Math.round((f.amount + (it as any).foreignAmount) * 100) / 100; else f.missing++; g.foreign.set(k, f); }
       if (!g.email && it.masterEmail) g.email = it.masterEmail; if (!g.phone && (it.masterPhone || it.originalPhone)) g.phone = it.masterPhone ?? it.originalPhone;
       groups.set(it.masterKey, g);
     }
@@ -632,6 +659,8 @@ router.get("/admin/payout-unified/payees", ...adminGuard, requireStaffPermission
       paidPretax: g.paidPretax, unpaidPretax: g.unpaidPretax, paidCount: g.paidCount, unpaidCount: g.unpaidCount, needReviewCount: g.needReview, dupSuspectCount: g.dupSuspect,
       scheduledCount: g.scheduled,
       sources: [...g.sources], languages: [...g.languages],   // 해당 회차 수행 언어(중복 제거). 없으면 빈 배열.
+      // 외화 지급 합계(통화별, 원화 합계와 별도) — 외화 지급 건이 없으면 빈 배열
+      foreignTotals: [...g.foreign.values()].sort((a: any, b: any) => a.currency.localeCompare(b.currency)),
     })).sort((a, b) => a.name.localeCompare(b.name, "ko"));
 
     // 회차 요약(§4) — 선택 회차 기준.
@@ -645,6 +674,12 @@ router.get("/admin/payout-unified/payees", ...adminGuard, requireStaffPermission
       return t;
     }, { assignmentCount: 0, pretaxTotal: 0, posttaxTotal: 0, withholdingImpliedTotal: 0, vatTotal: 0, paidTotal: 0, unpaidTotal: 0, needReviewCount: 0, dupSuspectCount: 0, excludedCount: 0, scheduledCount: 0, scheduledTotal: 0 });
     (totals as any).payeeCount = new Set(items.map(i => i.masterKey)).size;
+    {  // 외화 지급 합계(통화별) — 원화 합계(pretaxTotal 등)에 섞지 않는다
+      const fm = new Map<string, { currency: string; count: number; amount: number; missing: number }>();
+      for (const i of items as any[]) { if (!i.payCurrency || i.payCurrency === "KRW") continue; const f = fm.get(i.payCurrency) ?? { currency: i.payCurrency, count: 0, amount: 0, missing: 0 };
+        f.count++; if (i.foreignAmount != null) f.amount = Math.round((f.amount + i.foreignAmount) * 100) / 100; else f.missing++; fm.set(i.payCurrency, f); }
+      (totals as any).foreignTotals = [...fm.values()].sort((a, b) => a.currency.localeCompare(b.currency));
+    }
     (totals as any).statusCounts = items.reduce((c: Record<PayBucket, number>, i: any) => { c[i.payBucket as PayBucket]++; return c; }, { paid: 0, unpaid: 0, scheduled: 0, review: 0 });
 
     const truncated = legacyCount >= 5000 || currentCount >= 5000;   // 조회 상한 도달 — 화면에서 조건 축소 안내

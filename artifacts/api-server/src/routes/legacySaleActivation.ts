@@ -61,21 +61,28 @@ router.get("/admin/projects/:id/legacy-origin", ...adminGuard, async (req, res) 
 // 과거 지급 확인 — 지급완료 확인은 실제 지급일·실제 지급액·근거 필수(실제 지급확정 기록). 송금을 실행하지 않는다.
 const isYmd = (v: unknown) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(v));
 const kstToday = () => new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
-function paidInput(b: any): { actualPaymentDate: string; actualPaymentAmount: number } | string {
+//   allowZero: 과거 CRM 전환 행의 과거 지급 확인만 — 0원은 서비스(resolvePayoutReview)에서 수행정보·CRM 지급액이 모두 0원인 건만 허용(2026-11-25 대표 결정).
+//   actualPaymentCurrency: 지급통화(기본 KRW). 외화 지급 건은 외화 금액·통화로 확인(서비스에서 수행정보 외화 지급금액과 대조, lib/foreignPay).
+function paidInput(b: any, allowZero = false): { actualPaymentDate: string; actualPaymentAmount: number; actualPaymentCurrency: string } | string {
   if (!isYmd(b?.actualPaymentDate)) return "실제 지급일(YYYY-MM-DD)을 입력하세요.";
   if (b.actualPaymentDate > kstToday()) return "실제 지급일은 오늘 이후일 수 없습니다(지급완료 확인은 이미 지급된 건만).";
   const amt = Number(b?.actualPaymentAmount);
-  if (!Number.isFinite(amt) || amt <= 0) return "실제 지급액을 입력하세요.";
-  return { actualPaymentDate: b.actualPaymentDate, actualPaymentAmount: Math.round(amt * 100) / 100 };
+  if (b?.actualPaymentAmount == null || b?.actualPaymentAmount === "" || !Number.isFinite(amt) || amt < 0 || (amt === 0 && !allowZero)) return "실제 지급액을 입력하세요.";
+  const cur = b?.actualPaymentCurrency == null || b.actualPaymentCurrency === "" ? "KRW" : String(b.actualPaymentCurrency).trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(cur)) return "지급통화를 확인하세요.";
+  if (cur !== "KRW" && !(amt > 0)) return "외화 실제 지급액을 입력하세요.";
+  return { actualPaymentDate: b.actualPaymentDate, actualPaymentAmount: Math.round(amt * 100) / 100, actualPaymentCurrency: cur };
 }
-async function resolveAndLog(req: any, id: number, decision: "paid" | "unpaid", reason: string, paid?: { actualPaymentDate: string; actualPaymentAmount: number }, projectId?: number) {
+async function resolveAndLog(req: any, id: number, decision: "paid" | "unpaid", reason: string, paid?: { actualPaymentDate: string; actualPaymentAmount: number; actualPaymentCurrency?: string }, projectId?: number) {
   const r = await resolvePayoutReview(id, decision, reason, { id: req.user?.id ?? null }, paid, projectId);
   await logEvent("project", r.projectId, "legacy_payout_review_resolved", req.log, performerOf(req),
     // 근거(지급 증빙)는 선택 — 미입력이면 evidence: 'missing' 으로 남긴다
     JSON.stringify({ assignmentId: id, decision, reason: reason || null, evidence: reason ? "provided" : "missing", performerName: r.performerName,
       confirmedBy: req.user?.id ?? null, confirmedAt: new Date().toISOString(),
-      ...(paid ? { actualPaymentDate: paid.actualPaymentDate, actualPaymentAmount: paid.actualPaymentAmount } : {}),
-      before: r.before, after: { paymentStatus: decision === "paid" ? "paid" : "unpaid", ...(paid ?? {}) } }));
+      ...(paid ? { actualPaymentDate: paid.actualPaymentDate, actualPaymentAmount: paid.actualPaymentAmount, actualPaymentCurrency: paid.actualPaymentCurrency ?? "KRW" } : {}),
+      ...(r.foreignPaid ? { foreignPaid: r.foreignPaid } : {}),
+      before: r.before, after: { paymentStatus: decision === "paid" ? "paid" : "unpaid", ...(paid ? { actualPaymentDate: paid.actualPaymentDate,
+        actualPaymentAmount: r.foreignPaid ? null : paid.actualPaymentAmount, ...(r.foreignPaid ? { foreignPaid: r.foreignPaid } : {}) } : {}) } }));
   return r;
 }
 
@@ -86,8 +93,8 @@ router.post("/admin/performances/:id/legacy-payout-review", ...adminGuard, requi
   if (decision !== "paid" && decision !== "unpaid") { res.status(400).json({ error: "decision 은 paid | unpaid 여야 합니다." }); return; }
   // 미지급 확인은 사유 필수, 지급완료 확인의 증빙은 선택
   if (decision === "unpaid" && (!reason || !reason.trim())) { res.status(400).json({ error: "확인 근거(사유)를 입력하세요." }); return; }
-  let paid: { actualPaymentDate: string; actualPaymentAmount: number } | undefined;
-  if (decision === "paid") { const p = paidInput(req.body); if (typeof p === "string") { res.status(400).json({ error: p }); return; } paid = p; }
+  let paid: { actualPaymentDate: string; actualPaymentAmount: number; actualPaymentCurrency: string } | undefined;
+  if (decision === "paid") { const p = paidInput(req.body, true); if (typeof p === "string") { res.status(400).json({ error: p }); return; } paid = p; }
   try {
     await resolveAndLog(req, id, decision, (reason ?? "").trim(), paid);
     res.json({ ok: true, assignmentId: id, decision, ...(paid ?? {}) });
@@ -108,8 +115,8 @@ router.post("/admin/performances/:id/paid-confirm", ...adminGuard, requirePermis
       const r = await confirmRegularPaid(id, p, { id: req.user?.id ?? null });
       await logEvent("project", r.projectId, "performance_paid_confirmed", req.log, performerOf(req), JSON.stringify({
         assignmentId: id, reason: reason || null, evidence: reason ? "provided" : "missing", performerName: r.performerName,
-        confirmedBy: req.user?.id ?? null, confirmedAt: new Date().toISOString(), ...p,
-        before: r.before, after: { paymentStatus: "paid", ...p } }));
+        confirmedBy: req.user?.id ?? null, confirmedAt: new Date().toISOString(), ...p, ...(r.foreignPaid ? { foreignPaid: r.foreignPaid } : {}),
+        before: r.before, after: { paymentStatus: "paid", actualPaymentDate: p.actualPaymentDate, actualPaymentAmount: r.foreignPaid ? null : p.actualPaymentAmount, ...(r.foreignPaid ? { foreignPaid: r.foreignPaid } : {}) } }));
     }
     res.json({ ok: true, assignmentId: id, ...p });
   } catch (err) {
@@ -131,7 +138,7 @@ router.post("/admin/projects/:id/legacy-payout-review/bulk", ...adminGuard, requ
   const results: Array<{ assignmentId: number; ok: boolean; error?: string; performerName?: string | null }> = [];
   for (const it of items) {
     const id = Number(it.assignmentId);
-    const p = paidInput(it);
+    const p = paidInput(it, true);
     if (typeof p === "string") { results.push({ assignmentId: id, ok: false, error: p }); continue; }
     try { const r = await resolveAndLog(req, id, "paid", (reason ?? "").trim(), p, projectId); results.push({ assignmentId: id, ok: true, performerName: r.performerName }); }
     catch (err: any) { results.push({ assignmentId: id, ok: false, error: err instanceof ActivationError ? err.message : "처리 실패" }); if (!(err instanceof ActivationError)) req.log.error({ err }, "bulk payout review"); }

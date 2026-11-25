@@ -379,13 +379,24 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
     } catch { onToast('확정취소 중 오류'); } finally { setBusy(false); }
   };
 
+  // 실제 지급일(이체일) 확인 — 기본값 = 회차 지급예정일(오늘 이후면 오늘). 실제 이체일이 다르면 수정. 지급완료 처리 시 해당 수행건에 기록된다.
+  const askActualPayDate = async (title: string, message: string): Promise<string | null> => {
+    const today = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+    const due = round?.paymentDate ? String(round.paymentDate).slice(0, 10) : '';
+    const v = await promptDialog({ title, message, label: '실제 지급일(이체일)', placeholder: 'YYYY-MM-DD', confirmLabel: '지급완료', variant: 'danger',
+      defaultValue: /^\d{4}-\d{2}-\d{2}$/.test(due) && due <= today ? due : today,
+      validate: (x) => (!/^\d{4}-\d{2}-\d{2}$/.test(x.trim()) || Number.isNaN(Date.parse(x.trim())) ? '실제 지급일을 YYYY-MM-DD 형식으로 입력하세요.'
+        : x.trim() > today ? '실제 지급일은 오늘 이후일 수 없습니다.' : null) });
+    return v ? v.trim() : null;
+  };
+
   // 건별(선택) 처리 — 체크한 건만 지급완료/확정취소. selId(특정 회차)에서만 동작.
-  const runItemAction = async (path: string, okMsg: (d: any) => string, failMsg: string) => {
+  const runItemAction = async (path: string, okMsg: (d: any) => string, failMsg: string, extra: Record<string, unknown> = {}) => {
     if (!selId || busy || selectedItems.size === 0) return;
     setBusy(true);
     try {
       const res = await fetch(api(`/api/admin/payout-rounds/${selId}/${path}`), {
-        method: 'PATCH', headers: authH, body: JSON.stringify({ assignmentIds: [...selectedItems] }),
+        method: 'PATCH', headers: authH, body: JSON.stringify({ assignmentIds: [...selectedItems], ...extra }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { onToast(data.error ?? failMsg); return; }
@@ -394,8 +405,9 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
     } catch { onToast(failMsg); } finally { setBusy(false); }
   };
   const payItemsSelected = async () => {
-    if (!(await confirmDialog({ title: '선택 지급완료', message: `선택한 ${selectedItems.size}건을 지급완료 처리할까요?\n(지급완료된 건은 되돌릴 수 없습니다)`, confirmLabel: '지급완료', variant: 'danger' }))) return;
-    runItemAction('pay-items', (d) => `선택 ${d.paidNow ?? 0}건 지급완료 처리했습니다.`, '선택 지급완료 실패');
+    const actualPaymentDate = await askActualPayDate('선택 지급완료', `선택한 ${selectedItems.size}건을 지급완료 처리할까요?\n실제 지급일(이체일)을 확인하세요 — 해당 수행건의 실제 지급일로 기록됩니다.\n(지급완료된 건은 되돌릴 수 없습니다)`);
+    if (!actualPaymentDate) return;
+    runItemAction('pay-items', (d) => `선택 ${d.paidNow ?? 0}건 지급완료 처리했습니다. (실제 지급일 ${actualPaymentDate})`, '선택 지급완료 실패', { actualPaymentDate });
   };
   const unconfirmItemsSelected = async () => {
     if (!(await confirmDialog({ title: '선택 확정취소', message: `선택한 ${selectedItems.size}건을 확정취소(회차에서 제외)할까요?\n제외된 건은 미배정으로 돌아가 다시 처리됩니다.`, confirmLabel: '확정취소', variant: 'warning' }))) return;
@@ -406,13 +418,14 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
   // 지급완료 처리 — 확정된 회차의 정상 지급대상(지급보류 제외)을 지급완료(paid)로 전환.
   const payRound = async () => {
     if (!selId || busy) return;
-    if (!(await confirmDialog({ title: '회차 지급완료', message: '이 회차를 지급완료 처리할까요?\n지급보류 건을 제외한 지급대상의 지급상태가 "지급완료"로 변경됩니다.\n(수행정보에서는 되돌릴 수 없습니다)', confirmLabel: '지급완료', variant: 'danger' }))) return;
+    const actualPaymentDate = await askActualPayDate('회차 지급완료', '이 회차를 지급완료 처리할까요?\n지급보류 건을 제외한 지급대상의 지급상태가 "지급완료"로 변경되고, 아래 실제 지급일(이체일)이 각 수행건에 기록됩니다.\n(수행정보에서는 되돌릴 수 없습니다)');
+    if (!actualPaymentDate) return;
     setBusy(true);
     try {
-      const res = await fetch(api(`/api/admin/payout-rounds/${selId}/pay`), { method: 'PATCH', headers: authH });
+      const res = await fetch(api(`/api/admin/payout-rounds/${selId}/pay`), { method: 'PATCH', headers: authH, body: JSON.stringify({ actualPaymentDate }) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { onToast(data.error ?? '지급완료 처리 실패'); return; }
-      setDetail(data); await loadRounds(); onToast('지급완료 처리되었습니다.');
+      setDetail(data); await loadRounds(); onToast(`지급완료 처리되었습니다. (실제 지급일 ${actualPaymentDate})`);
     } catch { onToast('지급완료 처리 중 오류'); } finally { setBusy(false); }
   };
 

@@ -142,7 +142,7 @@ export function buildPayoutStatementHtml(data: PayoutStatementPdfData): string {
     ...(vendorMode
       ? [['공급가 합계', won(data.totals.gross)], ['부가세', won(data.totals.vat ?? 0)],
          ...(data.totals.withholding > 0 ? [['CRM 공제 기록(세금 확인 필요)', won(data.totals.withholding), true]] : [])] as [string, string, boolean?][]
-      : [['세전금액 합계', won(data.totals.gross)], ['원천세공제(3.3%)', won2(data.totals.withholding), true]] as [string, string, boolean?][]),
+      : [['세전금액 합계', won(data.totals.gross)], ['원천세공제', won2(data.totals.withholding), true]] as [string, string, boolean?][]),
     ...(data.totals.rounding && Math.round(data.totals.rounding * 100) !== 0
       ? [['원 단위 조정', `${data.totals.rounding > 0 ? '+' : ''}${won2(Math.round(data.totals.rounding * 100) / 100)}`]] as [string, string, boolean?][] : []),
   ];
@@ -256,7 +256,7 @@ export function buildPayoutStatementHtml(data: PayoutStatementPdfData): string {
     </tr></tfoot>
   </table>
   <div class="tail">
-  <div class="note">본 지급명세서는 VERITAS 정산 확정 데이터를 기준으로 발행되었습니다. 기재된 금액은 세전금액 = 통번역료 + 기타비용 − 차감이며, ${vendorMode ? '외주업체는 원천징수 없이 지급합계 = 공급가 + 부가세입니다.' : '최종 실지급액 = 세전금액 − 원천세공제(3.3%)입니다.'}</div>
+  <div class="note">본 지급명세서는 VERITAS 정산 확정 데이터를 기준으로 발행되었습니다. 기재된 금액은 세전금액 = 통번역료 + 기타비용 − 차감이며, ${vendorMode ? '외주업체는 원천징수 없이 지급합계 = 공급가 + 부가세입니다.' : '최종 실지급액 = 세전금액 − 원천세공제(세금처리 기준)입니다.'}</div>
   <div class="summary">
     ${summaryRows.map(([k, v, deduct]) => `<div class="summary-row${deduct ? ' deduct' : ''}"><span class="sk">${esc(k)}</span><span class="sv">${esc(v)}</span></div>`).join('')}
     <div class="summary-total"><span class="sk">${vendorMode ? '지급합계' : '최종 실지급액'}</span><span class="sv">${won(data.totals.net)}</span></div>

@@ -261,7 +261,9 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
     // 원천세: 플랫폼 기준 개인 = 세전−세후, 외주 = 0(부가세는 세후−세전)
     const withholdingV = b.source === "current" ? num(b.withholding) : amountSource === "platform_fallback" ? (p?.cat === "vendor" ? 0 : Math.round((pretaxV - posttaxV) * 100) / 100) : num(b.withholding);
     const amount = pretaxV;
-    const paid = p ? p.payment_status === "paid" : b.legacy_paid === true;
+    // 지급완료: 플랫폼 = 수행정보 지급상태 / CRM(전환·원본) = 통합 집계 PROG 판정(legacy_paid) — 전환 수행정보 지급완료 기록 포함,
+    //   전환 시 자동으로 붙은 '과거 지급 확인 필요' 보류(확인 전)는 원본 규칙 그대로(고객 입금정보 변경으로 지급완료 판정이 바뀌지 않게, 2026-11-25).
+    const paid = kind === "platform" ? p?.payment_status === "paid" : b.legacy_paid === true;
     // 외화 지급(개인 지급통화 외화 / 외주 해외송금 외화 계약) — 외화 금액은 원화 합계와 따로 집계, 원화 송금(IBK) 대상 아님
     const payCurrency: string | null = p && p.pay_currency && p.pay_currency !== "KRW" && (p.cat === "individual" || p.vendor_settlement_type === "overseas") ? String(p.pay_currency) : null;
     const foreignAmount: number | null = payCurrency && p.foreign_amount != null ? num(p.foreign_amount) : null;
@@ -291,7 +293,7 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
       } else conversion = { ok: false, reason: "지급액이 0원인 건은 전환할 수 없습니다." };
       if (!conversion.ok) add("D", "conversion_blocked", `지급 전환 불가: ${conversion.reason}`, "원본 지급액·지급 여부 확인");
     }
-    if (kind === "crm_converted" && p?.payment_status === "payment_hold")
+    if (kind === "crm_converted" && p?.payment_status === "payment_hold" && !paid)
       add("D", "legacy_review", "과거 CRM 지급 여부 미확인(전환 수행정보 지급보류)", "[과거 지급 확인]: 미지급이면 미지급 처리 → 지급회차 / 지급했으면 지급완료 기록");
     if (paid && scope === "date" && pd === d) add("D", "already_paid", "이미 지급완료 — 재지급 금지", "송금 대상에서 제외");
     if (p?.payment_status === "paid" && !b.actual_payment_date && !(kind !== "platform" && dd && dd <= LEGACY_PAID_DELIVERY_CUTOFF))

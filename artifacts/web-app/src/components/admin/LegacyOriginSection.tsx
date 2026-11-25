@@ -11,7 +11,8 @@ type Origin = {
   sourceRaw: Record<string, unknown> | null;
   payoutItems: { assignmentId: number; legacyStatus: string; payDate: string | null; originalPreTax: number | null; performerName: string | null;
     withholdingBasis?: string | null; originalPostTax?: number | null; computedPostTax?: number | null; postTaxStatus?: string | null; costTotal: number | null; paymentStatus: string | null; deleted: boolean;
-    expectedPaymentDate?: string | null; actualPaymentDate?: string | null; actualPaymentAmount?: number | null; payoutDisplay?: PayoutReviewItem['payoutDisplay']; suggestedPaidAmount?: number | null }[];
+    expectedPaymentDate?: string | null; actualPaymentDate?: string | null; actualPaymentAmount?: number | null; payoutDisplay?: PayoutReviewItem['payoutDisplay']; suggestedPaidAmount?: number | null;
+    payCurrency?: string | null; foreignAmount?: number | null }[];
   payoutSummary: { legacyPaid: number; reviewPending: number; reviewResolved: number };
   collection: { status: string; reason?: string | null; parsedAmount?: number | null; total?: number; depositDate?: string | null } | null;
 };
@@ -153,7 +154,7 @@ export function LegacyOriginSection({ projectId, token, onChanged, onToast, onLo
                 <span style={{ minWidth: 120 }}>{p.performerName ?? "-"}</span>
                 <span style={{ minWidth: 150 }}>{LEGACY_LABEL[p.legacyStatus] ?? p.legacyStatus}</span>
                 <span>원본 지급예정일 {p.payDate ?? "-"}</span>
-                {p.actualPaymentDate && <span data-testid={`legacy-origin-actual-${p.assignmentId}`} style={{ color: "#15803d" }}>실제 지급 {p.actualPaymentDate} · {won(p.actualPaymentAmount ?? null)}</span>}
+                {p.actualPaymentDate && <span data-testid={`legacy-origin-actual-${p.assignmentId}`} style={{ color: "#15803d" }}>실제 지급 {p.actualPaymentDate} · {p.payCurrency && p.payCurrency !== "KRW" ? `${p.payCurrency} ${p.foreignAmount != null ? p.foreignAmount.toLocaleString("ko-KR", { maximumFractionDigits: 2 }) : "-"}` : won(p.actualPaymentAmount ?? null)}</span>}
                 <span>원본 지급액 {won(p.originalPreTax)}</span>
                 {p.originalPostTax != null && (
                   <span data-testid={`legacy-origin-post-${p.assignmentId}`}>

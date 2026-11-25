@@ -1057,6 +1057,10 @@ export async function applyPerformanceRow(
   //   · paid 로의 신규 전환: 거부 → 정산 > 지급회차 [지급완료] 처리로만 변경된다.
   //   · unpaid ↔ payment_hold 만 사용자 변경 허용.
   const priorPay = priorRow?.paymentStatus ?? "unpaid";
+  // 실제 지급일·실제 지급액 — 지급완료 처리 경로(지급회차 지급완료·지급완료 확인·과거 지급 확인)만 기록한다.
+  //   수행정보 저장(판매 상세 수정·고객 입금정보 저장 등)으로는 바뀌지 않는다: 지급완료 건은 기존 기록 유지, 지급완료 전에는 비워 둔다.
+  values.actualPaymentDate = priorPay === "paid" ? (priorRow?.actualPaymentDate ?? null) : null;
+  values.actualPaymentAmount = priorPay === "paid" ? (priorRow?.actualPaymentAmount ?? null) : null;
   if (priorPay === "paid") {
     values.paymentStatus = "paid";
   } else if (r.paymentStatus) {

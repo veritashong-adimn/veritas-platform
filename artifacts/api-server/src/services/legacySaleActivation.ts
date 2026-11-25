@@ -28,6 +28,7 @@ import {
 import { sql, eq } from "drizzle-orm";
 import { normalizeCompanyName } from "../lib/normalizeCompany";
 import { isLegacyConfirmedPaid } from "../lib/legacyPayoutRule";
+import { checkPaidAmount, foreignPayOf } from "../lib/foreignPay";
 import { legacyPayoutDisplay, suggestedPaidAmount } from "./legacyPayoutStatus";
 import { getSettings } from "../lib/getSettings";
 import { generateQuoteNumber } from "../routes/admin";
@@ -533,6 +534,7 @@ export async function getLegacyOrigin(dbx: Dbx, projectId: number) {
     || JSON.stringify(curProg) !== JSON.stringify(origProg);
   const perfIds = lin.filter(l => String(l.row_key).startsWith("progress:")).map(l => Number(l.entity_id));
   const perfNow = perfIds.length ? await rows(dbx, sql`SELECT id, performer_name_snapshot, individual_user_id, cost_total, payment_status, payout_round_id, deleted_at, remark,
+      performer_category, vendor_settlement_type, contract_currency, contract_amount_foreign,
       to_char(expected_payment_date, 'YYYY-MM-DD') AS expected_payment_date, to_char(actual_payment_date, 'YYYY-MM-DD') AS actual_payment_date,
       actual_payment_amount, net_payment, withholding_tax, withholding_treatment
     FROM performance_assignments WHERE id IN (${sql.join(perfIds.map(i => sql`${i}`), sql`, `)})`) : [];
@@ -550,6 +552,9 @@ export async function getLegacyOrigin(dbx: Dbx, projectId: number) {
       // 지급예정일(확인 전 표시 기준) · 실제 지급확정 기록 · 표시 상태(지급완료/지급예정/확인 필요) · 확인 시 기본 지급액 제안
       expectedPaymentDate: a?.expected_payment_date ?? null, actualPaymentDate: a?.actual_payment_date ?? null,
       actualPaymentAmount: a?.actual_payment_amount != null ? Number(a.actual_payment_amount) : null,
+      // 외화 지급(lib/foreignPay) — 지급통화·외화 지급금액(수행정보 값 그대로). 원화 지급 건은 null.
+      ...(() => { const fp = a ? foreignPayOf({ performerCategory: a.performer_category, vendorSettlementType: a.vendor_settlement_type, contractCurrency: a.contract_currency, contractAmountForeign: a.contract_amount_foreign }) : null;
+        return { payCurrency: fp?.currency ?? null, foreignAmount: fp?.amount ?? null }; })(),
       payoutDisplay: legacyPayoutDisplay(l.status, a?.payment_status, a?.expected_payment_date ?? l.source_raw?.payDate ?? null),
       suggestedPaidAmount: a ? suggestedPaidAmount({ originalPostTax: l.source_raw?.originalPostTax ?? null, netPayment: a.net_payment, costTotal: a.cost_total, withholdingTax: a.withholding_tax, withholdingTreatment: a.withholding_treatment }) : null,
     };
@@ -583,10 +588,10 @@ export async function getLegacyOrigin(dbx: Dbx, projectId: number) {
 //   (2026-11-13) 지급완료 확인은 실제 지급확정 기록을 함께 남긴다: 실제 지급일(actual_payment_date)·실제 지급액(actual_payment_amount)
 //   필수. 지급예정일·원가·원천세 등 기존 값은 변경하지 않는다. 확인자·확인일시·근거는 감사로그(legacy_payout_review_resolved).
 export async function resolvePayoutReview(assignmentId: number, decision: "paid" | "unpaid", reason: string, performer: { id: number | null },
-  paid?: { actualPaymentDate: string; actualPaymentAmount: number }, expectProjectId?: number) {
+  paid?: { actualPaymentDate: string; actualPaymentAmount: number; actualPaymentCurrency?: string | null }, expectProjectId?: number) {
   if (decision === "paid" && !paid) throw new ActivationError(400, "실제 지급일과 지급액을 입력하세요.");
   return db.transaction(async (tx: any) => {
-    const [lin] = await rows(tx, sql`SELECT id, status FROM import_row_sources WHERE module = ${ACTIVATION_MODULE} AND row_key LIKE 'progress:%' AND entity_id = ${assignmentId} FOR UPDATE`);
+    const [lin] = await rows(tx, sql`SELECT id, status, source_raw FROM import_row_sources WHERE module = ${ACTIVATION_MODULE} AND row_key LIKE 'progress:%' AND entity_id = ${assignmentId} FOR UPDATE`);
     if (!lin) throw new ActivationError(404, "과거 CRM 전환 수행정보가 아닙니다.");
     // 과거 CRM 으로 원복된 판매(매핑 rolled_back)의 수행정보는 보관 자료 — 지급보류를 풀면 지급회차에 수집될 수 있어 처리하지 않는다
     const [act] = await rows(tx, sql`SELECT 1 FROM performance_assignments a JOIN legacy_master_mappings m ON m.entity_id = a.project_id
@@ -597,14 +602,25 @@ export async function resolvePayoutReview(assignmentId: number, decision: "paid"
     if (!a || a.deletedAt) throw new ActivationError(404, "수행정보를 찾을 수 없습니다.");
     if (expectProjectId != null && a.projectId !== expectProjectId) throw new ActivationError(409, "다른 판매건의 수행정보입니다.");
     if (a.paymentStatus !== "payment_hold" || a.payoutRoundId != null) throw new ActivationError(409, "지급보류 상태(지급회차 미배정)인 건만 처리할 수 있습니다.");
+    // 실제 지급액 — 외화 지급 건(lib/foreignPay)은 지급통화·외화 지급금액으로 확인(원화 0원이어도 0원 수행건 아님, 외화 금액은 수행정보 그대로 보존).
+    //   원화 0원(2026-11-25 대표 결정)은 외화 지급이 아니고 수행정보 지급액과 CRM 원본 지급액(세전·세후)이 모두 0원인 건만(지급할 금액이 없던 기록).
+    let krwPaid: string | null = null; let foreignPaid: { currency: string; amount: number | null } | null = null;
+    if (decision === "paid") {
+      const z = (v: unknown) => v == null || v === "" || Number(v) === 0;
+      const zeroRow = z(a.costTotal) && z(lin.source_raw?.originalPreTax) && z(lin.source_raw?.originalPostTax);
+      const chk = checkPaidAmount(a, paid!, zeroRow);
+      if ("error" in chk) throw new ActivationError(400, chk.error + (!foreignPayOf(a) && paid!.actualPaymentAmount === 0 ? "(0원 지급완료 확인은 수행정보·CRM 지급액이 모두 0원인 건만 가능합니다)" : ""));
+      krwPaid = chk.krw; foreignPaid = chk.foreign;
+    }
     await tx.update(performanceAssignmentsTable).set({
       paymentStatus: decision === "paid" ? "paid" : "unpaid",
-      ...(decision === "paid" ? { status: "paid", actualPaymentDate: paid!.actualPaymentDate, actualPaymentAmount: String(paid!.actualPaymentAmount) } : {}),
+      ...(decision === "paid" ? { status: "paid", actualPaymentDate: paid!.actualPaymentDate, actualPaymentAmount: krwPaid } : {}),
       // 비고는 바꾸지 않는다 — 확인 결과·근거·확인자·일시는 감사로그(legacy_payout_review_resolved)에 남는다(관리용 문구 비고 자동 추가 중단).
       updatedBy: performer.id ?? null, updatedAt: new Date(),
     }).where(eq(performanceAssignmentsTable.id, assignmentId));
     await tx.update(importRowSourcesTable).set({ status: decision === "paid" ? "payout_review_paid" : "payout_review_unpaid" }).where(eq(importRowSourcesTable.id, lin.id));
-    return { projectId: a.projectId as number, performerName: a.performerNameSnapshot ?? null,
-      before: { paymentStatus: a.paymentStatus, costTotal: a.costTotal, expectedPaymentDate: a.expectedPaymentDate, actualPaymentDate: a.actualPaymentDate, actualPaymentAmount: a.actualPaymentAmount } };
+    return { projectId: a.projectId as number, performerName: a.performerNameSnapshot ?? null, foreignPaid,
+      before: { paymentStatus: a.paymentStatus, costTotal: a.costTotal, expectedPaymentDate: a.expectedPaymentDate, actualPaymentDate: a.actualPaymentDate, actualPaymentAmount: a.actualPaymentAmount,
+        contractCurrency: a.contractCurrency, contractAmountForeign: a.contractAmountForeign } };
   });
 }

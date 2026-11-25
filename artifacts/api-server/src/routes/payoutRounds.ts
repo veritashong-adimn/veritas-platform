@@ -1423,16 +1423,39 @@ router.patch("/admin/payout-rounds/:id/unconfirm", ...adminOnlyGuard, async (req
 //   · 대상: 이 회차에 연결된 건 중 지급보류(payment_hold)가 아닌 건 → 지급완료(paid).
 //   · 지급보류 건은 대상에서 제외(상태 유지). payout_round.status 와 payment_status 는 역할 분리.
 //   · 새 상태값·컬럼을 추가하지 않고 기존 enum(paid)만 사용한다.
+// 실제 지급일(이체일) — 지급완료 처리 시 해당 수행건에 기록(지급완료 전에는 비워 둔다).
+//   body.actualPaymentDate(YYYY-MM-DD, 오늘 KST 이후 불가) 우선. 미입력(기존 호출)이면 회차 지급예정일(오늘 이후면 오늘).
+function roundActualPayDate(body: any, roundPaymentDate: unknown): string | { error: string } {
+  const today = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+  const v = body?.actualPaymentDate;
+  if (v != null && v !== "") {
+    if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v) || Number.isNaN(Date.parse(v))) return { error: "실제 지급일(YYYY-MM-DD)을 확인하세요." };
+    if (v > today) return { error: "실제 지급일은 오늘 이후일 수 없습니다." };
+    return v;
+  }
+  const due = roundPaymentDate ? String(roundPaymentDate).slice(0, 10) : "";
+  return /^\d{4}-\d{2}-\d{2}$/.test(due) && due <= today ? due : today;
+}
+
 router.patch("/admin/payout-rounds/:id/pay", ...payoutTransfer, async (req, res) => {
   const id = Number(req.params.id);
   const [round] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
   if (!round) { res.status(404).json({ error: "지급회차를 찾을 수 없습니다." }); return; }
   if (round.status === "paid") { res.status(400).json({ error: "이미 지급완료된 회차입니다." }); return; }
   if (round.status !== "confirmed") { res.status(400).json({ error: "지급확정된 회차만 지급완료 처리할 수 있습니다." }); return; }
+  const actualPaymentDate = roundActualPayDate(req.body, round.paymentDate);
+  if (typeof actualPaymentDate !== "string") { res.status(400).json(actualPaymentDate); return; }
   try {
     const mismatch = await transferMismatchBeforePay(req, round);
     if (mismatch) { res.status(409).json({ error: mismatch }); return; }
     const paidAt = new Date();
+    // 이번에 지급완료로 바뀌는 건(미지급)에만 실제 지급일 기록 — 이미 지급완료된 건의 기존 실제 지급일은 바꾸지 않는다.
+    await db.update(performanceAssignmentsTable)
+      .set({ paymentStatus: "paid", actualPaymentDate, updatedAt: paidAt })
+      .where(and(
+        eq(performanceAssignmentsTable.payoutRoundId, id),
+        eq(performanceAssignmentsTable.paymentStatus, "unpaid"),
+      ));
     await db.update(performanceAssignmentsTable)
       .set({ paymentStatus: "paid", updatedAt: paidAt })
       .where(and(
@@ -1472,6 +1495,8 @@ router.patch("/admin/payout-rounds/:id/pay-items", ...payoutTransfer, async (req
   if (!round) { res.status(404).json({ error: "지급회차를 찾을 수 없습니다." }); return; }
   if (round.status === "paid") { res.status(400).json({ error: "이미 지급완료된 회차입니다." }); return; }
   if (round.status !== "confirmed") { res.status(400).json({ error: "지급확정된 회차만 지급완료 처리할 수 있습니다." }); return; }
+  const actualPaymentDate = roundActualPayDate(req.body, round.paymentDate);
+  if (typeof actualPaymentDate !== "string") { res.status(400).json(actualPaymentDate); return; }
   try {
     // 이번 선택으로 회차 전체가 지급완료되는 경우에만 송금건 정합 확인(송금건 paid 전환은 전체 완료 시에만 일어남).
     const unpaidNow = await db.select({ id: performanceAssignmentsTable.id }).from(performanceAssignmentsTable)
@@ -1483,7 +1508,7 @@ router.patch("/admin/payout-rounds/:id/pay-items", ...payoutTransfer, async (req
     }
     // 선택 건 중 이 회차 소속·미지급(unpaid)만 지급완료. 이미 지급완료·보류는 자동 제외(§5).
     const done = await db.update(performanceAssignmentsTable)
-      .set({ paymentStatus: "paid", updatedAt: new Date() })
+      .set({ paymentStatus: "paid", actualPaymentDate, updatedAt: new Date() })
       .where(and(
         eq(performanceAssignmentsTable.payoutRoundId, id),
         inArray(performanceAssignmentsTable.id, parsed.data.assignmentIds),

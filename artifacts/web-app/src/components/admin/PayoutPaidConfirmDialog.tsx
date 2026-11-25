@@ -5,7 +5,11 @@ import { DateField } from './DatePickerShared';
 import React, { useState } from 'react';
 import { ModalOverlay, PrimaryBtn, GhostBtn } from '../ui';
 
-export type PaidConfirmLine = { id: number; name: string | null; date: string; amount: string };
+// zeroOk: 지급할 금액이 없던 과거 CRM 기록(수행정보·CRM 지급액 모두 0원) — 실제 지급액 0원 확인 허용(서버가 최종 검증)
+//   currency: 지급통화(기본 KRW). 외화 지급 건은 외화 금액으로 확인한다(원화 0원이어도 0원 건 아님 — 서버가 수행정보 외화 지급금액과 대조).
+export type PaidConfirmLine = { id: number; name: string | null; date: string; amount: string; zeroOk?: boolean; currency?: string | null };
+const curOf = (l: PaidConfirmLine) => (l.currency && l.currency.toUpperCase() !== 'KRW' ? l.currency.toUpperCase() : 'KRW');
+const fmtAmt = (n: number, cur: string) => cur === 'KRW' ? `${Math.round(n).toLocaleString()}원` : `${cur} ${n.toLocaleString('ko-KR', { maximumFractionDigits: 2 })}`;
 const kstToday = () => new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
 const toNum = (v: string) => Number(String(v).replace(/,/g, ''));
 const inp: React.CSSProperties = { fontSize: 13, padding: '6px 9px', border: '1px solid #d1d5db', borderRadius: 6, fontFamily: 'inherit', outline: 'none' };
@@ -26,11 +30,14 @@ export function PayoutPaidConfirmDialog({ lines, busy = false, onCancel, onConfi
 
   const submit = () => {
     const out = single ? [{ ...lines[0], date, amount }] : lines;
-    const bad = out.filter(l => !/^\d{4}-\d{2}-\d{2}$/.test(l.date) || l.date > today || !(toNum(l.amount) > 0));
+    const bad = out.filter(l => !/^\d{4}-\d{2}-\d{2}$/.test(l.date) || l.date > today || !(toNum(l.amount) > 0 || (l.zeroOk && String(l.amount).trim() !== '' && toNum(l.amount) === 0)));
     if (bad.length) { setErr(single ? '지급일(오늘 이전)과 실제 지급금액을 입력하세요.' : `지급일(오늘 이전)과 지급금액을 확인하세요 — ${bad.map(l => l.name ?? `#${l.id}`).slice(0, 5).join(', ')}`); return; }
     onConfirm({ lines: out, evidence: evidence.trim() });
   };
-  const total = (single ? toNum(amount) : lines.reduce((a, l) => a + toNum(l.amount), 0)) || 0;
+  // 합계 — 통화별(외화와 원화를 합산하지 않음)
+  const totals = (() => { const m = new Map<string, number>();
+    for (const l of (single ? [{ ...lines[0], amount }] : lines)) m.set(curOf(l), (m.get(curOf(l)) ?? 0) + (toNum(l.amount) || 0));
+    return [...m.entries()]; })();
 
   return (
     <ModalOverlay onClose={busy ? undefined : onCancel} maxWidth={460}>
@@ -43,21 +50,21 @@ export function PayoutPaidConfirmDialog({ lines, busy = false, onCancel, onConfi
             <span style={{ color: '#6b7280' }}>대상</span><span style={{ fontWeight: 700 }}>{lines[0].name ?? `#${lines[0].id}`}</span>
             <label htmlFor="paid-confirm-date" style={{ color: '#6b7280' }}>지급일</label>
             <DateField value={date} max={today} onChange={v => setDate(v)} style={inp} testid="input-paid-confirm-date" ariaLabel="지급일" />
-            <label htmlFor="paid-confirm-amount" style={{ color: '#6b7280' }}>실제 지급금액</label>
+            <label htmlFor="paid-confirm-amount" style={{ color: '#6b7280' }}>실제 지급금액{curOf(lines[0]) !== 'KRW' ? ` (${curOf(lines[0])})` : ''}</label>
             <input id="paid-confirm-amount" value={amount} onChange={e => setAmount(e.target.value.replace(/[^0-9.,]/g, ''))} style={{ ...inp, textAlign: 'right' }}
-              inputMode="numeric" data-testid="input-paid-confirm-amount" aria-label="실제 지급금액" />
+              inputMode="decimal" data-testid="input-paid-confirm-amount" aria-label={curOf(lines[0]) !== 'KRW' ? `실제 지급금액(${curOf(lines[0])})` : '실제 지급금액'} />
           </div>
         ) : (
           <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid #f1f5f9', borderRadius: 8, fontSize: 12 }}>
             {lines.map(l => (
               <div key={l.id} style={{ display: 'flex', gap: 8, padding: '5px 10px', borderBottom: '1px solid #f8fafc' }}>
                 <span style={{ flex: 1 }}>{l.name ?? `#${l.id}`}</span><span style={{ color: '#6b7280' }}>{l.date || '지급일 없음'}</span>
-                <span style={{ minWidth: 90, textAlign: 'right' }}>{toNum(l.amount) ? `${Math.round(toNum(l.amount)).toLocaleString()}원` : '-'}</span>
+                <span style={{ minWidth: 90, textAlign: 'right' }}>{toNum(l.amount) || (l.zeroOk && String(l.amount).trim() !== '') ? fmtAmt(toNum(l.amount), curOf(l)) : '-'}</span>
               </div>
             ))}
           </div>
         )}
-        <div style={{ textAlign: 'right', fontSize: 13, fontWeight: 700, margin: '10px 0 12px' }}>합계 {Math.round(total).toLocaleString()}원</div>
+        <div data-testid="paid-confirm-total" style={{ textAlign: 'right', fontSize: 13, fontWeight: 700, margin: '10px 0 12px' }}>합계 {totals.length ? totals.map(([c, v]) => fmtAmt(v, c)).join(' · ') : '0원'}</div>
 
         <label htmlFor="paid-confirm-evidence" style={{ fontSize: 12, color: '#6b7280' }}>증빙 (선택)</label>
         <textarea id="paid-confirm-evidence" value={evidence} onChange={e => setEvidence(e.target.value)} rows={2}

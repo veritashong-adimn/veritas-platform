@@ -5,24 +5,28 @@
 //  지급예정일·원가·원천세 등 기존 값은 바꾸지 않는다. 확인자·일시·근거(선택)는 호출측 감사로그에 남긴다.
 import { db, performanceAssignmentsTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
+import { checkPaidAmount } from "../lib/foreignPay";
 
 export class PaidConfirmError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
 
-export async function confirmRegularPaid(assignmentId: number, paid: { actualPaymentDate: string; actualPaymentAmount: number }, performer: { id: number | null }) {
+export async function confirmRegularPaid(assignmentId: number, paid: { actualPaymentDate: string; actualPaymentAmount: number; actualPaymentCurrency?: string | null }, performer: { id: number | null }) {
   return db.transaction(async (tx: any) => {
     const [a] = await tx.select().from(performanceAssignmentsTable).where(eq(performanceAssignmentsTable.id, assignmentId)).for("update");
     if (!a || a.deletedAt) throw new PaidConfirmError(404, "수행정보를 찾을 수 없습니다.");
     if (a.paymentStatus === "paid") throw new PaidConfirmError(409, "이미 지급완료된 수행정보입니다.");
     if (a.paymentStatus !== "unpaid") throw new PaidConfirmError(409, "미지급 상태인 건만 지급완료 확인할 수 있습니다(지급보류·처리중 건 제외).");
     if (a.payoutRoundId != null) throw new PaidConfirmError(409, "지급회차에 배정된 건은 정산 화면의 지급회차에서 처리하세요.");
+    // 외화 지급 건 = 지급통화·외화 지급금액으로 확인(원화 실제 지급액은 비움, 외화 금액은 수행정보 그대로) — lib/foreignPay
+    const chk = checkPaidAmount(a, paid);
+    if ("error" in chk) throw new PaidConfirmError(400, chk.error);
     await tx.update(performanceAssignmentsTable).set({
       paymentStatus: "paid", status: "paid",
-      actualPaymentDate: paid.actualPaymentDate, actualPaymentAmount: String(paid.actualPaymentAmount),
+      actualPaymentDate: paid.actualPaymentDate, actualPaymentAmount: chk.krw,
       updatedBy: performer.id ?? null, updatedAt: new Date(),
     }).where(eq(performanceAssignmentsTable.id, assignmentId));
-    return { projectId: a.projectId as number, performerName: a.performerNameSnapshot ?? null,
+    return { projectId: a.projectId as number, performerName: a.performerNameSnapshot ?? null, foreignPaid: chk.foreign,
       before: { paymentStatus: a.paymentStatus, status: a.status, costTotal: a.costTotal, expectedPaymentDate: a.expectedPaymentDate, actualPaymentDate: a.actualPaymentDate, actualPaymentAmount: a.actualPaymentAmount } };
   });
 }

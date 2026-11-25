@@ -82,7 +82,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
     try {
       const res = await fetch(api(`/api/admin/performances/${l.id}/paid-confirm`), {
         method: 'POST', headers: authH,
-        body: JSON.stringify({ actualPaymentDate: l.date, actualPaymentAmount: Number(l.amount.replace(/,/g, '')), reason: evidence }),
+        body: JSON.stringify({ actualPaymentDate: l.date, actualPaymentAmount: Number(l.amount.replace(/,/g, '')), actualPaymentCurrency: l.currency ?? 'KRW', reason: evidence }),
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) { onToast(`지급완료 확인 실패: ${d.error ?? res.status}`); return; }
@@ -1207,8 +1207,12 @@ export default function PerformanceSection({ projectId, token, performances, onC
               <GhostBtn onClick={() => {
                   const today = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
                   const due = String(r.expectedPaymentDate ?? '').slice(0, 10);
+                  // 외화 지급(개인 외화·외주 해외송금) = 수행정보 외화 지급금액·통화로 확인(원화 0원이어도 0원 건 아님)
+                  const fcur = r.contractCurrency && String(r.contractCurrency).trim().toUpperCase() !== 'KRW'
+                    && (r.performerCategory === 'individual' || (r.performerCategory === 'vendor' && r.vendorSettlementType === 'overseas')) ? String(r.contractCurrency).trim().toUpperCase() : null;
                   const amt = r.actualPaymentAmount != null && Number(r.actualPaymentAmount) > 0 ? Number(r.actualPaymentAmount) : after;
-                  setPaidDialog({ id: r.id!, name: r.performerNameSnapshot ?? null, date: /^\d{4}-\d{2}-\d{2}$/.test(due) && due <= today ? due : today, amount: String(Math.round(amt)) });
+                  setPaidDialog({ id: r.id!, name: r.performerNameSnapshot ?? null, date: /^\d{4}-\d{2}-\d{2}$/.test(due) && due <= today ? due : today,
+                    amount: fcur ? (r.contractAmountForeign != null && r.contractAmountForeign !== '' ? String(r.contractAmountForeign) : '') : String(Math.round(amt)), currency: fcur ?? 'KRW' });
                 }}
                 style={{ fontSize: 11, padding: '2px 7px' }} data-testid={`btn-perf-paid-confirm-${i}`} aria-label="지급완료 확인">지급완료 확인</GhostBtn>
             )}

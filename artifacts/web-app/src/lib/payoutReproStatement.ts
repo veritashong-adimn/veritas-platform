@@ -25,6 +25,12 @@ export interface ReproStmtRow {
   content: string | null;   // 상품 · 언어
   pretax: number;
   posttax: number;
+  // 외화 지급(2026-11-25) — 지급통화·외화 지급금액(수행정보 값 그대로). 원화 금액과 합산하지 않고 상세내역·합계 안내에 별도 표시.
+  payCurrency?: string | null;
+  foreignAmount?: number | null;
+  // 수행정보 세금처리 유형(표시 전용, 2026-11-25) — withholding_treatment·수동세율. 없으면(CRM 원본만) 기존 표기(원천징수 3.3%).
+  withholdingTreatment?: string | null;
+  withholdingRate?: number | null;
 }
 export interface ReproStmtOpts {
   payeeName: string;
@@ -40,7 +46,34 @@ export interface ReproStmtOpts {
 
 const num = (n: unknown) => { const v = Number(n); return Number.isFinite(v) ? v : 0; };
 const safe = (s: string) => String(s || '지급대상').replace(/[\\/:*?"<>|\s]+/g, '_');
+// 수행정보 세금처리 미등록(CRM 원본만 있는 과거 재현 건) 기본 표기 — 기존과 같음
 const TAX_DISPLAY = '원천징수 3.3%';
+const rateTxt = (n: number | null | undefined) => (n != null && Number.isFinite(Number(n)) ? `${Number(n).toLocaleString('ko-KR', { maximumFractionDigits: 2 })}%` : '세율 미확정');
+// 개인 세금처리 표기 — 수행정보에 등록된 실제 세금처리 유형(표시만, 세금 계산·금액은 원본값 그대로)
+function treatmentLabel(r: ReproStmtRow): string {
+  switch (r.withholdingTreatment) {
+    case 'domestic_3_3': return '원천징수 3.3%';
+    case 'domestic_2_2': return '원천징수 2.2%';
+    case 'exempt': return '원천징수 제외';
+    case 'nonresident_custom': return `비거주자 원천징수 ${rateTxt(r.withholdingRate)}`;
+    case 'treaty_reduction_or_exemption': return `조세조약 감면·면제 ${rateTxt(r.withholdingRate)}`;
+    case 'tax_review_required': return '세무 확인 필요';
+    default: return TAX_DISPLAY;
+  }
+}
+// 명세서 머리 세금처리 — 행들의 유형이 하나면 그 표기, 여러 개면 함께 표시
+const headTaxLabel = (rows: ReproStmtRow[]) => { const s = [...new Set(rows.map(treatmentLabel))]; return s.length ? s.join(' · ') : TAX_DISPLAY; };
+const isFx = (r: ReproStmtRow) => !!r.payCurrency && r.payCurrency !== 'KRW';
+const fxText = (cur: string, amt: number | null | undefined) => `${cur} ${amt != null ? amt.toLocaleString('ko-KR', { maximumFractionDigits: 2 }) : '금액 미입력'}`;
+// 행 상세내역 — 외화 지급 건은 '외화 지급 USD 1,500' 을 함께 표시
+const detailOf = (r: ReproStmtRow) => isFx(r) ? `${r.filename || '-'} · 외화 지급 ${fxText(r.payCurrency!, r.foreignAmount)}` : (r.filename || '-');
+// 외화 지급 합계(통화별) — 원화 합계와 별도. 없으면 null
+function fxSummary(rows: ReproStmtRow[]): string | null {
+  const m = new Map<string, { amt: number; missing: number }>();
+  for (const r of rows) if (isFx(r)) { const g = m.get(r.payCurrency!) ?? { amt: 0, missing: 0 }; if (r.foreignAmount != null) g.amt = Math.round((g.amt + r.foreignAmount) * 100) / 100; else g.missing++; m.set(r.payCurrency!, g); }
+  if (!m.size) return null;
+  return [...m.entries()].map(([c, g]) => `${fxText(c, g.amt)}${g.missing ? ` (금액 미입력 ${g.missing}건)` : ''}`).join(' · ') + ' — 원화 합계 제외(별도 해외송금)';
+}
 
 function totals(rows: ReproStmtRow[], vendor = false) {
   const gross = rows.reduce((a, r) => a + num(r.pretax), 0);
@@ -52,14 +85,14 @@ function totals(rows: ReproStmtRow[], vendor = false) {
   const vat = vendor ? r2(rows.reduce((a, r) => a + Math.max(0, num(r.posttax) - num(r.pretax)), 0)) : 0;
   return { base: gross, expense: 0, deduction: 0, gross, withholding, net, vat };
 }
-const taxDisplayOf = (vendor: boolean, vat: number, crmDeduct = 0) => (!vendor ? TAX_DISPLAY
+const taxDisplayOf = (vendor: boolean, vat: number, crmDeduct = 0, rows: ReproStmtRow[] = []) => (!vendor ? headTaxLabel(rows)
   : `외주업체 — 원천징수 없음${vat > 0 ? `, 부가세 ${Math.round(vat).toLocaleString()}원 포함` : ''}${crmDeduct > 0 ? ` · CRM 공제 기록 ${Math.round(crmDeduct).toLocaleString()}원(세금 확인 필요)` : ''}`);
 
 // 통번역사 1인 명세서 Excel — 정식 양식(14컬럼: '구분'·'수행일'·'작업량'·'단가' 제거, '상세내역'=파일명 추가).
 export function exportReproStatementExcel(opts: ReproStmtOpts): void {
   const vendor = opts.payeeType === 'vendor';
   const t = totals(opts.rows, vendor);
-  const taxCol = vendor ? '부가세' : '원천세공제(3.3%)';
+  const taxCol = vendor ? '부가세' : '원천세공제';
   const columns: ExcelColumn[] = [
     { header: '거래처', width: 16 }, { header: '상품·업무', width: 26 }, { header: '상세내역', width: 38 },
     { header: '납품일', width: 12 }, { header: '지급일', width: 12 }, { header: '통번역료', type: 'number', width: 12 },
@@ -69,10 +102,10 @@ export function exportReproStatementExcel(opts: ReproStmtOpts): void {
     { header: taxCol, type: 'number', width: 16 }, { header: vendor ? '지급합계' : '실지급액', type: 'number', width: 16 },
   ];
   const rows: ExcelCell[][] = opts.rows.map((r) => [
-    r.client || '거래처 확인 필요', r.content || '-', r.filename || '-', r.deliveryDate || '-', r.payoutDate || '-',
+    r.client || '거래처 확인 필요', r.content || '-', detailOf(r), r.deliveryDate || '-', r.payoutDate || '-',
     Math.round(num(r.pretax)),
     '', 0, '', 0,
-    Math.round(num(r.pretax)), vendor ? '외주업체' : TAX_DISPLAY,
+    Math.round(num(r.pretax)), vendor ? '외주업체' : treatmentLabel(r),
     Math.round(vendor ? Math.max(0, num(r.posttax) - num(r.pretax)) : num(r.pretax) - num(r.posttax)), Math.round(num(r.posttax)),
   ]);
   const totRow: ExcelCell[] = [
@@ -88,6 +121,7 @@ export function exportReproStatementExcel(opts: ReproStmtOpts): void {
     [taxCol, Math.round(vendor ? t.vat : t.withholding)],
     ...(vendor && t.withholding > 0 ? [['CRM 공제 기록(세금 확인 필요)', Math.round(t.withholding)] as [string, ExcelCell]] : []),
     [vendor ? '지급합계' : '최종 실지급액', Math.round(t.net)],
+    ...(fxSummary(opts.rows) ? [['외화 지급 합계', fxSummary(opts.rows)!] as [string, ExcelCell]] : []),
   ];
   downloadStatementExcel({
     filename: `지급명세서_${safe(opts.payeeName)}_${safe(opts.scopeValue)}_${todayStamp()}.xlsx`,
@@ -99,7 +133,8 @@ export function exportReproStatementExcel(opts: ReproStmtOpts): void {
       ['연락처', opts.phone || '-'],
       ['구분', vendor ? '외주업체' : '통번역사'],
       ['지급일', opts.payDate || '-'],
-      ['세금처리', taxDisplayOf(vendor, t.vat, vendor ? t.withholding : 0)],
+      ['세금처리', taxDisplayOf(vendor, t.vat, vendor ? t.withholding : 0, opts.rows)],
+      ...(fxSummary(opts.rows) ? [['외화 지급', fxSummary(opts.rows)!] as [string, string]] : []),
     ],
     columns, rows, totals: totRow, footerRows,
   });
@@ -110,7 +145,7 @@ export function exportReproStatementPdf(opts: ReproStmtOpts): boolean {
   const vendor = opts.payeeType === 'vendor';
   const t = totals(opts.rows, vendor);
   const pdfRows: PayoutStatementPdfRow[] = opts.rows.map((r) => ({
-    customer: r.client || '거래처 확인 필요', product: r.content || '-', detail: r.filename || '-',
+    customer: r.client || '거래처 확인 필요', product: r.content || '-', detail: detailOf(r),
     deliveryDate: r.deliveryDate || '-', payDate: r.payoutDate || '-',
     base: num(r.pretax), expenses: '', deductions: '', gross: num(r.pretax),
   }));
@@ -121,7 +156,7 @@ export function exportReproStatementPdf(opts: ReproStmtOpts): boolean {
     issuedDate: `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`,
     payeeName: opts.payeeName, payeeLanguages: opts.payeeLanguages ?? null, email: opts.email || '-', phone: opts.phone || '-', payeeType: vendor ? '외주업체' : '통번역사',
     scopeFieldLabel: '지급회차', scopeValue: opts.scopeValue,
-    payDate: opts.payDate || '-', taxDisplay: taxDisplayOf(vendor, t.vat, vendor ? t.withholding : 0),
+    payDate: opts.payDate || '-', taxDisplay: taxDisplayOf(vendor, t.vat, vendor ? t.withholding : 0, opts.rows) + (fxSummary(opts.rows) ? ` · 외화 지급 ${fxSummary(opts.rows)}` : ''),
     count: opts.rows.length, rows: pdfRows,
     totals: t,
   });
