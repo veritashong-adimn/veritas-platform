@@ -1,15 +1,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // 정산 화면 컨테이너 — 재무→정산.
 //  · 하위메뉴 3개는 좌측 사이드바에서 선택(지급회차 관리 · 지급명세서 · 세무자료). view prop 으로 분기.
-//  · 지급회차 관리(view='payout')는 과거 CRM + 신규 플랫폼을 지급일별로 통합 조회하는
-//    단일 '지급회차관리' 화면(PayoutUnifiedTab)으로 구성한다(§3). 기존 2개 탭(운영/과거 재현)은 제거.
-//  · 운영 지급확정·은행이체(PayoutRoundsTab)는 1차 범위 밖(§12)이라 로직 무변경 — 조회 화면에서
-//    보조 버튼으로 진입만 가능하게 유지(지급확정·IBK 기능 접근성 보존). 두 흐름은 명확히 분리.
+//  · 지급회차 관리(view='payout') = 지급회차 목록(PayoutUnifiedTab, 통합 조회) → 지급일 클릭 → 지급회차 상세(PayoutRoundDetail).
+//    운영 지급확정·은행이체(PayoutRoundsTab, 로직 무변경)는 상세의 '지급확정·은행이체' 탭(menu.payout_ops)에서 선택 지급일의 운영 회차로 연결.
 //  · 과거 지급 재현 엔진/탭(PayoutReproductionTab)은 삭제하지 않고 관리자 검증용으로 보존(라우팅만 비노출).
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useState } from 'react';
-import { BackToListButton } from './BackToListButton';
-import PayoutRoundsTab, { type PayoutPerms } from './PayoutRoundsTab';
+import { type PayoutPerms } from './PayoutRoundsTab';
+import { PayoutAdjustmentList } from './PayoutAdjustmentsPanel';
 import PayoutAdjustmentBanner from './PayoutAdjustmentBanner';
 import PayoutStatementTab from './PayoutStatementTab';
 import TaxReportTab from './TaxReportTab';
@@ -27,9 +25,7 @@ interface Props {
 }
 
 export function SettlementTabs({ view, token, onToast, canOps = true, payoutPerms }: Props) {
-  // 지급회차 관리 화면: 통합 조회(기본) ↔ 운영 지급확정·이체(보조). 다른 view(명세서·세무)는 영향 없음.
-  const [mode, setMode] = useState<'unified' | 'operational'>('unified');
-  const [adjFocus, setAdjFocus] = useState<'requested' | 'pending' | null>(null);   // 정정 요청 바로가기(2026-11)
+  const [adjFocus, setAdjFocus] = useState<'requested' | 'pending' | null>(null);   // 정정 요청 바로가기(2026-11) — 목록 상단에서 승인·반려 목록 열기
   // 지급명세서: 통합 검색(기본 — 지급회차 관리와 같은 통합 지급자료) ↔ 운영 지급회차 확정 스냅샷 명세서(기존 화면, 보조).
   const [stmtMode, setStmtMode] = useState<'search' | 'operational'>('search');
 
@@ -55,21 +51,19 @@ export function SettlementTabs({ view, token, onToast, canOps = true, payoutPerm
 
   return (
     <div data-testid="settlement-payout-container">
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 4 }}>
-        {/* 페이지 이동 버튼 — 통번역사 상세 '뒤로가기'(BackToListButton subtle)와 같은 디자인. 앞으로 = 오른쪽 화살표, 돌아가기 = 왼쪽 화살표. */}
-        {!canOps ? null : mode === 'unified'
-          ? <BackToListButton variant="subtle" direction="forward" label="운영 지급확정·은행이체" ariaLabel="운영 지급확정·은행이체 화면 열기"
-              testId="settlement-mode-toggle" onClick={() => { setAdjFocus(null); setMode('operational'); }} />
-          : <BackToListButton variant="subtle" label="통합 지급회차관리" ariaLabel="통합 지급회차관리로 돌아가기"
-              testId="settlement-mode-toggle" onClick={() => setMode('unified')} />}
-      </div>
-      {/* 정정 요청·승인 대기 현황(2026-11) — 기본(통합 조회) 화면에서 승인·반려 목록으로 바로 이동. 통합 조회 기능은 그대로. */}
-      {(mode === 'unified' || !canOps) && (
-        <PayoutAdjustmentBanner token={token} canOpen={canOps} onOpen={(f) => { setAdjFocus(f); setMode('operational'); }} />
+      {/* 정정 요청 현황(2026-11) — 지급회차 목록 상단. 바로가기 버튼은 같은 자리에서 승인·반려·정산 대기 목록을 연다(운영 지급확정 권한). */}
+      <PayoutAdjustmentBanner token={token} canOpen={canOps} onOpen={(f) => setAdjFocus(f)} />
+      {canOps && adjFocus && (
+        <div style={{ marginBottom: 12 }} data-testid="settlement-adj-list">
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 4 }}>
+            <button type="button" onClick={() => setAdjFocus(null)} data-testid="settlement-adj-close" aria-label="정정 요청 목록 닫기"
+              style={{ padding: '5px 12px', borderRadius: 8, fontSize: 12, fontWeight: 700, border: '1px solid #cbd5e1', background: '#fff', color: '#334155', cursor: 'pointer' }}>정정 요청 목록 닫기</button>
+          </div>
+          <PayoutAdjustmentList key={adjFocus} mode="admin" token={token} onToast={onToast} initialFilter={adjFocus} focus />
+        </div>
       )}
-      {mode === 'unified' || !canOps
-        ? <PayoutUnifiedTab token={token} onToast={onToast} />
-        : <PayoutRoundsTab token={token} onToast={onToast} perms={payoutPerms} adjFocus={adjFocus} />}
+      {/* 지급회차 목록 → 지급일 클릭 → 상세(지급준비점검·지급대상별 요약·건별 상세내역·지급확정·은행이체) */}
+      <PayoutUnifiedTab token={token} onToast={onToast} canOps={canOps} payoutPerms={payoutPerms} />
     </div>
   );
 }

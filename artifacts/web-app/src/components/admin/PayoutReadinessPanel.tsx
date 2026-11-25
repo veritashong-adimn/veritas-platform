@@ -101,13 +101,14 @@ export function nextPayoutDate(): string {
   return d <= 15 ? `${y}-${pad(m + 1)}-15` : `${y}-${pad(m + 1)}-${pad(new Date(Date.UTC(y, m + 1, 0)).getUTCDate())}`;
 }
 
-export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast }: { token: string; payoutDate?: string | null; onToast: (m: string) => void }) {
-  const [scope, setScope] = useState<'date' | 'all'>('date');
+// defaultOpen — 지급회차 상세 '지급준비점검' 탭처럼 패널 자체가 화면인 경우 펼친 상태로 시작(지급일 없으면 전체 기간 점검).
+export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast, defaultOpen = false }: { token: string; payoutDate?: string | null; onToast: (m: string) => void; defaultOpen?: boolean }) {
+  const [scope, setScope] = useState<'date' | 'all'>(defaultOpen && !propDate ? 'all' : 'date');
   const [date, setDate] = useState<string>(propDate || nextPayoutDate());
   const [data, setData] = useState<Resp | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const [state, setState] = useState<string>('all');
   const [kind, setKind] = useState<string>('all');
   const [cand, setCand] = useState<string>('all');

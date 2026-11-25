@@ -1,91 +1,42 @@
-// 통합 지급회차관리 (Phase 1 · READ-ONLY) — 과거 CRM(legacy) + 신규 플랫폼(current)을 지급일별로 통합 조회·집계.
-//   · 운영 지급확정/은행이체 로직은 변경하지 않음(§12). 저장·송금·상태변경 없음. 원본값 기준.
-//   · 과거 CRM 지급완료 판정 = 납품일 ≤ 2026-09-15(대표 확인) 또는 지급회차 지급일 경과(지급일 다음 날부터, 별도 지급파일 처리분). 입금일/입금내역은 고객 수금 기록(지급 증빙 아님). 조회/표시 전용(원본 불변).
+// 지급회차관리 — 지급회차 목록(최초 화면) → 지급일 클릭 → 지급회차 상세(PayoutRoundDetail, 탭 4개).
+//   · 목록 = 과거 CRM(legacy) + 신규 플랫폼(current) 통합 조회(지급일별, READ-ONLY). 원본값 기준.
+//   · 운영 지급회차(payout_rounds)는 같은 지급일 행에 표시. 통합 조회에 없는 지급일의 운영 회차도 같은 목록에 끼워 넣어 접근(별도 목록 없음).
+//   · 상세는 같은 컴포넌트 안에서 전환 — 목록의 검색조건·페이지·표시 건수는 그대로 유지된다.
+//   · 과거 CRM 지급완료 판정 = 납품일 ≤ 2026-09-15(대표 확인) 또는 지급회차 지급일 경과(별도 지급파일 처리분). 입금일/입금내역은 고객 수금 기록(지급 증빙 아님).
 //   · 날짜 기준 기본값 = 납품일(§5). 조회 기준과 지급회차 귀속(지급일)은 분리.
-//   · 중복 의심(§9)은 표시만 — 자동 삭제/제외/지급 없음.
 import React, { useState, useCallback, useEffect } from 'react';
 import { api } from '../../lib/constants';
 import { Pagination } from '../ui/Paginator';
-import { exportReproStatementExcel, exportReproStatementPdf, reproPayeeLanguages } from '../../lib/payoutReproStatement';
 import { DateField } from './DatePickerShared';
 import './readTableView.css';
-import { ConversionCell, ConversionRequestsPanel, type ConversionInfo } from './LegacyPayoutConversion';
-import { PayoutReadinessPanel } from './PayoutReadinessPanel';
+import { ConversionRequestsPanel } from './LegacyPayoutConversion';
+import { PayoutRoundDetail, type RoundRow, type OpRound, OP_STATUS, opDate, opStatusGroups, num, won, td, tdR, sc } from './PayoutRoundDetail';
+import type { PayoutPerms } from './PayoutRoundsTab';
 
 type DateBasis = 'delivery' | 'payout';
-type RoundRow = {
-  payoutDate: string | null; label: string;
-  assignmentCount: number; legacyCount: number; currentCount: number;
-  pretaxTotal: number; posttaxTotal: number; withholdingImplied: number; withholdingRecalc: number;
-  vatTotal?: number;   // 외주업체 부가세 합계(원천세와 분리, 2026-11-23)
-  paidTotal: number; unpaidTotal: number; needReviewCount: number; excludedCount: number;
-  scheduledCount?: number; scheduledTotal?: number;
-  statusCounts?: StatusCounts;   // 지급상태 4분류 건수(지급완료·미지급·지급예정·확인필요, 합계 = 수행건수)
-};
-type StatusCounts = { paid: number; unpaid: number; scheduled: number; review: number };
-type DetailRow = {
-  source: 'legacy' | 'current'; sourceKey: string; id: number;
-  deliveryDate: string | null; payoutDate: string | null; client: string | null;
-  translator: string | null; residentMasked: string | null; language: string | null;
-  masterEmail: string | null; masterPhone: string | null; originalPhone: string | null;
-  matchStatus: string; matchedUserId: number | null; masterKey: string; confirmed: boolean;
-  content: string | null; filename: string | null; pretax: number; posttax: number; withholdingImplied: number;
-  payeeType?: 'individual' | 'vendor'; vat?: number | null; taxConflict?: string | null;   // 지급대상 구분(외주: 원천징수 0, 부가세 별도)
-  status: 'paid' | 'scheduled' | 'pending' | 'deposit_unconfirmed' | 'excluded' | 'dup_suspect'; statusLabel: string; dupSuspect: boolean;
-  paidBasis: string | null;
-  conversion?: ConversionInfo; conversionEligible?: boolean;
-  languageSource?: 'original' | 'master' | null; masterLanguages?: string | null;   // 명세서 상단 수행 언어(지급명세서 화면과 같은 규칙)   // 과거 CRM 지급 전환(은행이체) 요청·승인 상태 · 요청 가능 여부
-};
-type PayeeGroup = {
-  masterKey: string; name: string; confirmed: boolean; matchStatus: string; matchedUserId: number | null;
-  email: string | null; phone: string | null; count: number; languages: string[];
-  pretaxTotal: number; posttaxTotal: number; withholdingImplied: number; payeeType?: 'individual' | 'vendor'; vatTotal?: number;
-  paidPretax: number; unpaidPretax: number; paidCount: number; unpaidCount: number; needReviewCount: number; dupSuspectCount: number; sources: string[];
-  scheduledCount?: number;
-};
-
-// 지급상태 — 실제 '지급' 여부만(검증상태와 분리). 지급예정 = 지급일 미래·지급확정 기록 없음 · 지급확인 필요 = 지급일 경과/미상·지급확정 기록 없음 · 최신 CRM 파일 기준 동기화로 삭제된 건은 목록·집계에서 제외됨.
-const STATUS_META: Record<string, { label: string; bg: string; fg: string }> = {
-  paid: { label: '지급완료', bg: '#eff6ff', fg: '#1d4ed8' },
-  pending: { label: '지급대기', bg: '#fffbeb', fg: '#b45309' },
-  scheduled: { label: '지급예정', bg: '#ecfdf5', fg: '#047857' },
-  deposit_unconfirmed: { label: '지급확인 필요', bg: '#fef3c7', fg: '#92400e' },
-  dup_suspect: { label: '중복 의심', bg: '#fef2f2', fg: '#dc2626' },
-  excluded: { label: '지급 제외', bg: '#f1f5f9', fg: '#475569' },
-};
-// 출처(legacy/current)는 화면 열에서 제거(§4) — 데이터·식별정보는 백엔드에 그대로 보존. 회차 목록의 건수(과거/신규)로만 표시.
-const STATUS_OPTS: [string, string][] = [['all', '전체'], ['paid', '지급완료'], ['scheduled', '지급예정'], ['pending', '지급대기'], ['deposit_unconfirmed', '지급확인 필요'], ['dup_suspect', '중복 의심'], ['excluded', '지급 제외']];
 const SOURCE_OPTS: [string, string][] = [['all', '전체'], ['legacy', '과거 CRM'], ['current', '신규 플랫폼']];
 
-const num = (v: unknown) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
-const won = (n: number | null | undefined) => (n == null ? '-' : Math.round(Number(n)).toLocaleString());
-const td: React.CSSProperties = { padding: '8px 12px', fontSize: 13, color: '#374151', whiteSpace: 'nowrap' };
-const tdR: React.CSSProperties = { ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' };
-// 통번역사·언어·이메일·연락처·건수·세전·원천세공제·실지급·지급상태·출력(§2 순서)
-const STMT_COLS = 'minmax(96px,1fr) minmax(64px,0.7fr) minmax(140px,1.3fr) 118px 48px 104px 104px 104px minmax(104px,auto) 128px';
-
-function pickPhone(rows: DetailRow[]): string | null {
-  const conf = new Set(rows.filter(r => r.matchStatus === 'confirmed' && r.masterPhone).map(r => r.masterPhone as string));
-  if (conf.size === 1) return [...conf][0]; if (conf.size > 1) return null;
-  const orig = new Set(rows.filter(r => r.originalPhone).map(r => r.originalPhone as string));
-  return orig.size === 1 ? [...orig][0] : null;
-}
-
-export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (m: string) => void }) {
+export function PayoutUnifiedTab({ token, onToast, canOps = false, payoutPerms }: { token: string; onToast: (m: string) => void; canOps?: boolean; payoutPerms?: PayoutPerms }) {
   const authH = { Authorization: `Bearer ${token}` };
   const [rounds, setRounds] = useState<RoundRow[]>([]);
   const [pg, setPg] = useState({ page: 1, pageSize: 10, total: 0, totalPages: 1 }); // 기본 10행(옵션 5/10/20/50/100)
   const [basis, setBasis] = useState<DateBasis>('delivery'); // 기본값 = 납품일(§5)
   const [dateFrom, setDateFrom] = useState(''); const [dateTo, setDateTo] = useState('');
   const [translator, setTranslator] = useState(''); const [client, setClient] = useState('');
-  const [status, setStatus] = useState('all'); const [source, setSource] = useState('all');
-  const [applied, setApplied] = useState({ basis: 'delivery' as DateBasis, from: '', to: '', status: 'all', source: 'all', translator: '', client: '' });
+  const [source, setSource] = useState('all');
+  const [applied, setApplied] = useState({ basis: 'delivery' as DateBasis, from: '', to: '', source: 'all', translator: '', client: '' });
   const [loading, setLoading] = useState(false);
-  const [sel, setSel] = useState<RoundRow | null>(null);
-  const [detail, setDetail] = useState<DetailRow[]>([]); const [payees, setPayees] = useState<PayeeGroup[]>([]); const [totals, setTotals] = useState<any>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  // 선택한 통번역사(masterKey) 또는 '__all__'(전체 건별). null = 아직 미선택(상세 숨김). §6
-  const [selPayee, setSelPayee] = useState<string | null>(null);
+  const [convKey, setConvKey] = useState(0);   // 과거 CRM 지급 전환 요청·승인 후 요청 패널 재조회
+  // 상세 — 선택 지급일(undefined = 목록 화면, null = 지급일 미확인)
+  const [detailDate, setDetailDate] = useState<string | null | undefined>(undefined);
+  const [detailTab, setDetailTab] = useState<'readiness' | 'operational' | undefined>(undefined);
+  const [listScroll, setListScroll] = useState(0);
+  // 운영 지급회차(payout_rounds) — 지급일별 표시·상세 연결. 조회 권한이 없으면 빈 목록(통합 조회만).
+  const [opRounds, setOpRounds] = useState<OpRound[]>([]);
+  const loadOpRounds = useCallback(async () => {
+    try { const r = await fetch(api('/api/admin/payout-rounds'), { headers: authH }); const d = await r.json(); if (r.ok) setOpRounds(d.rows ?? []); } catch { /* 권한·오류 시 통합 조회만 */ }
+  }, [token]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void loadOpRounds(); }, [loadOpRounds]);
 
   const loadRounds = useCallback(async (page = 1, overridePageSize?: number) => {
     setLoading(true);
@@ -100,76 +51,73 @@ export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (
       if (source !== 'all') p.set('source', source);
       const r = await fetch(api(`/api/admin/payout-unified/rounds?${p}`), { headers: authH });
       const d = await r.json(); if (!r.ok) throw new Error(d?.error || '조회 실패');
-      setRounds(d.rounds); setPg(d.pagination); setSel(null); setDetail([]); setPayees([]); setTotals(null); setSelPayee(null);
-      setApplied({ basis, from: dateFrom, to: dateTo, status, source, translator, client });
+      setRounds(d.rounds); setPg(d.pagination);
+      setApplied({ basis, from: dateFrom, to: dateTo, source, translator, client });
     } catch (e: any) { onToast(e?.message || '통합 회차 조회 실패'); } finally { setLoading(false); }
-  }, [token, pg.pageSize, basis, dateFrom, dateTo, translator, client, source, status]);
-
-  const [convKey, setConvKey] = useState(0);   // 전환 요청·승인 후 요청 패널·상세 재조회
-  const loadDetail = useCallback(async (round: RoundRow) => {
-    setSel(round); setDetailLoading(true); setSelPayee(null); setDetail([]); setPayees([]); // 회차 변경 시 이전 선택·상세 초기화(§6-12)
-    try {
-      const p = new URLSearchParams(); p.set('date', round.payoutDate ?? 'none'); p.set('basis', applied.basis);
-      if (applied.basis === 'delivery') { if (/^\d{4}-\d{2}-\d{2}$/.test(applied.from)) p.set('dateFrom', applied.from); if (/^\d{4}-\d{2}-\d{2}$/.test(applied.to)) p.set('dateTo', applied.to); }
-      if (applied.translator.trim()) p.set('translator', applied.translator.trim());
-      if (applied.client.trim()) p.set('client', applied.client.trim());
-      if (applied.source !== 'all') p.set('source', applied.source);
-      if (applied.status !== 'all') p.set('status', applied.status);
-      const r = await fetch(api(`/api/admin/payout-unified/payees?${p}`), { headers: authH });
-      const d = await r.json(); if (!r.ok) throw new Error(d?.error || '조회 실패');
-      setDetail(d.items); setPayees(d.payees); setTotals(d.totals);
-    } catch (e: any) { onToast(e?.message || '상세 조회 실패'); } finally { setDetailLoading(false); }
-  }, [token, applied]);
+  }, [token, pg.pageSize, basis, dateFrom, dateTo, translator, client, source]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { loadRounds(1); /* 최초 1회 — 납품일 기준 */ }, []); // eslint-disable-line
 
-  const reset = () => { setBasis('delivery'); setDateFrom(''); setDateTo(''); setTranslator(''); setClient(''); setStatus('all'); setSource('all'); setTimeout(() => loadRounds(1), 0); };
+  const reset = () => { setBasis('delivery'); setDateFrom(''); setDateTo(''); setTranslator(''); setClient(''); setSource('all'); setTimeout(() => loadRounds(1), 0); };
+
+  // 지급일별 운영 회차
+  const opByDate = new Map<string, OpRound[]>();
+  for (const r of opRounds) { const k = opDate(r); opByDate.set(k, [...(opByDate.get(k) ?? []), r]); }
+
+  // 통합 조회에 없는 지급일의 운영 회차 — 같은 목록(지급일 내림차순)의 해당 위치에 끼워 넣는다(별도 목록 없음).
+  //  · 목록은 지급일 내림차순 페이지 → 이 페이지의 날짜 범위(첫 행~마지막 행, 첫 페이지는 위쪽·마지막 페이지는 아래쪽 열림) 안에 있는데
+  //    목록에 없는 날짜 = 통합 조회에 없는 날짜이므로 이 페이지에 표시. 거래처·통번역사 검색 또는 과거 CRM 출처 조회 중에는 끼워 넣지 않는다.
+  //  · 지급일 기준 기간 조회면 기간 안만, 납품일 기준 기간 조회면 지급일과 기준이 달라 끼워 넣지 않는다.
+  const rowsWithOp: RoundRow[] = (() => {
+    if (applied.translator.trim() || applied.client.trim() || applied.source === 'legacy') return rounds;
+    if (applied.basis === 'delivery' && (applied.from || applied.to)) return rounds;
+    const dated = rounds.filter(r => r.payoutDate);
+    const present = new Set(dated.map(r => r.payoutDate as string));
+    const hi = pg.page <= 1 ? '9999-12-31' : (dated[0]?.payoutDate ?? '');
+    const lo = pg.page >= pg.totalPages ? '0000-01-01' : (dated[dated.length - 1]?.payoutDate ?? '9999-12-31');
+    const extra = [...opByDate.keys()].filter(d => !present.has(d) && d <= hi && d >= lo
+      && (applied.basis !== 'payout' || ((!applied.from || d >= applied.from) && (!applied.to || d <= applied.to))))
+      .map(d => ({ payoutDate: d, label: `${d} 지급`, assignmentCount: 0, legacyCount: 0, currentCount: 0, pretaxTotal: 0, posttaxTotal: 0, withholdingImplied: 0, withholdingRecalc: 0, paidTotal: 0, unpaidTotal: 0, needReviewCount: 0, excludedCount: 0, opOnly: true } as RoundRow));
+    if (!extra.length) return rounds;
+    const nulls = rounds.filter(r => !r.payoutDate);
+    return [...dated, ...extra].sort((a, b) => String(b.payoutDate).localeCompare(String(a.payoutDate))).concat(nulls);
+  })();
+
+  const openDetail = (r: RoundRow) => {
+    setListScroll(window.scrollY);
+    setDetailTab(r.opOnly ? 'operational' : undefined);
+    setDetailDate(r.payoutDate);
+    window.scrollTo({ top: 0 });
+  };
+  const closeDetail = () => {
+    setDetailDate(undefined);
+    void loadOpRounds();
+    setTimeout(() => window.scrollTo({ top: listScroll }), 0);
+  };
+
+  if (detailDate !== undefined) {
+    return (
+      <PayoutRoundDetail token={token} onToast={onToast} payoutDate={detailDate}
+        opRounds={detailDate ? (opByDate.get(detailDate) ?? []) : []} reloadOpRounds={loadOpRounds}
+        canOps={canOps} payoutPerms={payoutPerms} initialTab={detailTab === 'operational' && canOps ? 'operational' : undefined}
+        onBack={closeDetail} />
+    );
+  }
 
   const inp: React.CSSProperties = { padding: '7px 10px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13 };
   const btn = (primary?: boolean): React.CSSProperties => ({ padding: '7px 14px', borderRadius: 8, fontWeight: 700, fontSize: 13, border: 'none', cursor: 'pointer', background: primary ? '#0ea5e9' : '#e5e7eb', color: primary ? '#fff' : '#374151' });
-  const sBtn: React.CSSProperties = { padding: '3px 9px', borderRadius: 6, fontSize: 12, fontWeight: 700, border: '1px solid #cbd5e1', background: '#fff', color: '#334155', cursor: 'pointer' };
-  // 지급명세서 출력 버튼 — 텍스트 버튼(§3), 같은 행 내 크기·높이 통일.
-  const stmtBtn: React.CSSProperties = { minWidth: 58, padding: '5px 12px', borderRadius: 6, fontSize: 12, fontWeight: 700, border: '1px solid #cbd5e1', background: '#fff', color: '#334155', cursor: 'pointer', lineHeight: 1.2 };
-
-  // 지급상태 4분류 건수 — 서버 statusCounts(구버전 응답이면 기존 필드로 대체).
-  const sc = (r: { statusCounts?: StatusCounts; scheduledCount?: number; needReviewCount?: number }): StatusCounts =>
-    r.statusCounts ?? { paid: 0, unpaid: 0, scheduled: num(r.scheduledCount), review: num(r.needReviewCount) };
   const cntSub = (color: string, n: number): React.CSSProperties => ({ fontSize: 11, fontWeight: 600, marginTop: 1, color: n > 0 ? color : '#cbd5e1' });
-  // §4 — '실지급액'(전체 세후)과 '지급완료'(지급완료 건 세전)는 기준이 달라 값이 다르다. 라벨에 기준 명시(계산 로직 불변).
-  const summaryList: [string, string, string?][] = sel && totals ? [
-    ['지급대상 인원', `${num(totals.payeeCount)}명`], ['수행건수', `${num(totals.assignmentCount)}건`],
-    ['세전금액', `${won(totals.pretaxTotal)}원`, '전체 건 세전 합계'],
-    ['원천세공제(3.3%)', `${won(totals.withholdingImpliedTotal)}원`, '개인 통번역사 원본 세전−세후(실제 공제) 합계 · 3.3%는 참고 · 외주업체 부가세는 포함하지 않음'],
-    ...(num(totals.vatTotal) > 0 ? [['부가세(외주업체)', `${won(totals.vatTotal)}원`, '외주업체 지급합계에 포함된 부가세(세후−세전 저장값) — 원천세와 별도']] as [string, string, string?][] : []),
-    ['실지급액(세후)', `${won(totals.posttaxTotal)}원`, '전체 건 세후(실지급) 합계 = 세전 − 원천세공제 + 외주업체 부가세'],
-    ['지급완료(세전)', `${won(totals.paidTotal)}원 · ${num(sc(totals).paid)}건`, '지급완료 건의 세전 합계 — 과거 CRM: 납품일 ≤ 2026-09-15(대표 확인) 또는 지급일 경과(별도 지급파일 처리분) · 신규: 지급회차 지급완료 처리 건(전체 세후와 기준이 다름)'],
-    ['미지급(세전)', `${won(totals.unpaidTotal)}원 · ${num(sc(totals).unpaid)}건`, '금액 = 신규 미지급 건의 세전 합계 · 건수 = 지급예정일이 지났는데 지급완료되지 않은 신규 건(지급보류·확인필요 제외)'],
-    ['지급예정', `${num(sc(totals).scheduled)}건`, '지급일(지급예정일)이 아직 오지 않은 미완료 건 — 과거 CRM·신규 플랫폼'],
-    ['지급확인 필요', `${num(sc(totals).review)}건`, '지급일·지급완료 근거가 불명확한 건(과거 CRM 지급일 없음 · 신규 지급보류·지급일 없음 · 중복 의심). 기록을 보정하지 않고 별도 집계.'],
-  ] : [];
-
-  // 선택한 통번역사의 상세만 표시(§6). null=미선택(숨김) · '__all__'=전체 건별.
-  const detailRows = selPayee == null ? [] : (selPayee === '__all__' ? detail : detail.filter(r => r.masterKey === selPayee));
-  const selPayeeName = selPayee && selPayee !== '__all__' ? (payees.find(g => g.masterKey === selPayee)?.name ?? '') : '전체';
-  const clamp2 = { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', whiteSpace: 'normal', lineHeight: 1.35 } as React.CSSProperties;
-  // 내부 세로 스크롤 제거 — 페이지당 건수만큼 자연 확장, 스크롤은 페이지 전체에서. 가로 부족 시에만 가로 스크롤. 헤더는 vz-sticky로 고정.
   const roundsBox: React.CSSProperties = { overflowX: 'auto', overflowY: 'visible', border: '1px solid #e5e7eb', borderRadius: 10 };
-  const secTitle: React.CSSProperties = { fontSize: 13, fontWeight: 800, color: '#374151', margin: '0 0 6px' };
-
-  const stmtFor = (g: PayeeGroup) => {
-    const rows = detail.filter(r => r.masterKey === g.masterKey);
-    const payDate = rows.find(r => r.payoutDate)?.payoutDate ?? (sel?.payoutDate ?? '-');
-    return { payeeType: g.payeeType === 'vendor' ? 'vendor' as const : 'individual' as const, payeeName: g.name, payeeLanguages: reproPayeeLanguages(rows), email: g.email, phone: g.phone ?? pickPhone(rows), scopeValue: `${sel?.payoutDate ?? '지급일 미확인'} 지급`, payDate,
-      rows: rows.map(r => ({ client: r.client, filename: r.filename, deliveryDate: r.deliveryDate, payoutDate: r.payoutDate, content: r.content, pretax: r.pretax, posttax: r.posttax })) };
-  };
+  const dash = <span style={{ color: '#d1d5db' }}>-</span>;
 
   return (
     <div data-testid="payout-unified-tab">
-      {/* 지급 준비 점검·지급 누락 방지(2026-11) — ① 지급일 기준 후보(선택 회차 지급일 연동) ② 전체 기간 누락·날짜 공란. 조회 전용. */}
-      <PayoutReadinessPanel token={token} payoutDate={sel?.payoutDate ?? null} onToast={onToast} />
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, margin: '0 0 8px', flexWrap: 'wrap' }}>
         <h1 style={{ fontSize: 19, fontWeight: 800, color: '#111827', margin: 0 }}>지급회차관리</h1>
-        <span style={{ fontSize: 11.5, color: '#9ca3af' }}>과거 CRM + 신규 플랫폼 통합 조회 · 조회/명세서 전용(지급확정·송금 없음) · 과거 CRM 지급완료 = 지급일 경과(다음 날부터 · 별도 지급파일 처리분, VERITAS 송금 아님) 또는 납품일 ≤ 2026-09-15(대표 확인) · 입금내역(고객 수금)은 지급 근거 아님</span>
+        <span style={{ fontSize: 11.5, color: '#9ca3af' }}
+          title="과거 CRM 지급완료 = 지급일 경과(다음 날부터 · 별도 지급파일 처리분, VERITAS 송금 아님) 또는 납품일 ≤ 2026-09-15(대표 확인) · 입금내역(고객 수금)은 지급 근거 아님">
+          과거 CRM + 신규 플랫폼 통합 조회 · 지급일을 클릭하면 지급준비점검·지급대상별 요약·건별 상세내역{canOps ? '·지급확정·은행이체' : ''}
+        </span>
       </div>
 
       {/* 검색조건 — 한 줄(폭 부족 시 줄바꿈) */}
@@ -183,176 +131,56 @@ export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (
         <DateField style={{ ...inp, width: 148 }} value={dateTo} min={dateFrom || undefined} onChange={setDateTo} testid="pu-to" ariaLabel="종료일" />
         <input style={{ ...inp, minWidth: 130 }} placeholder="거래처" value={client} onChange={e => setClient(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') loadRounds(1); }} aria-label="거래처 검색" data-testid="pu-client" />
         <input style={{ ...inp, minWidth: 130 }} placeholder="통번역사" value={translator} onChange={e => setTranslator(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') loadRounds(1); }} aria-label="통번역사 검색" data-testid="pu-translator" />
-        <select style={inp} value={status} onChange={e => setStatus(e.target.value)} aria-label="지급상태" data-testid="pu-status">{STATUS_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
         <select style={inp} value={source} onChange={e => setSource(e.target.value)} aria-label="데이터 출처" data-testid="pu-source">{SOURCE_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
-        <button style={btn(true)} onClick={() => loadRounds(1)} disabled={loading} data-testid="pu-search">{loading ? '조회 중…' : '조회'}</button>
-        <button style={btn()} onClick={reset} data-testid="pu-reset">초기화</button>
+        <button style={btn(true)} onClick={() => loadRounds(1)} disabled={loading} data-testid="pu-search" aria-label="조회">{loading ? '조회 중…' : '조회'}</button>
+        <button style={btn()} onClick={reset} data-testid="pu-reset" aria-label="검색조건 초기화">초기화</button>
       </div>
 
       {applied.basis === 'delivery' && (applied.from || applied.to) && (
         <div data-testid="pu-delivery-notice" style={{ marginBottom: 10, padding: '7px 11px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontSize: 11.5, color: '#92400e' }}>
-          <b>납품일 기준</b> (납품일 {applied.from || '…'} ~ {applied.to || '…'}) — 아래 회차는 실제 지급일별로 묶입니다. 서로 다른 지급일 건을 하나의 회차로 합산·지급확정하지 않습니다(§5).
+          <b>납품일 기준</b> (납품일 {applied.from || '…'} ~ {applied.to || '…'}) — 아래 회차는 실제 지급일별로 묶입니다. 상세화면은 선택한 지급일 전체를 표시합니다.
         </div>
       )}
 
       {/* 과거 CRM 지급 전환 승인 요청(있을 때만) — 관리자 승인·반려 */}
-      <ConversionRequestsPanel token={token} onToast={onToast} reloadKey={convKey} onChanged={() => { if (sel) loadDetail(sel); }} />
+      <ConversionRequestsPanel token={token} onToast={onToast} reloadKey={convKey} onChanged={() => setConvKey(k => k + 1)} />
 
-      {/* ① 지급회차 목록 — 페이지당 건수만큼 자연 확장(내부 세로 스크롤 없음, 페이지 전체 스크롤) */}
-      <div style={secTitle}>① 지급회차 목록 <span style={{ fontSize: 11, fontWeight: 600, color: '#9ca3af' }}>· 행 클릭 → 통번역사별 지급내역</span></div>
       <div style={roundsBox}>
         <table className="veritas-read-table vz-sticky pz-zebra" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-          <thead><tr>{['지급일(회차)', '수행건수', '출처(과거/신규)', '세전금액', '원천세공제', '지급완료', '미지급', '지급예정', '지급확인'].map(h => <th key={h} style={{ padding: '8px 12px', textAlign: h.includes('금액') || h.includes('완료') || h.includes('미지급') || h.includes('공제') || h === '지급예정' || h === '지급확인' ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>)}</tr></thead>
+          <thead><tr>{['지급일(회차)', '수행건수', '출처(과거/신규)', '세전금액', '원천세공제', '지급완료', '미지급', '지급예정', '지급확인', '운영 회차'].map(h => <th key={h} style={{ padding: '8px 12px', textAlign: h.includes('금액') || h.includes('완료') || h.includes('미지급') || h.includes('공제') || h === '지급예정' || h === '지급확인' ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>)}</tr></thead>
           <tbody>
-            {rounds.map((r, i) => (
-              <tr key={(r.payoutDate ?? 'none') + i} data-testid={`pu-round-${r.payoutDate ?? 'none'}`} onClick={() => loadDetail(r)}
-                style={{ cursor: 'pointer', background: sel && sel.payoutDate === r.payoutDate ? '#dbeafe' : undefined, outline: sel && sel.payoutDate === r.payoutDate ? '2px solid #93c5fd' : undefined, outlineOffset: -2 }}>
-                <td style={{ ...td, fontWeight: sel && sel.payoutDate === r.payoutDate ? 800 : 400 }}>{r.payoutDate ?? <span style={{ color: '#b45309', fontWeight: 700 }}>(지급일 미확인)</span>}</td>
-                <td style={tdR}>{r.assignmentCount.toLocaleString()}건</td>
-                <td style={td}><span style={{ color: '#6d28d9', fontWeight: 600 }}>{r.legacyCount}</span> / <span style={{ color: '#047857', fontWeight: 600 }}>{r.currentCount}</span></td>
-                <td style={tdR}>{won(r.pretaxTotal)}</td>
-                <td style={{ ...tdR, color: '#6b7280' }}>{won(r.withholdingImplied)}
-                  {num(r.vatTotal) > 0 && <div style={{ fontSize: 10.5, color: '#7c3aed', fontWeight: 600 }} data-testid={`pu-round-vat-${r.payoutDate ?? 'none'}`}>외주 부가세 {won(num(r.vatTotal))}</div>}</td>
-                {/* 금액 아래 작은 글씨 = 지급상태 4분류 건수(지급완료 파랑·미지급 주황·지급예정 녹색). 금액은 기존 값 그대로. */}
-                <td style={{ ...tdR, color: '#1d4ed8' }}>{won(r.paidTotal)}<div style={cntSub('#1d4ed8', sc(r).paid)} data-testid={`pu-round-paidcnt-${r.payoutDate ?? 'none'}`}>{sc(r).paid.toLocaleString()}건</div></td>
-                <td style={{ ...tdR, color: r.unpaidTotal > 0 ? '#b45309' : '#9ca3af' }}>{won(r.unpaidTotal)}<div style={cntSub('#c2410c', sc(r).unpaid)} data-testid={`pu-round-unpaidcnt-${r.payoutDate ?? 'none'}`}>{sc(r).unpaid.toLocaleString()}건</div></td>
-                <td style={{ ...tdR, color: sc(r).scheduled > 0 ? '#047857' : '#9ca3af' }} data-testid={`pu-round-scheduled-${r.payoutDate ?? 'none'}`}>{sc(r).scheduled.toLocaleString()}건</td>
-                <td style={{ ...tdR, color: sc(r).review > 0 ? '#92400e' : '#9ca3af' }} data-testid={`pu-round-review-${r.payoutDate ?? 'none'}`}>{sc(r).review.toLocaleString()}건</td>
-              </tr>
-            ))}
-            {rounds.length === 0 && !loading && <tr><td colSpan={9} style={{ padding: 28, textAlign: 'center', color: '#9ca3af' }}>조회된 회차가 없습니다.</td></tr>}
+            {rowsWithOp.map((r, i) => {
+              const ops = r.payoutDate ? (opByDate.get(r.payoutDate) ?? []) : [];
+              const k = r.payoutDate ?? 'none';
+              return (
+                <tr key={k + i} data-testid={`pu-round-${k}`} onClick={() => openDetail(r)} style={{ cursor: 'pointer' }}
+                  tabIndex={0} role="button" aria-label={`${r.label} 상세 보기`} onKeyDown={e => { if (e.key === 'Enter') openDetail(r); }}>
+                  <td style={{ ...td, fontWeight: 600, color: '#0369a1' }}>{r.payoutDate ?? <span style={{ color: '#b45309', fontWeight: 700 }}>(지급일 미확인)</span>}</td>
+                  {r.opOnly ? <>
+                    <td colSpan={8} style={{ ...td, color: '#6b7280', fontSize: 12 }} data-testid={`pu-round-oponly-${k}`}>통합 조회 대상 건 없음 — 운영 지급회차만 있는 지급일</td>
+                  </> : <>
+                    <td style={tdR}>{r.assignmentCount.toLocaleString()}건</td>
+                    <td style={td}><span style={{ color: '#6d28d9', fontWeight: 600 }}>{r.legacyCount}</span> / <span style={{ color: '#047857', fontWeight: 600 }}>{r.currentCount}</span></td>
+                    <td style={tdR}>{won(r.pretaxTotal)}</td>
+                    <td style={{ ...tdR, color: '#6b7280' }}>{won(r.withholdingImplied)}
+                      {num(r.vatTotal) > 0 && <div style={{ fontSize: 10.5, color: '#7c3aed', fontWeight: 600 }} data-testid={`pu-round-vat-${k}`}>외주 부가세 {won(num(r.vatTotal))}</div>}</td>
+                    <td style={{ ...tdR, color: '#1d4ed8' }}>{won(r.paidTotal)}<div style={cntSub('#1d4ed8', sc(r).paid)} data-testid={`pu-round-paidcnt-${k}`}>{sc(r).paid.toLocaleString()}건</div></td>
+                    <td style={{ ...tdR, color: r.unpaidTotal > 0 ? '#b45309' : '#9ca3af' }}>{won(r.unpaidTotal)}<div style={cntSub('#c2410c', sc(r).unpaid)} data-testid={`pu-round-unpaidcnt-${k}`}>{sc(r).unpaid.toLocaleString()}건</div></td>
+                    <td style={{ ...tdR, color: sc(r).scheduled > 0 ? '#047857' : '#9ca3af' }} data-testid={`pu-round-scheduled-${k}`}>{sc(r).scheduled.toLocaleString()}건</td>
+                    <td style={{ ...tdR, color: sc(r).review > 0 ? '#92400e' : '#9ca3af' }} data-testid={`pu-round-review-${k}`}>{sc(r).review.toLocaleString()}건</td>
+                  </>}
+                  <td style={td} data-testid={`pu-round-op-${k}`}>{ops.length ? (
+                    <span style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                      {opStatusGroups(ops).map(([st, n]) => { const m = OP_STATUS[st] ?? OP_STATUS.draft; return <span key={st} style={{ fontSize: 11, fontWeight: 700, padding: '1px 7px', borderRadius: 8, background: m.bg, color: m.color }}>{m.label}{n > 1 ? ` ${n}` : ''}</span>; })}
+                    </span>) : dash}</td>
+                </tr>
+              );
+            })}
+            {rowsWithOp.length === 0 && !loading && <tr><td colSpan={10} style={{ padding: 28, textAlign: 'center', color: '#9ca3af' }}>조회된 회차가 없습니다.</td></tr>}
           </tbody>
         </table>
       </div>
       {pg.total > 0 && <Pagination idPrefix="pu-rounds" page={pg.page} pageSize={pg.pageSize} total={pg.total} unit="회차" disabled={loading} pageSizeOptions={[5, 10, 20, 50, 100]} onPageChange={(p) => loadRounds(p)} onPageSizeChange={(s) => { setPg(v => ({ ...v, pageSize: s, page: 1 })); loadRounds(1, s); }} />}
-
-      {/* 선택 회차 영역 */}
-      {sel && (
-        <div style={{ marginTop: 16 }}>
-          {/* 회차 요약 — 한 줄(§4) */}
-          {summaryList.length > 0 && (
-            <div data-testid="pu-summary" style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 0', alignItems: 'center', border: '1px solid #e5e7eb', borderRadius: 10, padding: '8px 12px', marginBottom: 14, background: '#fff' }}>
-              <span style={{ fontSize: 13, fontWeight: 800, color: '#111827', marginRight: 10 }}>{sel.label}</span>
-              {summaryList.map(([k, v, tip], idx) => (
-                <React.Fragment key={k}>
-                  {idx > 0 && <span style={{ color: '#e5e7eb', margin: '0 10px' }}>|</span>}
-                  <span style={{ fontSize: 11.5, color: '#9ca3af', marginRight: 5, cursor: tip ? 'help' : undefined }} title={tip}>{k}</span>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: k.includes('원천세') ? '#dc2626' : k.includes('실지급') ? '#111827' : '#374151', fontVariantNumeric: 'tabular-nums' }} title={tip}>{v}</span>
-                </React.Fragment>
-              ))}
-            </div>
-          )}
-
-          {/* ② 통번역사별 지급내역 — 메인(§5). 행 클릭 → 해당 통번역사 상세. */}
-          {payees.length > 0 && (
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 6, flexWrap: 'wrap', gap: 8 }}>
-                <div style={secTitle}>② 통번역사별 지급내역 <span style={{ fontSize: 11, fontWeight: 600, color: '#9ca3af' }}>· Master 연결 기준 · {payees.length}명 · 행 클릭 → 건별 상세</span></div>
-                <button style={{ ...sBtn, background: selPayee === '__all__' ? '#0369a1' : '#fff', color: selPayee === '__all__' ? '#fff' : '#334155' }} data-testid="pu-show-all" onClick={() => setSelPayee('__all__')}>전체 건별 내역 ({detail.length}건)</button>
-              </div>
-              {/* 내부 세로 스크롤 제거(§1) — 행 수만큼 자연 확장, 가로 부족 시에만 가로 스크롤 */}
-              <div data-testid="pu-payee-panel" style={{ border: '1px solid #e5e7eb', borderRadius: 10, background: '#fff', overflowX: 'auto', overflowY: 'visible' }}>
-                <div style={{ minWidth: 1040 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: STMT_COLS, gap: '0 12px', alignItems: 'center', fontSize: 12, padding: '7px 12px', background: '#f3f4f6', color: '#6b7280', fontWeight: 700 }}>
-                  <div>통번역사</div><div>언어</div><div>이메일</div><div>연락처</div><div style={{ textAlign: 'right' }}>건수</div><div style={{ textAlign: 'right' }}>세전금액</div><div style={{ textAlign: 'right' }}>원천세공제</div><div style={{ textAlign: 'right' }}>실지급액</div><div style={{ textAlign: 'right' }}>지급상태</div><div style={{ textAlign: 'right' }}>Excel · PDF</div>
-                </div>
-                <div className="pu-payee-list">
-                  {payees.map((g) => {
-                    const opts = stmtFor(g); const selected = selPayee === g.masterKey;
-                    return (
-                      <div className="pu-payee-row" key={g.masterKey} data-testid={`pu-payee-${g.name}`} onClick={() => setSelPayee(g.masterKey)}
-                        style={{ display: 'grid', gridTemplateColumns: STMT_COLS, gap: '0 12px', alignItems: 'center', fontSize: 12.5, padding: '8px 12px', ...(selected ? { background: '#dbeafe' } : null) }}>
-                        <div style={{ color: '#111827', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {g.name}
-                          {/* 연결(검증상태) — 지급상태와 무관(§1·§3). Master 연결된 건(active/confirmed)은 배지 없음.
-                              거래처/업체는 개인 Master 대상이 아니므로 '거래처'로만 표시. 이름만 존재·미연결 개인만 '연결 확인필요'. */}
-                          {!g.confirmed && g.matchStatus === 'internal'
-                            ? <span style={{ marginLeft: 5, fontSize: 10, color: '#475569', background: '#f1f5f9', padding: '1px 5px', borderRadius: 7 }} title="베리타스 명의 0원 기록 — 지급액 없음(송금 대상 아님)">지급액 없음</span>
-                            : !g.confirmed && (g.matchStatus === 'vendor' || g.matchStatus === 'client')
-                            ? <span style={{ marginLeft: 5, fontSize: 10, color: '#475569', background: '#f1f5f9', padding: '1px 5px', borderRadius: 7 }} title="거래처/외주업체 — 개인 통번역사 Master 연결 대상이 아님">거래처</span>
-                            : !g.confirmed
-                              ? <span style={{ marginLeft: 5, fontSize: 10, color: '#1d4ed8', background: '#eff6ff', padding: '1px 5px', borderRadius: 7 }} title="검증상태: Master 연결 미확정(지급상태와 무관). 이름만 일치는 자동 연결하지 않음.">연결 확인필요</span>
-                              : null}
-                        </div>
-                        <div style={{ color: '#374151', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11.5 }} title={g.languages.join(', ')}>{g.languages.join(', ')}</div>
-                        <div style={{ color: '#9ca3af', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11.5 }} title={g.email ?? undefined}>{g.email || ''}</div>
-                        <div style={{ color: '#9ca3af', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11.5 }}>{g.phone || ''}</div>
-                        <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{g.count}</div>
-                        <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{won(g.pretaxTotal)}</div>
-                        <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#dc2626' }}>{won(g.withholdingImplied)}
-                          {g.payeeType === 'vendor' && <div style={{ fontSize: 10, color: '#7c3aed', fontWeight: 700 }} data-testid={`pu-vendor-vat-${g.masterKey}`}>외주업체 · 부가세 {won(num(g.vatTotal))}</div>}</div>
-                        <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 800, color: '#111827' }}>{won(g.posttaxTotal)}</div>
-                        {/* 지급상태(§4②) — 건수 기준으로 지급완료/지급확인필요/미지급을 분리 표시. 연결 검증상태와 혼합하지 않음. */}
-                        <div style={{ textAlign: 'right', display: 'flex', gap: 4, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-                          {g.paidCount > 0 && <span style={{ fontSize: 10, color: '#1d4ed8', background: '#eff6ff', padding: '1px 5px', borderRadius: 7 }}>지급완료 {g.paidCount}건</span>}
-                          {g.needReviewCount > 0 && <span style={{ fontSize: 10, color: '#92400e', background: '#fef3c7', padding: '1px 5px', borderRadius: 7 }} title="지급일이 지났거나 미상인데 지급확정 기록이 없는 건(대표 확인 대상)">지급확인 필요 {g.needReviewCount}건</span>}
-                          {num(g.scheduledCount) > 0 && <span style={{ fontSize: 10, color: '#047857', background: '#ecfdf5', padding: '1px 5px', borderRadius: 7 }} title="지급일이 미래이고 지급확정 기록이 없는 건">지급예정 {num(g.scheduledCount)}건</span>}
-                          {g.unpaidCount > 0 && <span style={{ fontSize: 10, color: '#b45309', background: '#fffbeb', padding: '1px 5px', borderRadius: 7 }}>미지급 {g.unpaidCount}건</span>}
-                          {g.dupSuspectCount > 0 && <span style={{ fontSize: 10, color: '#dc2626', background: '#fef2f2', padding: '1px 5px', borderRadius: 7 }}>중복 {g.dupSuspectCount}건</span>}
-                          {g.paidCount === 0 && g.unpaidCount === 0 && g.needReviewCount === 0 && g.dupSuspectCount === 0 && !num(g.scheduledCount) && <span style={{ fontSize: 10, color: '#9ca3af' }}>-</span>}
-                        </div>
-                        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                          <button style={stmtBtn} data-testid={`pu-excel-${g.name}`} onClick={(e) => { e.stopPropagation(); exportReproStatementExcel(opts); onToast(`${g.name} 지급명세서 Excel을 다운로드했습니다.`); }}>Excel</button>
-                          <button style={stmtBtn} data-testid={`pu-pdf-${g.name}`} onClick={(e) => { e.stopPropagation(); if (!exportReproStatementPdf(opts)) onToast('팝업 차단을 해제한 후 다시 시도해 주세요.'); }}>PDF</button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* ③ 선택 통번역사 건별 상세(§6) — 미선택 시 안내, 선택 시 해당 내역만. 내부 세로 스크롤 제거(§1·C). */}
-          {selPayee != null ? (
-            <div>
-              <div style={secTitle} data-testid="pu-detail-title">③ {selPayeeName} – 건별 상세내역 ({detailRows.length}건)</div>
-              {/* 내부 세로 스크롤 제거 — 건수만큼 자연 확장, 가로 부족 시에만 가로 스크롤. 헤더는 페이지 스크롤에 sticky. */}
-              <div style={{ overflowX: 'auto', overflowY: 'visible', border: '1px solid #e5e7eb', borderRadius: 10 }}>
-                <table className="veritas-read-table vz-sticky pr-detail-zebra" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                  <thead><tr>{['거래처', '통번역사', '주민번호', '언어', '상품/업무', '상세내역', '납품일', '지급일', '세전지급액', '세후지급액', '원천세공제액', '지급상태', '지급 전환'].map(h => <th key={h} style={{ padding: '9px 12px', textAlign: h.includes('액') ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>)}</tr></thead>
-                  <tbody>
-                    {detailRows.map((p, i) => {
-                      const sm = STATUS_META[p.status] ?? STATUS_META.deposit_unconfirmed;
-                      return (
-                        <tr key={p.sourceKey} data-testid={`pu-detail-${i}`} data-source={p.source} data-status={p.status}>
-                          <td style={{ ...td, whiteSpace: 'normal', maxWidth: 180 }} data-testid={`pu-client-${i}`} title={p.client ?? undefined}><div style={clamp2}>{p.client ?? <span style={{ color: '#b45309', fontWeight: 700 }}>거래처 확인 필요</span>}</div></td>
-                          <td style={{ ...td, whiteSpace: 'normal', lineHeight: 1.35 }}>
-                            <div style={{ fontWeight: 600, color: '#111827' }}>{p.translator ?? '-'}</div>
-                            {(p.masterEmail || p.masterPhone) && <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 1 }} title="현재 Master 등록 연락처">{p.masterEmail && <div>{p.masterEmail}</div>}{p.masterPhone && <div>{p.masterPhone}</div>}</div>}
-                          </td>
-                          <td style={{ ...td, fontVariantNumeric: 'tabular-nums', color: p.residentMasked ? '#6b7280' : '#d1d5db' }} title="주민번호 앞 6자리만 표시(마스킹)">{p.residentMasked ?? '-'}</td>
-                          <td style={{ ...td, whiteSpace: 'normal', maxWidth: 140 }}>{p.language ?? '-'}</td>
-                          <td style={{ ...td, maxWidth: 200 }} title={p.content ?? undefined}><div style={clamp2}>{p.content ?? '-'}</div></td>
-                          <td style={{ ...td, maxWidth: 230 }} data-testid={`pu-detail-detail-${i}`} title={p.filename ?? undefined}><div style={clamp2}>{p.filename ?? '-'}</div></td>
-                          <td style={td}>{p.deliveryDate ?? <span style={{ color: '#b45309' }}>(납품일 미상)</span>}</td>
-                          <td style={td}>{p.payoutDate ?? <span style={{ color: '#b45309', fontWeight: 700 }}>(지급일 미확인)</span>}</td>
-                          <td style={tdR}>{won(p.pretax)}</td>
-                          <td style={tdR}>{won(p.posttax)}</td>
-                          <td style={{ ...tdR, color: '#dc2626' }}>{won(p.withholdingImplied)}
-                            {p.payeeType === 'vendor' && <div style={{ fontSize: 10, color: '#7c3aed' }}>외주 · 부가세 {p.vat != null ? won(p.vat) : '미확정'}</div>}
-                            {p.taxConflict && <div title={p.taxConflict} style={{ fontSize: 10, color: '#c2410c', fontWeight: 700 }}>⚠ 세금 확인</div>}</td>
-                          <td style={td}><span style={{ padding: '2px 8px', borderRadius: 10, background: sm.bg, color: sm.fg, fontSize: 12, fontWeight: 700, cursor: p.paidBasis ? 'help' : undefined }} title={p.paidBasis ? `지급완료 근거: ${p.paidBasis}` : undefined} data-testid={`pu-detail-status-${i}`} aria-label={`지급상태 ${sm.label}`}>{sm.label}</span></td>
-                          <td style={td} data-testid={`pu-detail-conv-${i}`}>{p.source === 'legacy'
-                            ? <ConversionCell token={token} rowId={p.id} conversion={p.conversion ?? null} eligible={!!p.conversionEligible} onToast={onToast}
-                                onChanged={() => { setConvKey(k => k + 1); if (sel) loadDetail(sel); }} />
-                            : <span style={{ color: '#d1d5db' }}>-</span>}</td>
-                        </tr>
-                      );
-                    })}
-                    {detailRows.length === 0 && !detailLoading && <tr><td colSpan={13} style={{ padding: 24, textAlign: 'center', color: '#9ca3af' }}>상세 내역이 없습니다.</td></tr>}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ) : (
-            <div data-testid="pu-detail-hint" style={{ border: '1px dashed #d1d5db', borderRadius: 10, padding: '18px', textAlign: 'center', color: '#9ca3af', fontSize: 13 }}>
-              위 통번역사 행을 클릭하면 해당 통번역사의 건별 상세내역이 표시됩니다. (또는 <b>전체 건별 내역</b> 버튼)
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }

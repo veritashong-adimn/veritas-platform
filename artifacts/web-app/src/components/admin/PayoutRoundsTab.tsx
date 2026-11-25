@@ -3,7 +3,7 @@
 //  · 수행정보 미지급 건을 지급일별 회차로 묶어 지급대상(개인/외주)별 자동합산·검토·확정.
 //  · 계산은 서버(payoutRounds API)가 costTotal+세금처리로 산출. 화면은 표시·조작만.
 // ─────────────────────────────────────────────────────────────────────────────
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { formatDisplayDate, formatScheduleRange, formatLabelDates } from '../../lib/dateFormat';
 import { api, formatLanguageLabel } from '../../lib/constants';
 import { Card, GhostBtn, PrimaryBtn, ClickSelect, confirmDialog, promptDialog } from '../ui';
@@ -83,8 +83,10 @@ function suggestPeriod(paymentDate: string): { start: string; end: string } {
   if (!m) return { start: '', end: '' };
   const y = +m[1], mo = +m[2], d = +m[3];
   const p2 = (n: number) => String(n).padStart(2, '0');
-  const lastDay = new Date(Date.UTC(y, mo, 0)).getUTCDate();
-  if (d >= lastDay - 1) return { start: `${y}-${p2(mo)}-01`, end: `${y}-${p2(mo)}-15` };
+  // 지급예정일 규칙(calcPaymentDate): 납품 1~15일 → 그달 말일 / 16~말일 → 다음 달 15일, 휴일이면 직전 영업일(항상 앞당김).
+  //  → 16일 이후 지급일 = 그달 말일 회차(그달 1~15일 납품), 15일 이전 = 15일 회차(전월 16~말일 납품).
+  //  (기존: 말일·말일-1 만 월말 회차로 보아 휴일로 당겨진 월말 지급일 — 예 2027-01-29 — 의 대상기간이 전월로 잘못 제안됨)
+  if (d >= 16) return { start: `${y}-${p2(mo)}-01`, end: `${y}-${p2(mo)}-15` };
   let py = y, pm = mo - 1; if (pm < 1) { pm = 12; py -= 1; }
   const pLast = new Date(Date.UTC(py, pm, 0)).getUTCDate();
   return { start: `${py}-${p2(pm)}-16`, end: `${py}-${p2(pm)}-${p2(pLast)}` };
@@ -92,14 +94,23 @@ function suggestPeriod(paymentDate: string): { start: string; end: string } {
 
 /** 실행권한 — 서버(requireStaffPermission)와 동일 키. 미전달 시 기존 동작(전체 표시) 유지. */
 export type PayoutPerms = { manage: boolean; confirm: boolean; transfer: boolean; superAdmin: boolean };
-interface Props { token: string; onToast: (m: string) => void; perms?: PayoutPerms; adjFocus?: 'requested' | 'pending' | null; }
+interface Props {
+  token: string; onToast: (m: string) => void; perms?: PayoutPerms; adjFocus?: 'requested' | 'pending' | null;
+  /** 지급회차 상세 '지급확정·은행이체' 탭에 끼워 쓸 때 — 이 운영 회차를 고정 표시(회차 선택·생성·정정 요청 목록은 상위 화면이 담당). */
+  fixedRoundId?: number | null;
+  /** 회차 상태가 바뀐 뒤(확정·확정취소·지급완료·재수집 등) 상위 화면의 운영 회차 목록 재조회 */
+  onRoundsChanged?: () => void;
+}
 
-export default function PayoutRoundsTab({ token, onToast, perms = { manage: true, confirm: true, transfer: true, superAdmin: true }, adjFocus = null }: Props) {
+export default function PayoutRoundsTab({ token, onToast, perms = { manage: true, confirm: true, transfer: true, superAdmin: true }, adjFocus = null, fixedRoundId = null, onRoundsChanged }: Props) {
+  const embedded = fixedRoundId != null;
+  const onRoundsChangedRef = useRef(onRoundsChanged); onRoundsChangedRef.current = onRoundsChanged;
   const authH = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
   const [rounds, setRounds] = useState<any[]>([]);
   // 선택값(§6): 'all'(전체 지급대상·기본) | 'unassigned'(미배정) | 회차 id 문자열.
   // selId 는 "실제 회차"가 선택됐을 때만 숫자 — 회차 전용 액션(확정/완료/제외 등)은 이 값으로만 동작.
-  const [sel, setSel] = useState<string>('all');
+  const [sel, setSel] = useState<string>(fixedRoundId != null ? String(fixedRoundId) : 'all');
+  useEffect(() => { if (fixedRoundId != null) setSel(String(fixedRoundId)); }, [fixedRoundId]);
   const selId = /^\d+$/.test(sel) ? Number(sel) : null;
   const [detail, setDetail] = useState<any | null>(null);
   // 조회 상태 명확 구분(§14): loading / error / (empty·data 는 detail 기준 하위 렌더).
@@ -147,6 +158,7 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
       const rows = data.rows ?? [];
       setRounds(rows);   // 기본값은 '전체 지급대상' — 회차를 자동선택하지 않는다(§1·§6).
     } catch { onToast('지급회차 목록 조회 실패'); }
+    onRoundsChangedRef.current?.();
   }, [token]);
 
   // 전체 지급대상(개요) / 미배정 / 특정 회차 — 선택값에 따라 조회 소스 분기(§1·§6).
@@ -514,9 +526,9 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP[4] }}>
       {/* 수정·정정 요청 / 승인 / 차액 정산 현황(2026-11) — 별도 컴포넌트(PayoutAdjustmentsPanel) */}
-      <PayoutAdjustmentList mode="admin" token={token} onToast={onToast} initialFilter={adjFocus ?? undefined} focus={!!adjFocus} onChanged={() => { void loadRounds(); if (selId) void loadDetail(String(selId)); }} />
-      {/* ── 상단: 회차 선택 + 생성 + 확정 ── */}
-      <Card>
+      {!embedded && <PayoutAdjustmentList mode="admin" token={token} onToast={onToast} initialFilter={adjFocus ?? undefined} focus={!!adjFocus} onChanged={() => { void loadRounds(); if (selId) void loadDetail(String(selId)); }} />}
+      {/* ── 상단: 회차 선택 + 생성 + 확정 ── (상세 탭에 끼운 경우 상위 화면이 지급일·운영 회차 선택을 담당하므로 숨김) */}
+      {!embedded && <Card>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SP[3], flexWrap: 'wrap' }}>
           {/* 좌측 그룹: 핵심 선택 영역(§1) — 라벨 강조(액센트 바)·Select 폭 확대로 선택 회차명이 충분히 보이게. */}
           <div style={{ display: 'flex', alignItems: 'center', gap: SP[3], flexWrap: 'wrap' }}>
@@ -534,9 +546,8 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
           </div>
           {/* 우측 끝: 지급회차 생성 (버튼 디자인·기능·이벤트 불변) */}
           {perms.manage && <PrimaryBtn onClick={() => setShowCreate(true)} style={{ fontSize: 12, padding: '8px 16px' }} data-testid="payout-create" aria-label="지급회차 생성">+ 지급회차 생성</PrimaryBtn>}
-          {/* 지급명세서는 좌측 사이드바 정산→지급명세서 독립 메뉴로 분리(PayoutStatementTab). */}
         </div>
-      </Card>
+      </Card>}
 
       {/* ── 조회 필터(지급회차 sel 과 조합) — 거래처 · 지급대상 검색 · 지급일 기간. 두 탭 동시 재집계. ── */}
       <Card>
@@ -621,9 +632,9 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
               <span style={{ ...TYPO.helper }}>지급예정일 <b>{formatDisplayDate(round.paymentDate)}</b></span>
               <span style={{ ...TYPO.helper }}>대상기간 <b>{formatScheduleRange(round.periodStart, round.periodEnd)}</b></span>
               <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-                {/* 지급 실행(§1) — confirmed=실행 진입 / paid=지급결과 조회. 회차 헤더 우측 상단에 상시 노출. */}
-                {(round.status === 'confirmed' || round.status === 'paid') && (
-                  <button type="button" onClick={() => setShowExec(true)} disabled={busy} data-testid="payout-execute-top" aria-label="지급 실행"
+                {/* 지급 실행 조회 — 지급완료(paid) 회차의 지급결과 조회. 확정(confirmed) 회차는 하단 처리 버튼 줄의 [지급 실행] 하나만 둔다(중복 버튼 정리). */}
+                {round.status === 'paid' && (
+                  <button type="button" onClick={() => setShowExec(true)} disabled={busy} data-testid="payout-execute-top" aria-label="지급 실행 조회"
                     style={{ ...TYPO.helper, color: round.status === 'confirmed' ? '#fff' : C.primaryText, background: round.status === 'confirmed' ? C.primaryText : C.primaryBg, border: `1px solid ${C.primaryText}`, borderRadius: 6, padding: '5px 14px', cursor: busy ? 'not-allowed' : 'pointer', fontWeight: 800 }}>
                     💳 {round.status === 'confirmed' && perms.transfer ? '지급 실행' : '지급 실행 조회'}
                   </button>
@@ -925,22 +936,25 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
 }
 
 // ── 회차 생성 다이얼로그(§5·§6) ──
-function CreateDialog({ token, onToast, onClose, onCreated }: { token: string; onToast: (m: string) => void; onClose: () => void; onCreated: (d: any) => void; }) {
+//  initial — 지급회차 상세에서 연 경우 선택 지급일 기본값(지급예정일 기준 수집: 대상기간 = 지급일 하루). 사용자가 바꿀 수 있다.
+export type CreateRoundInitial = { paymentDate: string; periodStart: string; periodEnd: string; basis: 'expected_payment_date' | 'delivery_date' };
+export function CreateDialog({ token, onToast, onClose, onCreated, initial }: { token: string; onToast: (m: string) => void; onClose: () => void; onCreated: (d: any) => void; initial?: CreateRoundInitial; }) {
   const authH = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
-  const [paymentDate, setPaymentDate] = useState('');
-  const [periodStart, setPeriodStart] = useState('');
-  const [periodEnd, setPeriodEnd] = useState('');
-  const [batchNumber, setBatchNumber] = useState('');
+  const [paymentDate, setPaymentDate] = useState(initial?.paymentDate ?? '');
+  const [periodStart, setPeriodStart] = useState(initial?.periodStart ?? '');
+  const [periodEnd, setPeriodEnd] = useState(initial?.periodEnd ?? '');
+  const [batchNumber, setBatchNumber] = useState(initial?.paymentDate ? `${initial.paymentDate} 지급회차` : '');
   const [note, setNote] = useState('');
   // 대상기간 자동제안(suggestPeriod)이 납품 기준 기간을 만들므로 수집기준 기본값도 납품일로 정합(§6).
-  const [basis, setBasis] = useState<'expected_payment_date' | 'delivery_date'>('delivery_date');
+  const [basis, setBasis] = useState<'expected_payment_date' | 'delivery_date'>(initial?.basis ?? 'delivery_date');
   const [busy, setBusy] = useState(false);
   const inp: React.CSSProperties = { ...dsInputStd(), fontFamily: 'inherit', minHeight: 34, padding: '6px 10px', width: '100%' };
 
   // 지급예정일 선택 → 회차명(자동·읽기전용) + 대상기간(자동, 수정 가능) 동시 생성(§1-①②).
   const onPayDate = (v: string) => {
     setPaymentDate(v);
-    const s = suggestPeriod(v);
+    // 지급예정일 기준 수집이면 대상기간 = 지급일 하루(그 지급일 지급대상만), 납품일 기준이면 납품 기간 자동 제안
+    const s = basis === 'expected_payment_date' ? { start: v, end: v } : suggestPeriod(v);
     setPeriodStart(s.start); setPeriodEnd(s.end);
     setBatchNumber(v ? `${v} 지급회차` : '');
   };
@@ -970,7 +984,11 @@ function CreateDialog({ token, onToast, onClose, onCreated }: { token: string; o
         {field('회차명 (자동)', <input style={{ ...inp, background: C.g50, color: C.textSecondary }} value={batchNumber} readOnly data-testid="payout-new-name" aria-label="회차명(자동)" placeholder="지급예정일 선택 시 자동 생성" />)}
         {field('대상기간 시작 (자동·수정가능)', <DateField style={inp} value={periodStart} onChange={v => setPeriodStart(v)} testid="payout-new-start" ariaLabel="대상기간 시작" />)}
         {field('대상기간 종료 (자동·수정가능)', <DateField style={inp} value={periodEnd} onChange={v => setPeriodEnd(v)} testid="payout-new-end" ariaLabel="대상기간 종료" />)}
-        {field('수집 기준', <ClickSelect value={basis} onChange={(v: string) => setBasis(v as any)} triggerStyle={inp} menuStyle={{ fontFamily: APP_FONT }} options={[{ value: 'delivery_date', label: '납품일 기준' }, { value: 'expected_payment_date', label: '지급예정일 기준' }]} />)}
+        {field('수집 기준', <ClickSelect value={basis} onChange={(v: string) => {
+          // 수집 기준 변경 시 대상기간 다시 제안 — 지급예정일 기준 = 지급일 하루 / 납품일 기준 = 납품 기간
+          setBasis(v as any);
+          if (paymentDate) { const s2 = v === 'expected_payment_date' ? { start: paymentDate, end: paymentDate } : suggestPeriod(paymentDate); setPeriodStart(s2.start); setPeriodEnd(s2.end); }
+        }} triggerStyle={inp} menuStyle={{ fontFamily: APP_FONT }} options={[{ value: 'delivery_date', label: '납품일 기준' }, { value: 'expected_payment_date', label: '지급예정일 기준' }]} />)}
         {field('비고', <input style={inp} value={note} onChange={e => setNote(e.target.value)} placeholder="비고" data-testid="payout-new-note" aria-label="비고" />)}
       </div>
       <p style={{ ...TYPO.helper, marginTop: 10, color: C.textSecondary }}>지급예정일 선택 시 대상기간이 자동 제안됩니다(수정 가능). 조건을 충족한 미지급·미배정 건이 자동수집됩니다.</p>
