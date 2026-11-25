@@ -47,6 +47,11 @@ const isScheduledTxn = (t: PayTxn) => !t.paidDate && Number(t.customerPaidAmount
 const TXN_PAY_TYPE_OPTS = [
   { value: 'lump_sum', label: '일괄결제' }, { value: 'advance', label: '선금' }, { value: 'interim', label: '중도금' }, { value: 'balance', label: '잔금' },
 ];
+// 분할입금 회차 — 실제·예정 입금내역(환불·상계 제외)이 2건 이상이면 상위 결제구분을 '분할결제'로 표시(저장값은 그대로).
+const isSplitDepositRow = (txns?: PayTxn[]) => (txns ?? []).filter(t => t.txnType !== 'refund' && t.txnType !== 'offset').length >= 2;
+// 입금내역 목록 열 — 차수 · 결제구분 · 입금상태 · 입금예정일 · 입금일 · 결제방법 · 입금은행 · 입금액 · 비고 · 관리(제목 행과 같은 열 폭)
+const TXN_GRID: React.CSSProperties = { display: 'grid', gridTemplateColumns: '48px 72px 76px 100px 100px 96px 116px 170px 260px 104px', columnGap: 10, alignItems: 'center', paddingLeft: 28, fontSize: 12 };
+const TXN_HEADS = ['차수', '결제구분', '입금상태', '입금예정일', '입금일', '결제방법', '입금은행', '입금액', '비고', ''];
 const TXN_STATUS_OPTS = [{ value: 'completed', label: '입금완료' }, { value: 'scheduled', label: '입금예정' }];
 interface PayRow {
   id?: number;
@@ -1001,7 +1006,9 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
                   </div>
                 )}
               </div>
-            : <span data-testid={`pay-type-text-${i}`}>{payTypeLabel(r)}</span>}
+            : isSplitDepositRow(txns)
+              ? <span data-testid={`pay-type-text-${i}`} title={`입금내역 ${txns.filter(t => t.txnType !== 'refund' && t.txnType !== 'offset').length}건으로 분할 입금 · 저장된 결제구분: ${payTypeLabel(r)}`}>분할결제</span>
+              : <span data-testid={`pay-type-text-${i}`}>{payTypeLabel(r)}</span>}
         </td>
         {/* 청구금액(§1/§14) = project_payments.amount. 공급가/부가세는 내부 자동산출(컬럼 미표시). 일반결제: 입력 / 수출바우처: 자동 */}
         <td style={{ ...tdR, width: 132, fontWeight: 700 }}>
@@ -1054,8 +1061,6 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
             : !editable && isFxRow(r) && r.fx ? (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
                 <FxPaidCell fx={r.fx} />
-                {pid != null && addingFor !== pid && <button type="button" onClick={() => startAdd(r)} data-testid={`txn-add-open-${i}`}
-                  style={{ border: `1px solid ${C.primary}`, borderRadius: 5, background: '#eff6ff', color: C.primaryText, cursor: 'pointer', fontSize: 11, fontWeight: 700, padding: '2px 8px' }}>+ 입금·상계</button>}
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
@@ -1065,10 +1070,6 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
                     ? <span data-testid={`pay-paid-unconfirmed-${i}`} title="세금계산서 발행 — 입금 미확인(수금 미반영). 수정에서 입금확인 체크"
                         style={{ fontWeight: 700, color: C.danger }}>{`${won(a.amount)}원`}<span style={{ fontSize: 10, fontWeight: 600, marginLeft: 3 }}>미확인</span></span>
                     : <span data-testid={`pay-paid-confirmed-${i}`} style={{ fontWeight: 700, color: paidOf(r) > 0 ? C.textPrimary : C.textSecondary }}>{`${won(paidOf(r))}원`}</span>}
-                {!editable && pid != null && addingFor !== pid && (
-                  <button type="button" onClick={() => startAdd(r)} data-testid={`txn-add-open-${i}`} aria-label="입금 추가"
-                    style={{ border: `1px solid ${C.primary}`, borderRadius: 5, background: '#eff6ff', color: C.primaryText, cursor: 'pointer', fontSize: 11, fontWeight: 700, padding: '2px 8px' }}>+ 입금</button>
-                )}
                 {!editable && pid != null && paidOf(r) > 0 && refundFor !== pid && (
                   <button type="button" onClick={() => startRefund(r)} data-testid={`txn-refund-open-${i}`} aria-label="입금 환불"
                     style={{ border: `1px solid ${C.danger}`, borderRadius: 5, background: '#fff5f5', color: C.danger, cursor: 'pointer', fontSize: 11, fontWeight: 700, padding: '2px 8px' }}>환불</button>
@@ -1112,42 +1113,60 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
           <FxEditPanel row={r} idx={i} inp={inp} firstPayMode={firstPayMode} onPatch={(p) => patchRow(i, p as Partial<PayRow>)} />
         </td></tr>
       )}
-      {/* 하위 입금행(§7/§8) — 읽기모드 펼침 시 각 payment_transaction 표시(회차/날짜/은행/금액/상세) */}
-      {!editable && isOpen && txns.map((t, ti) => (
-        <tr key={`t-${t.id ?? ti}`} data-testid={`txn-subrow-${i}-${ti}`}>
-          <td colSpan={cols} style={{ ...tdBase, background: '#fbfdff', whiteSpace: 'normal' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, paddingLeft: 28, fontSize: 12, flexWrap: 'wrap', ...(editingTxnId === t.id ? { opacity: 0.45 } : {}) }}>
-              <span style={{ fontWeight: 700, color: C.primaryText }}>└ {ti + 1}차</span>
-              {t.paymentType && <span data-testid={`txn-paytype-${i}-${ti}`} style={{ fontWeight: 600 }}>{labelOf(TXN_PAY_TYPE_OPTS, t.paymentType)}</span>}
-              {isScheduledTxn(t)
-                ? <span data-testid={`txn-status-${i}-${ti}`} style={{ padding: '1px 7px', borderRadius: 4, background: '#f3f4f6', color: '#6b7280', fontWeight: 700 }}>입금예정</span>
-                : t.txnType !== 'refund' && t.txnType !== 'offset' && <span data-testid={`txn-status-${i}-${ti}`} style={{ padding: '1px 7px', borderRadius: 4, background: '#dcfce7', color: '#15803d', fontWeight: 700 }}>입금완료</span>}
-              {t.expectedDate && <span style={{ color: isScheduledTxn(t) && String(t.expectedDate).slice(0, 10) < todayStr() ? C.danger : '#6b7280' }}>예정 {formatDisplayDate(t.expectedDate)}</span>}
-              <span>{t.paidDate || (isScheduledTxn(t) ? '' : '—')}</span>
-              <span style={{ padding: '1px 7px', borderRadius: 4, background: '#eef2ff', color: '#4338ca', fontWeight: 600 }}>{displayMethod(t.method) || '—'}</span>
-              <span style={{ color: '#374151' }}>{t.bankAccount || '—'}</span>
-              {isFxRow(r) && isForeignCur(t.currency)
-                ? <span style={{ fontWeight: 700, color: t.txnType === 'offset' ? '#7c3aed' : undefined }} data-testid={`txn-fx-${i}-${ti}`}>{fxTxnText(t)}</span>
-                : t.txnType === 'refund'
-                ? <><span data-testid={`txn-refund-${i}-${ti}`} style={{ padding: '1px 7px', borderRadius: 4, background: '#fee2e2', color: C.danger, fontWeight: 700 }}>환불</span>
-                  <span style={{ fontWeight: 700, color: C.danger }}>−{won(Math.abs(num(t.customerPaidAmount)))}원</span></>
-                : isScheduledTxn(t)
-                ? <span data-testid={`txn-expected-amt-${i}-${ti}`} style={{ fontWeight: 700, color: '#6b7280' }} title="입금예정액 — 실제 입금액·미수금 계산에 포함하지 않음">예정 {won(num(t.expectedAmount))}원</span>
-                : <><span style={{ fontWeight: 700 }}>{won(num(t.customerPaidAmount))}원</span>
-                  {txnDetail(t) && <span style={{ color: '#6b7280' }}>{txnDetail(t)}</span>}</>}
-              {t.note ? <span style={{ color: '#9ca3af' }}>· {t.note}</span> : null}
-              {!isFxRow(r) && t.txnType !== 'refund' && t.txnType !== 'offset' && (
-                <button type="button" onClick={() => startEditTxn(r, t)} disabled={txnBusy} data-testid={`txn-sub-edit-${i}-${ti}`} aria-label="입금내역 수정"
-                  style={{ marginLeft: 8, border: `1px solid ${C.g300}`, borderRadius: 5, background: '#fff', color: C.primaryText, cursor: 'pointer', padding: '2px 8px', fontSize: 11 }}>수정</button>)}
-              <button type="button" onClick={() => deleteTxn(pid!, t.id)} disabled={txnBusy} data-testid={`txn-sub-del-${i}-${ti}`} aria-label="입금내역 삭제"
-                style={{ ...(!isFxRow(r) && t.txnType !== 'refund' && t.txnType !== 'offset' ? {} : { marginLeft: 8 }), border: `1px solid ${C.g300}`, borderRadius: 5, background: '#fff', color: C.danger, cursor: 'pointer', padding: '2px 8px', fontSize: 11 }}>삭제</button>
+      {/* 하위 입금행 — 읽기모드 펼침 시 각 payment_transaction 을 제목 행과 같은 열로 정렬해 표시 */}
+      {!editable && isOpen && txns.length > 0 && (
+        <tr data-testid={`txn-head-${i}`}>
+          <td colSpan={cols} style={{ ...tdBase, background: '#f5f8fc', padding: '6px 8px', borderBottom: BD.divider }}>
+            <div style={{ ...TXN_GRID, fontSize: 11, fontWeight: 700, color: C.textSecondary }}>
+              {TXN_HEADS.map((h, hi) => <span key={hi} style={{ textAlign: hi === 7 ? 'right' : 'left' }}>{h}</span>)}
             </div>
           </td>
         </tr>
-      ))}
-      {/* 2차+ 입금 추가(§6/§8) — 거래가 1건 이상인 행에서만. 첫 입금은 기본행(수정모드)에서 직접 입력. */}
-      {!editable && isOpen && pid != null && (
-        // '+ 입금 추가'는 모든 저장된 청구회차에서 가능(청구회차·발행일·청구금액은 그대로, 입금내역만 추가)
+      )}
+      {!editable && isOpen && txns.map((t, ti) => {
+        const sched = isScheduledTxn(t), refund = t.txnType === 'refund', offset = t.txnType === 'offset';
+        const editableTxn = !isFxRow(r) && !refund && !offset;
+        const badge = (text: string, bg: string, fg: string) => <span style={{ justifySelf: 'start', padding: '1px 7px', borderRadius: 4, background: bg, color: fg, fontWeight: 700 }}>{text}</span>;
+        return (
+        <tr key={`t-${t.id ?? ti}`} data-testid={`txn-subrow-${i}-${ti}`}>
+          <td colSpan={cols} style={{ ...tdBase, background: '#fbfdff', whiteSpace: 'normal', padding: '6px 8px' }}>
+            <div style={{ ...TXN_GRID, ...(editingTxnId === t.id ? { opacity: 0.45 } : {}) }}>
+              <span style={{ fontWeight: 700, color: C.primaryText }}>└ {ti + 1}차</span>
+              <span data-testid={`txn-paytype-${i}-${ti}`} style={{ fontWeight: 600 }}>{t.paymentType ? labelOf(TXN_PAY_TYPE_OPTS, t.paymentType) : '—'}</span>
+              <span data-testid={`txn-status-${i}-${ti}`} style={{ display: 'flex' }}>
+                {refund ? badge('환불', '#fee2e2', C.danger) : offset ? badge('상계', '#f3e8ff', '#7c3aed')
+                  : sched ? badge('입금예정', '#f3f4f6', '#6b7280') : badge('입금완료', '#dcfce7', '#15803d')}
+              </span>
+              <span style={{ color: sched && t.expectedDate && String(t.expectedDate).slice(0, 10) < todayStr() ? C.danger : undefined }}>{formatDisplayDate(t.expectedDate) || '—'}</span>
+              <span>{formatDisplayDate(t.paidDate) || '—'}</span>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayMethod(t.method) || '—'}</span>
+              <span style={{ color: '#374151', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.bankAccount || '—'}</span>
+              <span style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                {isFxRow(r) && isForeignCur(t.currency)
+                  ? <span style={{ fontWeight: 700, color: offset ? '#7c3aed' : undefined }} data-testid={`txn-fx-${i}-${ti}`}>{fxTxnText(t)}</span>
+                  : refund
+                  ? <span data-testid={`txn-refund-${i}-${ti}`} style={{ fontWeight: 700, color: C.danger }}>−{won(Math.abs(num(t.customerPaidAmount)))}원</span>
+                  : sched
+                  ? <span data-testid={`txn-expected-amt-${i}-${ti}`} style={{ fontWeight: 700, color: '#6b7280' }} title="입금예정액 — 실제 입금액·미수금 계산에 포함하지 않음">(예정) {won(num(t.expectedAmount))}원</span>
+                  : <span style={{ fontWeight: 700 }}>{won(num(t.customerPaidAmount))}원</span>}
+                {!sched && !refund && !(isFxRow(r) && isForeignCur(t.currency)) && txnDetail(t) && <span style={{ display: 'block', fontSize: 11, color: '#6b7280' }}>{txnDetail(t)}</span>}
+              </span>
+              <span style={{ color: t.note ? '#4b5563' : '#9ca3af', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={t.note ?? undefined}>{t.note || '—'}</span>
+              <span style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                {editableTxn && (
+                  <button type="button" onClick={() => startEditTxn(r, t)} disabled={txnBusy} data-testid={`txn-sub-edit-${i}-${ti}`} aria-label="입금내역 수정"
+                    style={{ border: `1px solid ${C.g300}`, borderRadius: 5, background: '#fff', color: C.primaryText, cursor: 'pointer', padding: '2px 8px', fontSize: 11 }}>수정</button>)}
+                <button type="button" onClick={() => deleteTxn(pid!, t.id)} disabled={txnBusy} data-testid={`txn-sub-del-${i}-${ti}`} aria-label="입금내역 삭제"
+                  style={{ border: `1px solid ${C.g300}`, borderRadius: 5, background: '#fff', color: C.danger, cursor: 'pointer', padding: '2px 8px', fontSize: 11 }}>삭제</button>
+              </span>
+            </div>
+          </td>
+        </tr>
+        );
+      })}
+      {/* '+ 입금 추가' — 저장된 모든 청구회차에서, 입금내역이 접혀 있어도 항상 표시(누르면 펼치고 입력줄 열기).
+          청구회차·발행일·청구금액은 그대로 두고 입금내역만 추가. 외화 청구회차는 외화 입금·상계 입력. */}
+      {!editable && pid != null && (
         <tr data-testid={`txn-addrow-${i}`}>
           <td colSpan={cols} style={{ ...tdBase, background: '#f8fbff', whiteSpace: 'normal' }}>
             {addingFor === pid && isFxRow(r)
@@ -1156,7 +1175,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
               : addingFor === pid
               ? renderTxnAddForm(pid)
               : <button type="button" onClick={() => startAdd(r)} data-testid={`txn-add-open-${i}`}
-                  aria-label="입금 추가" style={{ marginLeft: 28, border: `1px dashed ${C.primary}`, borderRadius: 6, background: '#fff', color: C.primaryText, cursor: 'pointer', fontSize: 12, fontWeight: 700, padding: '5px 12px' }}>└ + 입금 추가</button>}
+                  aria-label="입금 추가" style={{ marginLeft: 28, border: `1px dashed ${C.primary}`, borderRadius: 6, background: '#fff', color: C.primaryText, cursor: 'pointer', fontSize: 12, fontWeight: 700, padding: '3px 12px' }}>└ + {isFxRow(r) ? '입금·상계 추가' : '입금 추가'}</button>}
           </td>
         </tr>
       )}
