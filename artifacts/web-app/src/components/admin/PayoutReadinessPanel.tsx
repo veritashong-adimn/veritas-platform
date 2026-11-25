@@ -9,6 +9,7 @@ import { api } from '../../lib/constants';
 import { exportDataset } from '../../lib/excelExport';
 import { DateField } from './DatePickerShared';
 import { orderBySale } from '../../lib/payoutReadinessExcelOrder';
+import { PAY_STATUS_META, type PayStatusKey, payStatusChips, fxSummaryText, SaleLink } from './payoutDisplayShared';
 
 type Blocker = { cat: 'B' | 'C' | 'D' | 'I'; code: string; text: string; action: string };
 type Item = {
@@ -23,6 +24,8 @@ type Item = {
   dateMismatch?: boolean;   // CRM·플랫폼 날짜 불일치(덮어쓰지 않음 — 사유에 상세)
   // 지급상태 표시(서버 공통 판정 — 화면·엑셀 같은 값) · 판매금액(판매정보 저장값, CRM 원본만 있는 건 null)
   payDisplay?: 'paid' | 'review' | 'prep' | 'scheduled' | 'hold' | 'excluded' | 'no_amount'; payDisplayLabel?: string;
+  // 화면 공통 지급상태(서버 lib/payDisplayStatus — 지급대상별 요약·건별 상세내역과 같은 기준)
+  payStatus?: PayStatusKey; payStatusLabel?: string;
   saleAmount?: { supply: number; vat: number; total: number } | null;
   pretax: number; withholding: number; posttax: number;
   // 지급통화(KRW 기본)·외화 지급금액 — 외화 건은 원화 합계와 별도 집계·원화 송금파일 제외. amountSource: 금액 출처(platform_fallback = CRM 0원 → 수행정보)
@@ -39,7 +42,7 @@ type Item = {
 };
 type Sum = { count: number; counted: number; pretax: number; posttax: number };
 type Resp = { canRevealResidentNumber?: boolean; scope: 'date' | 'all'; payoutDate: string | null; deliveryWindow: { from: string; to: string } | null; items: Item[];
-  summary: { total: Sum; foreignTotals?: { currency: string; count: number; amount: number; missing: number }[]; byState: Record<string, Sum>; byKind: Record<string, Sum>; byCandidate: Record<string, Sum>; roundEligible: Sum; duplicates: number; issueCounts: Record<string, number> } };
+  summary: { total: Sum; foreignTotals?: { currency: string; count: number; amount: number; missing: number }[]; byState: Record<string, Sum>; byKind: Record<string, Sum>; byCandidate: Record<string, Sum>; roundEligible: Sum; duplicates: number; issueCounts: Record<string, number>; payStatusCounts?: Record<string, number> } };
 
 const STATE_STYLE: Record<string, { bg: string; c: string }> = {
   A: { bg: '#dcfce7', c: '#15803d' }, B: { bg: '#e0f2fe', c: '#0369a1' }, C: { bg: '#fef3c7', c: '#92400e' }, D: { bg: '#fee2e2', c: '#b91c1c' }, I: { bg: '#f1f5f9', c: '#475569' },
@@ -49,8 +52,7 @@ const KIND_LABEL: Record<string, string> = { platform: '플랫폼', crm_converte
 const CAND_LABEL: Record<string, string> = { base: '지급 후보(지급일 일치)', delivery_window: '추가: 납품기간 납품', carry_over: '추가: 지급일 경과(이월)', no_payout_date: '추가: 지급예정일 없음', other: '추가: 기타', all: '전체 기간' };
 const STATUS_LABEL: Record<string, string> = { unpaid: '미지급', payment_hold: '지급보류', paid: '지급완료', unconfirmed: '확인 전(CRM)' };
 // 화면·엑셀 지급상태 표시 — 서버 판정(payDisplayLabel) 우선, 없으면(구버전 응답) 기존 표시
-const payLabel = (r: Item) => r.payDisplayLabel ?? STATUS_LABEL[r.paymentStatus] ?? r.paymentStatus;
-const PAY_COLOR: Record<string, string> = { paid: '#15803d', review: '#b45309', prep: '#b91c1c', scheduled: '#1d4ed8', hold: '#7c3aed', excluded: '#64748b', no_amount: '#64748b' };
+const payLabel = (r: Item) => r.payStatusLabel ?? r.payDisplayLabel ?? STATUS_LABEL[r.paymentStatus] ?? r.paymentStatus;
 const won = (n: number) => Math.round(n || 0).toLocaleString('ko-KR');
 // Excel 연락처 — 숫자만 있는 국내 휴대전화(010·011·016·017·018·019)만 하이픈 적용(01090444203 → 010-9044-4203).
 //   해외 번호·이미 형식이 있는 번호·마스킹 번호(*)는 그대로. 셀은 문자열로 출력(앞자리 0 유지).
@@ -91,9 +93,6 @@ const reasonText = (r: Item): string => {
 const isFx = (r: Item) => !!r.payCurrency && r.payCurrency !== 'KRW';
 const fxAmt = (cur: string, v: number | null | undefined) => v == null ? `${cur} 미입력` : `${cur} ${v.toLocaleString('ko-KR', { minimumFractionDigits: cur === 'JPY' ? 0 : 2, maximumFractionDigits: 2 })}`;
 const isVendor = (r: Item) => r.payeeType === 'vendor';
-// 지급금액 열(개인·외주 구분) — 해당하지 않는 쪽은 공란. 외주 부가세 미확정(null)은 공란(임의 생성 안 함).
-const indiv = (r: Item, k: 'pretax' | 'withholding' | 'posttax') => (isVendor(r) ? '' : r[k]);
-const vend = (r: Item, k: 'supply' | 'vat' | 'payTotal') => (!isVendor(r) ? '' : (r.payAmount?.[k] ?? ''));
 /** 다음 지급일(1~15일 → 그달 15일 / 16일~ → 그달 말일, KST) — 기본 조회 지급일 */
 export function nextPayoutDate(): string {
   const t = new Date(Date.now() + 9 * 3600 * 1000); const y = t.getUTCFullYear(), m = t.getUTCMonth(), d = t.getUTCDate();
@@ -109,6 +108,8 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast, def
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState(defaultOpen);
+  // 지급회차 상세 탭 — 선택 지급일 고정(날짜 선택·접기 없음)
+  const embedded = defaultOpen && !!propDate;
   const [state, setState] = useState<string>('all');
   const [kind, setKind] = useState<string>('all');
   const [cand, setCand] = useState<string>('all');
@@ -130,7 +131,7 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast, def
   const rows = useMemo(() => {
     const s = q.trim().toLowerCase();
     return (data?.items ?? []).filter(i => (state === 'all' || i.state === state) && (kind === 'all' || i.kind === kind) && (cand === 'all' || i.candidate === cand)
-      && (!s || [i.payee, i.performerName, i.vendorContactName, i.sourcePayeeName, i.client, i.saleNo, i.quoteNumber, i.projectTitle, i.sourceKey, String(i.crmRowId ?? ''), String(i.projectId ?? '')].some(v => String(v ?? '').toLowerCase().includes(s))));
+      && (!s || [i.payee, i.performerName, i.vendorContactName, i.sourcePayeeName, i.client, i.saleNo, i.quoteNumber, i.projectTitle, String(i.projectId ?? '')].some(v => String(v ?? '').toLowerCase().includes(s))));
   }, [data, state, kind, cand, q]);
 
   const [fullBusy, setFullBusy] = useState(false);
@@ -154,7 +155,8 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast, def
         { header: '공급가', value: (r) => amt(r, 'supply'), type: 'number', width: 14 },
         { header: '부가세', value: (r) => amt(r, 'vat'), type: 'number', width: 13 },
         { header: '총액', value: (r) => amt(r, 'total'), type: 'number', width: 14 },
-        { header: '통번역사·외주업체', value: (r) => r.payee ?? '', width: 16 },
+        { header: '지급대상', value: (r) => r.payee ?? '', width: 16 },
+        { header: '지급대상 구분', value: (r) => (isVendor(r) ? '외주업체' : '개인'), width: 10 },
         { header: '상품·업무', value: (r) => r.productWork ?? '', width: 40 },   // 원문 그대로(요약·생략 없음)
         { header: '언어', value: (r) => r.payeeLanguages ?? '', width: 18 },
         { header: '상세정보', value: (r) => r.payeeDetail ?? '', width: 30 },
@@ -163,13 +165,11 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast, def
         { header: '주민등록번호', value: (r) => rrn(r), width: 16 },
         { header: '납품일', value: (r) => r.deliveryDate ?? '', width: 11 },
         { header: '지급예정일', value: (r) => r.payoutDate ?? '', width: 11 },
-        { header: '세전', value: (r) => indiv(r, 'pretax'), type: 'number', width: 13 },
-        { header: '원천세', value: (r) => indiv(r, 'withholding'), type: 'number', width: 13 },
-        { header: '세후', value: (r) => indiv(r, 'posttax'), type: 'number', width: 13 },
-        { header: '외주 공급가', value: (r) => vend(r, 'supply'), type: 'number', width: 13 },
-        { header: '외주 부가세', value: (r) => vend(r, 'vat'), type: 'number', width: 13 },
-        { header: '외주 합계', value: (r) => vend(r, 'payTotal'), type: 'number', width: 14 },
-        { header: '최종 지급액', value: (r) => (isFx(r) ? '' : (r.payAmount?.payTotal ?? r.posttax)), type: 'number', width: 14 },
+        // 지급금액(화면 공통 명칭) — 세전금액(외주 = 공급가) · 원천세공제(개인) · 부가세(외주) · 실지급금액. 외화 건 실지급금액은 공란(외화 열 참고).
+        { header: '세전금액', value: (r) => r.pretax, type: 'number', width: 13 },
+        { header: '원천세공제', value: (r) => (isVendor(r) ? 0 : (r.payAmount?.withholding ?? r.withholding)), type: 'number', width: 13 },
+        { header: '부가세', value: (r) => (isVendor(r) ? (r.payAmount?.vat ?? '') : 0), type: 'number', width: 12 },
+        { header: '실지급금액', value: (r) => (isFx(r) ? '' : (r.payAmount?.payTotal ?? r.posttax)), type: 'number', width: 14 },
         // 지급통화(KRW 기본)·외화 지급금액 — 외화 건은 원화 합계와 별도, 국내 원화 송금파일 제외. 환율 미확정 원화 원가는 확정값 아님.
         { header: '지급통화', value: (r) => r.payCurrency ?? 'KRW', width: 8 },
         { header: '외화 지급금액', value: (r) => (isFx(r) ? (r.foreignAmount ?? '') : ''), type: 'number', width: 13 },
@@ -214,20 +214,20 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast, def
     <div data-testid="payout-readiness" style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: '10px 12px', marginBottom: 16, background: '#fff' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
         <div style={{ fontSize: 13.5, fontWeight: 800, color: '#111827' }}>
-          지급 준비 점검 · 지급 누락 방지 <span style={{ fontSize: 11, fontWeight: 600, color: '#9ca3af' }}>· 플랫폼 + 과거 CRM 전환 + CRM 원본 통합 · 조회 전용(지급상태·금액·날짜 불변)</span>
+          지급 준비 점검{embedded && scope === 'date' ? <span style={{ fontSize: 12, fontWeight: 700, color: '#0369a1', marginLeft: 6 }}>{date} 지급</span> : null}
         </div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
           {open && tabBtn('date', '① 지급일 기준 후보')}
           {open && tabBtn('all', '② 전체 기간 누락·공란')}
-          {open && scope === 'date' && <DateField value={date} onChange={v => v && setDate(v)} style={{ fontSize: 12, padding: '4px 6px', width: 130, border: '1px solid #cbd5e1', borderRadius: 6 }} testid="ready-date" ariaLabel="지급일" allowClear={false} />}
+          {open && scope === 'date' && !embedded && <DateField value={date} onChange={v => v && setDate(v)} style={{ fontSize: 12, padding: '4px 6px', width: 130, border: '1px solid #cbd5e1', borderRadius: 6 }} testid="ready-date" ariaLabel="지급일" allowClear={false} />}
           {open && data && <button type="button" onClick={() => exportExcel()} data-testid="ready-excel" aria-label="지급 준비 점검 Excel"
             style={{ border: 'none', borderRadius: 7, padding: '5px 10px', background: '#059669', color: '#fff', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>Excel</button>}
           {open && data?.canRevealResidentNumber && <button type="button" onClick={exportFullExcel} disabled={fullBusy} data-testid="ready-excel-full-rrn" aria-label="주민번호 전체 Excel(관리자 전용)"
             title="관리자 전용 — 주민등록번호 전체가 포함됩니다. 외부 유출에 주의하세요."
             style={{ border: '1px solid #b91c1c', borderRadius: 7, padding: '5px 10px', background: '#fff', color: '#b91c1c', fontWeight: 700, fontSize: 12, cursor: fullBusy ? 'wait' : 'pointer' }}>{fullBusy ? '출력 중…' : '전체번호 Excel'}</button>}
-          <button type="button" onClick={() => setOpen(o => !o)} data-testid="ready-toggle" aria-expanded={open} aria-label="지급 준비 점검 열기"
+          {!embedded && <button type="button" onClick={() => setOpen(o => !o)} data-testid="ready-toggle" aria-expanded={open} aria-label="지급 준비 점검 열기"
             style={{ border: '1px solid #cbd5e1', borderRadius: 7, padding: '5px 10px', background: open ? '#0369a1' : '#fff', color: open ? '#fff' : '#334155', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
-            {open ? '접기' : '점검 열기'}</button>
+            {open ? '접기' : '점검 열기'}</button>}
         </div>
       </div>
       {open && (
@@ -238,22 +238,22 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast, def
             <>
               <div data-testid="ready-scope-note" style={{ fontSize: 11.5, color: '#475569', marginBottom: 6 }}>
                 {data.scope === 'date'
-                  ? <>① <b>{data.payoutDate} 지급</b> — 지급 후보(지급일 일치) + 누락 방지 추가 확인(납품기간 {data.deliveryWindow?.from}~{data.deliveryWindow?.to} 납품, 지급일 경과 이월, 지급예정일 없음). 추가 확인 건은 송금 대상으로 자동 확정되지 않습니다.</>
-                  : <>② <b>전체 기간</b> — 지급완료가 아닌 모든 지급행, 지급완료인데 실제 지급일 없는 건, 납품일·지급예정일 공란 건.</>}
+                  ? <>지급일 일치 건 + 누락 방지 추가 확인(납품기간 {data.deliveryWindow?.from}~{data.deliveryWindow?.to} · 지급일 경과 · 지급예정일 없음)</>
+                  : <>전체 기간 — 지급완료가 아닌 건 · 실제 지급일 없는 지급완료 · 날짜 공란</>}
                 {data.summary.duplicates > 0 && <span style={{ color: '#b91c1c', fontWeight: 700 }}> · 중복 지급 후보 {data.summary.duplicates}건(합계 1회 집계)</span>}
               </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }} data-testid="ready-summary">
                 {(['A', 'B', 'C', 'D'] as const).map(k => chip(k, data.summary.byState[k]))}
                 <div style={{ fontSize: 11.5, color: '#475569', alignSelf: 'center', lineHeight: 1.6 }}>
                   전체 <b data-testid="ready-total">{data.summary.total.count}건 · {won(data.summary.total.pretax)}원</b>
-                  {(data.summary.foreignTotals ?? []).map(f => <span key={f.currency} data-testid={`ready-fx-total-${f.currency}`} style={{ marginLeft: 8, color: '#4338ca', fontWeight: 700 }}>
-                    외화 {f.currency} {f.count}건 · {fxAmt(f.currency, f.amount)}{f.missing ? ` (금액 미입력 ${f.missing}건)` : ''} <span style={{ fontWeight: 400, color: '#6b7280' }}>(원화 합계 별도)</span></span>)}
+                  {(data.summary.foreignTotals ?? []).length > 0 && <span data-testid="ready-fx-total" style={{ marginLeft: 8, color: '#4338ca', fontWeight: 700 }}>외화 {fxSummaryText(data.summary.foreignTotals ?? [])}</span>}
                   {' · '}공식 회차 자동포함 <b data-testid="ready-round-eligible">{data.summary.roundEligible.count}건 · {won(data.summary.roundEligible.pretax)}원</b><br />
+                  {data.summary.payStatusCounts && <span data-testid="ready-pay-status-counts">{payStatusChips(data.summary.payStatusCounts)}</span>}<br />
                   {data.scope === 'date' && Object.entries(data.summary.byCandidate).map(([k, v]) => <span key={k} data-testid={`ready-cand-${k}`} style={{ marginRight: 10 }}>{CAND_LABEL[k] ?? k} {v.count}건·{won(v.pretax)}원</span>)}
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 6, marginBottom: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                <input value={q} onChange={e => setQ(e.target.value)} placeholder="수취인·거래처·판매번호·프로젝트·CRM행 검색" data-testid="ready-search" aria-label="지급 점검 검색"
+                <input value={q} onChange={e => setQ(e.target.value)} placeholder="지급대상·거래처·판매번호·프로젝트 검색" data-testid="ready-search" aria-label="지급 점검 검색"
                   style={{ fontSize: 12, padding: '4px 8px', minWidth: 260, border: '1px solid #cbd5e1', borderRadius: 6 }} />
                 <select value={state} onChange={e => setState(e.target.value)} data-testid="ready-filter-state" aria-label="상태 필터" style={sel}>
                   <option value="all">전체 상태</option>{(['A', 'B', 'C', 'D'] as const).map(k => <option key={k} value={k}>{k} {STATE_LABEL[k]}</option>)}
@@ -266,9 +266,9 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast, def
                 </select>}
                 <span data-testid="ready-filtered-count" style={{ fontSize: 12, color: '#475569' }}>{rows.length}건</span>
               </div>
-              <div style={{ overflowX: 'auto', border: '1px solid #e5e7eb', borderRadius: 8, maxHeight: 640, overflowY: 'auto' }}>
+              <div style={{ overflowX: 'auto', border: '1px solid #e5e7eb', borderRadius: 8, maxHeight: 'max(360px, calc(100vh - 330px))', overflowY: 'auto' }} data-testid="ready-table-wrap">
                 <table style={{ borderCollapse: 'collapse', width: '100%' }}>
-                  <thead style={{ position: 'sticky', top: 0 }}><tr>{['상태', '후보', '출처', '거래처', '판매번호·프로젝트', 'CRM행', '통번역사·외주업체', '납품일', '지급예정일', '실제 지급일', '세전·공급가', '원천세·부가세', '세후·지급합계', '지급상태', '회차', '계좌', '누락·확인필요 사유', '필요한 조치'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+                  <thead style={{ position: 'sticky', top: 0 }}><tr>{['상태', '후보', '출처', '거래처', '판매번호', '지급대상', '납품일', '지급예정일', '실제 지급일', '세전금액', '원천세공제', '부가세', '실지급금액', '지급상태', '회차', '계좌', '누락·확인필요 사유', '필요한 조치'].map(h => <th key={h} style={{ ...th, textAlign: ['세전금액', '원천세공제', '부가세', '실지급금액'].includes(h) ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
                   <tbody>
                     {rows.map(r => (
                       <tr key={r.sourceKey} data-testid={`ready-row-${r.sourceKey}`} data-state={r.state} data-candidate={r.candidate} style={r.countedInTotals ? undefined : { background: '#fff7ed' }}>
@@ -276,8 +276,9 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast, def
                         <td style={{ ...td, fontSize: 11, color: r.candidate === 'base' || r.candidate === 'all' ? '#334155' : '#b45309' }}>{CAND_LABEL[r.candidate] ?? r.candidate}</td>
                         <td style={td}>{KIND_LABEL[r.kind]}</td>
                         <td style={{ ...td, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.client ?? ''}>{r.client ?? '—'}</td>
-                        <td style={{ ...td, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.projectTitle ?? ''}>{r.saleNo ?? r.quoteNumber ?? (r.projectId ? `#${r.projectId}` : '—')}{r.projectTitle ? <div style={{ fontSize: 10.5, color: '#94a3b8' }}>{r.projectTitle}</div> : null}</td>
-                        <td style={{ ...td, color: '#64748b' }}>{r.crmRowId ?? '—'}</td>
+                        <td style={{ ...td, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.projectTitle ?? ''}>
+                          <SaleLink projectId={r.projectId} saleNo={r.saleNo ?? r.quoteNumber} testid={`ready-sale-${r.sourceKey}`} />
+                          {r.projectTitle ? <div style={{ fontSize: 10.5, color: '#94a3b8' }}>{r.projectTitle}</div> : null}</td>
                         <td style={{ ...td, fontWeight: 700 }}>{r.payee ?? '—'}
                           <div data-testid={`ready-payee-type-${r.sourceKey}`} style={{ fontSize: 10.5, fontWeight: 700, color: isVendor(r) ? '#7c3aed' : '#64748b' }}>
                             {isVendor(r) ? `외주업체${r.vendorName && r.vendorName !== r.payee ? ` · ${r.vendorName}` : ''}${r.performerName ? ` · 수행 ${r.performerName}` : ''}${r.vendorContactName ? ` · 담당자 ${r.vendorContactName}` : ''}` : `개인${r.sourcePayeeName ? ` · 원본명 ${r.sourcePayeeName}` : ''}`}</div></td>
@@ -285,17 +286,14 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast, def
                           {r.dateMismatch && <span title="CRM·플랫폼 날짜 불일치 — 사유 참고" aria-label="날짜 불일치" data-testid={`ready-date-mismatch-${r.sourceKey}`} style={{ marginLeft: 4, color: '#c2410c', fontWeight: 700 }}>⚠</span>}</td>
                         <td style={{ ...td, color: r.payoutDate ? undefined : '#b91c1c' }}>{r.payoutDate ?? '공란'}</td>
                         <td style={td}>{r.actualPaymentDate ?? '—'}</td>
-                        <td style={{ ...td, textAlign: 'right' }}>{won(r.pretax)}<div style={{ fontSize: 10, color: '#94a3b8' }}>{isVendor(r) ? '공급가' : '세전'}</div></td>
-                        <td style={{ ...td, textAlign: 'right' }} data-testid={`ready-tax-${r.sourceKey}`}>
-                          {isVendor(r)
-                            ? (r.payAmount?.vat != null ? won(r.payAmount.vat) : '—')
-                            : won(r.withholding)}
-                          <div style={{ fontSize: 10, color: '#94a3b8' }}>{isVendor(r) ? (r.payAmount?.vat != null ? '부가세' : '부가세 미확정') : '원천세'}</div>
+                        <td style={{ ...td, textAlign: 'right' }}>{won(r.pretax)}</td>
+                        <td style={{ ...td, textAlign: 'right', color: '#dc2626' }} data-testid={`ready-tax-${r.sourceKey}`}>{isVendor(r) ? '—' : won(r.payAmount?.withholding ?? r.withholding)}
                           {r.taxConflict && <div title={r.taxConflict} style={{ fontSize: 10, color: '#c2410c', fontWeight: 700 }}>⚠ 세금 확인</div>}</td>
+                        <td style={{ ...td, textAlign: 'right', color: '#7c3aed' }} data-testid={`ready-vat-${r.sourceKey}`}>{isVendor(r) ? (r.payAmount?.vat != null ? won(r.payAmount.vat) : '미확정') : '—'}</td>
                         <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{isFx(r)
                             ? <span data-testid={`ready-fx-${r.sourceKey}`} style={{ color: '#4338ca' }}>{fxAmt(r.payCurrency!, r.foreignAmount)}<div style={{ fontSize: 10, color: '#b45309', fontWeight: 400 }}>외화 지급 · 원화 미확정</div></span>
-                            : won(r.payAmount?.payTotal ?? r.posttax)}{!isFx(r) && <div style={{ fontSize: 10, color: '#94a3b8', fontWeight: 400 }}>{isVendor(r) ? '지급합계' : '세후'}</div>}{!r.countedInTotals && <div style={{ fontSize: 10, color: '#c2410c' }}>합계 제외(중복)</div>}</td>
-                        <td style={{ ...td, fontWeight: 700, color: PAY_COLOR[r.payDisplay ?? ''] }} data-testid={`ready-pay-${r.sourceKey}`}>{payLabel(r)}</td>
+                            : won(r.payAmount?.payTotal ?? r.posttax)}{!r.countedInTotals && <div style={{ fontSize: 10, color: '#c2410c' }}>합계 제외(중복)</div>}</td>
+                        <td style={{ ...td, fontWeight: 700, color: PAY_STATUS_META[r.payStatus ?? 'review']?.fg }} data-testid={`ready-pay-${r.sourceKey}`}>{payLabel(r)}</td>
                         <td style={td}>{r.payoutRoundId ? `#${r.payoutRoundId}` : '—'}</td>
                         <td style={{ ...td, color: r.hasAccount ? '#15803d' : '#b91c1c' }}>{r.hasAccount ? '등록' : '미등록'}</td>
                         <td style={{ ...td, whiteSpace: 'normal', minWidth: 260, fontSize: 11.5 }}>

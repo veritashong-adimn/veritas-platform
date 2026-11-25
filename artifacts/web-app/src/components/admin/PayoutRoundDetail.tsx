@@ -15,6 +15,8 @@ import { PayoutReadinessPanel } from './PayoutReadinessPanel';
 import PayoutRoundsTab, { CreateDialog, type PayoutPerms } from './PayoutRoundsTab';
 import { BackToListButton } from './BackToListButton';
 import './readTableView.css';
+import { exportDataset } from '../../lib/excelExport';
+import { PAY_STATUS_META, PAY_STATUS_FILTER_OPTS, PayStatusBadge, payStatusChips, fxSummaryText, fxNum, SaleLink, type PayStatusKey, type ForeignTotal } from './payoutDisplayShared';
 
 // ── 통합 조회 공용 타입·표시 헬퍼(목록 PayoutUnifiedTab 과 공유) ──
 export type StatusCounts = { paid: number; unpaid: number; scheduled: number; review: number };
@@ -41,6 +43,9 @@ export type DetailRow = {
   conversion?: ConversionInfo; conversionEligible?: boolean;
   languageSource?: 'original' | 'master' | null; masterLanguages?: string | null;
   payCurrency?: string | null; foreignAmount?: number | null;   // 외화 지급(원화 합계와 별도)
+  // 화면 공통 표시값(서버, 표시 전용): 지급상태 6종 · 판매번호·판매 id(판매상세 연결) · 실제 지급일 · 명부 기준으로 바뀌기 전 원래 이름
+  payStatus?: PayStatusKey; payStatusLabel?: string; saleNo?: string | null; projectId?: number | null; actualPaymentDate?: string | null;
+  originalTranslator?: string | null; supply?: number | null; payTotal?: number | null;
   withholdingTreatment?: string | null; withholdingRate?: number | null;   // 수행정보 세금처리 유형(명세서 표기용)
 };
 export type PayeeGroup = {
@@ -49,7 +54,8 @@ export type PayeeGroup = {
   pretaxTotal: number; posttaxTotal: number; withholdingImplied: number; payeeType?: 'individual' | 'vendor'; vatTotal?: number;
   paidPretax: number; unpaidPretax: number; paidCount: number; unpaidCount: number; needReviewCount: number; dupSuspectCount: number; sources: string[];
   scheduledCount?: number;
-  foreignTotals?: { currency: string; count: number; amount: number; missing: number }[];
+  foreignTotals?: ForeignTotal[];
+  payStatusCounts?: Record<string, number>;
 };
 // 지급상태 — 실제 '지급' 여부만(검증상태와 분리).
 export const STATUS_META: Record<string, { label: string; bg: string; fg: string }> = {
@@ -83,8 +89,20 @@ export const opStatusGroups = (rs: OpRound[]): [string, number][] => {
   return [...m].sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]));
 };
 
-// 통번역사·언어·이메일·연락처·건수·세전·원천세공제·실지급·지급상태·출력
-const STMT_COLS = 'minmax(96px,1fr) minmax(64px,0.7fr) minmax(140px,1.3fr) 118px 48px 104px 104px 104px minmax(104px,auto) 128px';
+// 지급대상·언어·이메일·연락처·건수·세전금액·원천세공제·부가세·실지급금액·지급상태·출력
+const STMT_COLS = 'minmax(120px,1.2fr) minmax(60px,0.6fr) minmax(90px,0.7fr) 96px 44px 100px 96px 90px 108px 160px 128px';   // 지급상태 열 고정폭(행마다 열 위치가 달라지지 않게)
+const sumBy = <T,>(a: T[], f: (x: T) => unknown) => Math.round(a.reduce((s, x) => s + num(f(x)), 0) * 100) / 100;
+/** 행 목록의 외화 통화별 합계(원화 합계와 별도) */
+function fxTotalsOf(rows: DetailRow[]): ForeignTotal[] {
+  const m = new Map<string, ForeignTotal>();
+  for (const r of rows) { if (!r.payCurrency || r.payCurrency === 'KRW') continue; const g = m.get(r.payCurrency) ?? { currency: r.payCurrency, count: 0, amount: 0, missing: 0 };
+    g.count++; if (r.foreignAmount != null) g.amount = Math.round((g.amount + r.foreignAmount) * 100) / 100; else g.missing++; m.set(r.payCurrency, g); }
+  return [...m.values()].sort((a, b) => a.currency.localeCompare(b.currency));
+}
+const isFxRow = (r: DetailRow) => !!r.payCurrency && r.payCurrency !== 'KRW';
+const fxCell = (r: DetailRow) => `${r.payCurrency} ${r.foreignAmount != null ? fxNum(r.payCurrency!, r.foreignAmount) : '금액 미입력'}`;
+const payTotalOf = (r: DetailRow) => num(r.payTotal ?? r.posttax);
+const statusText = (c?: Record<string, number>) => Object.entries(c ?? {}).filter(([, v]) => v > 0).map(([k, v]) => `${PAY_STATUS_META[k as PayStatusKey]?.label ?? k} ${v}`).join(', ');
 function pickPhone(rows: DetailRow[]): string | null {
   const conf = new Set(rows.filter(r => r.matchStatus === 'confirmed' && r.masterPhone).map(r => r.masterPhone as string));
   if (conf.size === 1) return [...conf][0]; if (conf.size > 1) return null;
@@ -128,18 +146,14 @@ export function PayoutRoundDetail({ token, onToast, payoutDate, opRounds, reload
   useEffect(() => { void load(); }, [load]);
 
   const label = payoutDate ? `${payoutDate} 지급` : '지급일 미확인';
-  const stc = totals ? sc(totals) : { paid: 0, unpaid: 0, scheduled: 0, review: 0 };
+  // 상단 요약 — 화면 공통 명칭(세전금액·원천세공제·부가세·실지급금액) · 외화 통화별(금액 미입력 건수) · 지급상태 6종 건수
   const summary: [string, string, string?][] = totals ? [
     ['지급대상', `${num(totals.payeeCount)}명`], ['수행건수', `${num(totals.assignmentCount)}건`],
-    ['세전금액', `${won(totals.pretaxTotal)}원`],
-    ['원천세공제', `${won(totals.withholdingImpliedTotal)}원`, '개인 통번역사 실제 공제(세전−세후) 합계 · 외주업체 부가세 미포함'],
-    ...(num(totals.vatTotal) > 0 ? [['부가세(외주업체)', `${won(totals.vatTotal)}원`]] as [string, string, string?][] : []),
-    ['실지급액(세후)', `${won(totals.posttaxTotal)}원`, '세전 − 원천세공제 + 외주업체 부가세'],
-    ...((totals.foreignTotals ?? []) as { currency: string; count: number; amount: number; missing: number }[]).map(f =>
-      ['외화 지급', `${f.currency} ${f.amount.toLocaleString('ko-KR', { maximumFractionDigits: 2 })} · ${f.count}건`, '외화 지급 — 원화 합계 제외(별도 해외송금)'] as [string, string, string?]),
-    ['지급완료(세전)', `${won(totals.paidTotal)}원 · ${stc.paid}건`],
-    ['미지급(세전)', `${won(totals.unpaidTotal)}원 · ${stc.unpaid}건`],
-    ['지급예정', `${stc.scheduled}건`], ['지급확인 필요', `${stc.review}건`],
+    ['세전금액', `${won(totals.pretaxTotal)}원`, '외주업체는 공급가'],
+    ['원천세공제', `${won(totals.withholdingImpliedTotal)}원`, '개인 통번역사 원천세 공제 합계'],
+    ['부가세', `${won(totals.vatTotal)}원`, '외주업체 부가세 합계'],
+    ['실지급금액', `${won(totals.posttaxTotal)}원`, '세전금액 − 원천세공제 + 부가세'],
+    ...(((totals.foreignTotals ?? []) as ForeignTotal[]).length ? [['외화', fxSummaryText(totals.foreignTotals as ForeignTotal[]), '외화 지급 — 원화 합계 제외(별도 해외송금)']] as [string, string, string?][] : []),
   ] : [];
 
   const tabs: { key: TabKey; label: string }[] = [
@@ -169,7 +183,7 @@ export function PayoutRoundDetail({ token, onToast, payoutDate, opRounds, reload
             <span style={{ fontSize: 13, fontWeight: 700, color: k.includes('원천세') ? '#dc2626' : k.includes('실지급') ? '#111827' : '#374151', fontVariantNumeric: 'tabular-nums' }} title={tip}>{v}</span>
           </React.Fragment>
         ))}
-        {totals && <span style={{ marginLeft: 'auto', fontSize: 11, color: '#9ca3af' }}>통합 조회 기준(과거 CRM {items.filter(i => i.source === 'legacy').length} · 신규 플랫폼 {items.filter(i => i.source === 'current').length})</span>}
+        {totals?.payStatusCounts && <span data-testid="pd-status-counts" style={{ marginLeft: 'auto', display: 'flex', flexWrap: 'wrap', gap: 2 }}>{payStatusChips(totals.payStatusCounts)}</span>}
       </div>
 
       <div role="tablist" aria-label="지급회차 상세 탭" style={{ display: 'flex', gap: 2, borderBottom: '1px solid #e5e7eb', marginBottom: 12 }}>
@@ -183,14 +197,14 @@ export function PayoutRoundDetail({ token, onToast, payoutDate, opRounds, reload
       {tab === 'payees' && <PayeeTable payees={payees} items={items} payoutDate={payoutDate} loading={loading} onToast={onToast}
         onPick={(k) => { setSelPayee(k); setItemStatus('all'); setTab('items'); }} />}
       {tab === 'items' && <ItemTable token={token} onToast={onToast} items={items} payees={payees} loading={loading} selPayee={selPayee} setSelPayee={setSelPayee}
-        status={itemStatus} setStatus={setItemStatus} onChanged={load} />}
+        status={itemStatus} setStatus={setItemStatus} onChanged={load} payoutDate={payoutDate} />}
       {tab === 'operational' && canOps && <OperationalTab token={token} onToast={onToast} payoutDate={payoutDate} opRounds={opRounds} reloadOpRounds={reloadOpRounds}
         perms={payoutPerms} unifiedItems={items} />}
     </div>
   );
 }
 
-// ── 탭 2: 지급대상별 요약(통합 조회) — 통번역사(Master)별 금액·상태 + 지급명세서 Excel·PDF ──
+// ── 탭 2: 지급대상별 요약(통합 조회) — 지급대상(명부 기준)별 금액·지급상태 + 전체 Excel + 개별 지급명세서 Excel·PDF ──
 function PayeeTable({ payees, items, payoutDate, loading, onToast, onPick }: { payees: PayeeGroup[]; items: DetailRow[]; payoutDate: string | null; loading: boolean; onToast: (m: string) => void; onPick: (k: string) => void }) {
   const stmtBtn: React.CSSProperties = { minWidth: 58, padding: '5px 12px', borderRadius: 6, fontSize: 12, fontWeight: 700, border: '1px solid #cbd5e1', background: '#fff', color: '#334155', cursor: 'pointer', lineHeight: 1.2 };
   const stmtFor = (g: PayeeGroup) => {
@@ -201,109 +215,168 @@ function PayeeTable({ payees, items, payoutDate, loading, onToast, onPick }: { p
         withholdingTreatment: r.withholdingTreatment ?? null, withholdingRate: r.withholdingRate ?? null })) };
   };
   const badge = (text: string, fg: string, bg: string, title?: string) => <span style={{ fontSize: 10, color: fg, background: bg, padding: '1px 5px', borderRadius: 7 }} title={title}>{text}</span>;
+  const fxAll = fxTotalsOf(items);
+  const tot = { count: sumBy(payees, g => g.count), pre: sumBy(payees, g => g.pretaxTotal), wh: sumBy(payees, g => g.withholdingImplied), vat: sumBy(payees, g => g.vatTotal), pay: sumBy(payees, g => g.posttaxTotal) };
+  const exportAll = () => {
+    type R = { name: string; type: string; langs: string; email: string; phone: string; count: number; pre: number; wh: number; vat: number; pay: number; fx: string; st: string };
+    const rows: R[] = payees.map(g => ({ name: g.name, type: g.payeeType === 'vendor' ? '외주업체' : '개인', langs: g.languages.join(', '), email: g.email ?? '', phone: g.phone ?? '', count: g.count,
+      pre: g.pretaxTotal, wh: g.withholdingImplied, vat: num(g.vatTotal), pay: g.posttaxTotal, fx: fxSummaryText(g.foreignTotals ?? []), st: statusText(g.payStatusCounts) }));
+    rows.push({ name: `합계 (${payees.length}명)`, type: '', langs: '', email: '', phone: '', count: tot.count, pre: tot.pre, wh: tot.wh, vat: tot.vat, pay: tot.pay, fx: fxSummaryText(fxAll), st: '' });
+    exportDataset<R>({ filename: `지급대상별요약_${payoutDate ?? '지급일미확인'}.xlsx`, sheetName: '지급대상별 요약', rows, columns: [
+      { header: '지급대상', value: 'name', width: 22 }, { header: '구분', value: 'type', width: 9 }, { header: '언어', value: 'langs', width: 16 },
+      { header: '이메일', value: 'email', width: 24 }, { header: '연락처', value: 'phone', width: 15 }, { header: '건수', value: 'count', type: 'number', width: 7 },
+      { header: '세전금액', value: 'pre', type: 'number', width: 14 }, { header: '원천세공제', value: 'wh', type: 'number', width: 13 }, { header: '부가세', value: 'vat', type: 'number', width: 12 },
+      { header: '실지급금액', value: 'pay', type: 'number', width: 14 }, { header: '외화', value: 'fx', width: 22 }, { header: '지급상태', value: 'st', width: 28 } ] });
+    onToast(`지급대상별 요약 ${payees.length}명을 Excel로 내보냈습니다.`);
+  };
+  const H = ({ c, r }: { c: string; r?: boolean }) => <div style={{ textAlign: r ? 'right' : 'left' }}>{c}</div>;
   return (
-    <div data-testid="pu-payee-panel" style={{ border: '1px solid #e5e7eb', borderRadius: 10, background: '#fff', overflowX: 'auto' }}>
-      <div style={{ minWidth: 1040 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: STMT_COLS, gap: '0 12px', alignItems: 'center', fontSize: 12, padding: '7px 12px', background: '#f3f4f6', color: '#6b7280', fontWeight: 700 }}>
-          <div>통번역사</div><div>언어</div><div>이메일</div><div>연락처</div><div style={{ textAlign: 'right' }}>건수</div><div style={{ textAlign: 'right' }}>세전금액</div><div style={{ textAlign: 'right' }}>원천세공제</div><div style={{ textAlign: 'right' }}>실지급액</div><div style={{ textAlign: 'right' }}>지급상태</div><div style={{ textAlign: 'right' }}>Excel · PDF</div>
-        </div>
-        <div className="pu-payee-list">
-          {payees.map((g) => {
-            const opts = stmtFor(g);
-            return (
-              <div className="pu-payee-row" key={g.masterKey} data-testid={`pu-payee-${g.name}`} onClick={() => onPick(g.masterKey)} title="클릭 → 이 통번역사의 건별 상세내역"
-                style={{ display: 'grid', gridTemplateColumns: STMT_COLS, gap: '0 12px', alignItems: 'center', fontSize: 12.5, padding: '8px 12px', cursor: 'pointer' }}>
-                <div style={{ color: '#111827', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {g.name}
-                  {!g.confirmed && g.matchStatus === 'internal'
-                    ? <span style={{ marginLeft: 5 }}>{badge('지급액 없음', '#475569', '#f1f5f9', '베리타스 명의 0원 기록 — 지급액 없음(송금 대상 아님)')}</span>
-                    : !g.confirmed && (g.matchStatus === 'vendor' || g.matchStatus === 'client')
-                    ? <span style={{ marginLeft: 5 }}>{badge('거래처', '#475569', '#f1f5f9', '거래처/외주업체 — 개인 통번역사 Master 연결 대상이 아님')}</span>
-                    : !g.confirmed ? <span style={{ marginLeft: 5 }}>{badge('연결 확인필요', '#1d4ed8', '#eff6ff', '검증상태: Master 연결 미확정(지급상태와 무관)')}</span> : null}
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+        <button type="button" onClick={exportAll} disabled={!payees.length} data-testid="pu-payee-excel-all" aria-label="지급대상별 요약 전체 Excel"
+          style={{ border: 'none', borderRadius: 7, padding: '6px 12px', background: '#059669', color: '#fff', fontWeight: 700, fontSize: 12, cursor: payees.length ? 'pointer' : 'default', opacity: payees.length ? 1 : 0.5 }}>전체 Excel</button>
+      </div>
+      <div data-testid="pu-payee-panel" style={{ border: '1px solid #e5e7eb', borderRadius: 10, background: '#fff', overflowX: 'auto' }}>
+        <div style={{ minWidth: 1120 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: STMT_COLS, gap: '0 10px', alignItems: 'center', fontSize: 12, padding: '7px 12px', background: '#f3f4f6', color: '#6b7280', fontWeight: 700 }}>
+            <H c="지급대상" /><H c="언어" /><H c="이메일" /><H c="연락처" /><H c="건수" r /><H c="세전금액" r /><H c="원천세공제" r /><H c="부가세" r /><H c="실지급금액" r /><H c="지급상태" r /><H c="명세서 Excel · PDF" r />
+          </div>
+          <div className="pu-payee-list">
+            {payees.map((g) => {
+              const opts = stmtFor(g);
+              return (
+                <div className="pu-payee-row" key={g.masterKey} data-testid={`pu-payee-${g.name}`} onClick={() => onPick(g.masterKey)} title="클릭 → 이 지급대상의 건별 상세내역"
+                  style={{ display: 'grid', gridTemplateColumns: STMT_COLS, gap: '0 10px', alignItems: 'center', fontSize: 12.5, padding: '8px 12px', cursor: 'pointer' }}>
+                  <div style={{ color: '#111827', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={g.name}>
+                    {g.name}
+                    {g.payeeType === 'vendor' && <span style={{ marginLeft: 5 }}>{badge('외주업체', '#7c3aed', '#f5f3ff')}</span>}
+                    {!g.confirmed && g.matchStatus !== 'internal' && g.matchStatus !== 'vendor' && g.matchStatus !== 'client' && <span style={{ marginLeft: 5 }}>{badge('명부 연결 확인', '#1d4ed8', '#eff6ff', '통번역사 명부 연결 미확정(지급상태와 무관)')}</span>}
+                  </div>
+                  <div style={{ color: '#374151', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11.5 }} title={g.languages.join(', ')}>{g.languages.join(', ')}</div>
+                  <div style={{ color: '#9ca3af', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11 }} title={g.email ?? undefined}>{g.email || ''}</div>
+                  <div style={{ color: '#9ca3af', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11 }} title={g.phone ?? undefined}>{g.phone || ''}</div>
+                  <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{g.count}</div>
+                  <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{won(g.pretaxTotal)}</div>
+                  <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#dc2626' }}>{won(g.withholdingImplied)}</div>
+                  <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#7c3aed' }} data-testid={`pu-vendor-vat-${g.masterKey}`}>{won(num(g.vatTotal))}</div>
+                  <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 800, color: '#111827' }}>{won(g.posttaxTotal)}
+                    {(g.foreignTotals ?? []).map(f => <div key={f.currency} data-testid={`pu-payee-fx-${g.masterKey}-${f.currency}`} style={{ fontSize: 10, color: '#1d4ed8', fontWeight: 700 }} title="외화 지급 — 원화 합계 제외(별도 해외송금)">{fxSummaryText([f])}</div>)}</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', rowGap: 2 }}>{payStatusChips(g.payStatusCounts, true)}</div>
+                  <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                    <button type="button" style={stmtBtn} data-testid={`pu-excel-${g.name}`} aria-label={`${g.name} 지급명세서 Excel`} onClick={(e) => { e.stopPropagation(); exportReproStatementExcel(opts); onToast(`${g.name} 지급명세서 Excel을 다운로드했습니다.`); }}>Excel</button>
+                    <button type="button" style={stmtBtn} data-testid={`pu-pdf-${g.name}`} aria-label={`${g.name} 지급명세서 PDF`} onClick={(e) => { e.stopPropagation(); if (!exportReproStatementPdf(opts)) onToast('팝업 차단을 해제한 후 다시 시도해 주세요.'); }}>PDF</button>
+                  </div>
                 </div>
-                <div style={{ color: '#374151', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11.5 }} title={g.languages.join(', ')}>{g.languages.join(', ')}</div>
-                <div style={{ color: '#9ca3af', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11.5 }} title={g.email ?? undefined}>{g.email || ''}</div>
-                <div style={{ color: '#9ca3af', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11.5 }}>{g.phone || ''}</div>
-                <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{g.count}</div>
-                <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{won(g.pretaxTotal)}</div>
-                <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#dc2626' }}>{won(g.withholdingImplied)}
-                  {g.payeeType === 'vendor' && <div style={{ fontSize: 10, color: '#7c3aed', fontWeight: 700 }} data-testid={`pu-vendor-vat-${g.masterKey}`}>외주업체 · 부가세 {won(num(g.vatTotal))}</div>}</div>
-                <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 800, color: '#111827' }}>{won(g.posttaxTotal)}
-                  {(g.foreignTotals ?? []).map(f => <div key={f.currency} data-testid={`pu-payee-fx-${g.masterKey}-${f.currency}`} style={{ fontSize: 10, color: '#1d4ed8', fontWeight: 700 }} title="외화 지급 — 원화 합계 제외(별도 해외송금)">외화 {f.currency} {f.amount.toLocaleString('ko-KR', { maximumFractionDigits: 2 })}{f.missing ? ` · 미입력 ${f.missing}건` : ''}</div>)}</div>
-                <div style={{ textAlign: 'right', display: 'flex', gap: 4, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-                  {g.paidCount > 0 && badge(`지급완료 ${g.paidCount}건`, '#1d4ed8', '#eff6ff')}
-                  {g.needReviewCount > 0 && badge(`지급확인 필요 ${g.needReviewCount}건`, '#92400e', '#fef3c7', '지급일이 지났거나 미상인데 지급확정 기록이 없는 건')}
-                  {num(g.scheduledCount) > 0 && badge(`지급예정 ${num(g.scheduledCount)}건`, '#047857', '#ecfdf5')}
-                  {g.unpaidCount > 0 && badge(`미지급 ${g.unpaidCount}건`, '#b45309', '#fffbeb')}
-                  {g.dupSuspectCount > 0 && badge(`중복 ${g.dupSuspectCount}건`, '#dc2626', '#fef2f2')}
-                  {g.paidCount === 0 && g.unpaidCount === 0 && g.needReviewCount === 0 && g.dupSuspectCount === 0 && !num(g.scheduledCount) && <span style={{ fontSize: 10, color: '#9ca3af' }}>-</span>}
-                </div>
-                <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                  <button type="button" style={stmtBtn} data-testid={`pu-excel-${g.name}`} aria-label={`${g.name} 지급명세서 Excel`} onClick={(e) => { e.stopPropagation(); exportReproStatementExcel(opts); onToast(`${g.name} 지급명세서 Excel을 다운로드했습니다.`); }}>Excel</button>
-                  <button type="button" style={stmtBtn} data-testid={`pu-pdf-${g.name}`} aria-label={`${g.name} 지급명세서 PDF`} onClick={(e) => { e.stopPropagation(); if (!exportReproStatementPdf(opts)) onToast('팝업 차단을 해제한 후 다시 시도해 주세요.'); }}>PDF</button>
-                </div>
-              </div>
-            );
-          })}
-          {payees.length === 0 && <div style={{ padding: 24, textAlign: 'center', color: '#9ca3af', fontSize: 13 }}>{loading ? '불러오는 중…' : '지급대상이 없습니다.'}</div>}
+              );
+            })}
+            {payees.length === 0 && <div style={{ padding: 24, textAlign: 'center', color: '#9ca3af', fontSize: 13 }}>{loading ? '불러오는 중…' : '지급대상이 없습니다.'}</div>}
+          </div>
+          {payees.length > 0 && (
+            <div data-testid="pu-payee-total" style={{ display: 'grid', gridTemplateColumns: STMT_COLS, gap: '0 10px', alignItems: 'center', fontSize: 12.5, padding: '9px 12px', background: '#f8fafc', borderTop: '2px solid #e5e7eb', fontWeight: 800, color: '#111827' }}>
+              <div>합계 ({payees.length}명)</div><div /><div /><div />
+              <div style={{ textAlign: 'right' }}>{tot.count}</div>
+              <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{won(tot.pre)}</div>
+              <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#dc2626' }}>{won(tot.wh)}</div>
+              <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#7c3aed' }}>{won(tot.vat)}</div>
+              <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{won(tot.pay)}{fxAll.length > 0 && <div style={{ fontSize: 10, color: '#1d4ed8' }}>{fxSummaryText(fxAll)}</div>}</div>
+              <div /><div />
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-// ── 탭 3: 건별 상세내역(통합 조회) — 통번역사·지급상태 필터(화면 내) ──
-function ItemTable({ token, onToast, items, payees, loading, selPayee, setSelPayee, status, setStatus, onChanged }: {
+// ── 탭 3: 건별 상세내역(통합 조회) — 지급대상·지급상태 필터 + 거래처·판매번호 검색 + 전체 Excel + 하단 합계 ──
+function ItemTable({ token, onToast, items, payees, loading, selPayee, setSelPayee, status, setStatus, onChanged, payoutDate }: {
   token: string; onToast: (m: string) => void; items: DetailRow[]; payees: PayeeGroup[]; loading: boolean;
-  selPayee: string; setSelPayee: (k: string) => void; status: string; setStatus: (s: string) => void; onChanged: () => void;
+  selPayee: string; setSelPayee: (k: string) => void; status: string; setStatus: (s: string) => void; onChanged: () => void; payoutDate: string | null;
 }) {
-  const rows = items.filter(r => (selPayee === '__all__' || r.masterKey === selPayee) && (status === 'all' || r.status === status));
+  const [q, setQ] = useState('');
+  const rows = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    return items.filter(r => (selPayee === '__all__' || r.masterKey === selPayee) && (status === 'all' || r.payStatus === status)
+      && (!t || [r.client, r.saleNo].some(v => String(v ?? '').toLowerCase().includes(t))));
+  }, [items, selPayee, status, q]);
   const clamp2 = { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', whiteSpace: 'normal', lineHeight: 1.35 } as React.CSSProperties;
   const inp: React.CSSProperties = { padding: '6px 10px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13 };
+  const tot = { pre: sumBy(rows, r => r.pretax), wh: sumBy(rows, r => r.withholdingImplied), vat: sumBy(rows, r => r.vat), pay: sumBy(rows, payTotalOf) };
+  const fxT = fxTotalsOf(rows);
+  const HEADS = ['거래처', '판매번호', '지급대상', '언어', '상품/업무', '상세내역', '납품일', '지급예정일', '실제 지급일', '세전금액', '원천세공제', '부가세', '실지급금액', '지급상태', '지급 전환'];
+  const AMT = new Set(['세전금액', '원천세공제', '부가세', '실지급금액']);
+  const exportAll = () => {
+    type R = DetailRow & { _total?: boolean };
+    const out: R[] = [...rows, { _total: true, client: `합계 (${rows.length}건)`, pretax: tot.pre, withholdingImplied: tot.wh, vat: tot.vat, payTotal: tot.pay, posttax: tot.pay } as R];
+    const v = (f: (r: R) => unknown) => (r: R) => (r._total ? '' : f(r));
+    exportDataset<R>({ filename: `건별상세내역_${payoutDate ?? '지급일미확인'}.xlsx`, sheetName: '건별 상세내역', rows: out, columns: [
+      { header: '거래처', value: (r) => r.client ?? '', width: 22 }, { header: '판매번호', value: v(r => r.saleNo ?? ''), width: 16 },
+      { header: '지급대상', value: v(r => r.translator ?? ''), width: 16 }, { header: '구분', value: v(r => (r.payeeType === 'vendor' ? '외주업체' : '개인')), width: 9 },
+      { header: '언어', value: v(r => r.language ?? ''), width: 12 }, { header: '상품/업무', value: v(r => r.content ?? ''), width: 28 }, { header: '상세내역', value: v(r => r.filename ?? ''), width: 30 },
+      { header: '납품일', value: v(r => r.deliveryDate ?? ''), width: 11 }, { header: '지급예정일', value: v(r => r.payoutDate ?? ''), width: 11 }, { header: '실제 지급일', value: v(r => r.actualPaymentDate ?? ''), width: 11 },
+      { header: '세전금액', value: (r) => r.pretax, type: 'number', width: 13 }, { header: '원천세공제', value: (r) => r.withholdingImplied, type: 'number', width: 12 },
+      { header: '부가세', value: (r) => num(r.vat), type: 'number', width: 11 }, { header: '실지급금액', value: (r) => (r._total ? tot.pay : isFxRow(r) ? '' : payTotalOf(r)), type: 'number', width: 14 },
+      { header: '지급통화', value: (r) => (r._total ? '' : r.payCurrency ?? 'KRW'), width: 8 },
+      { header: '외화 지급금액', value: (r) => (r._total ? fxSummaryText(fxT) : isFxRow(r) ? (r.foreignAmount ?? '') : ''), width: 16 },
+      { header: '지급상태', value: v(r => r.payStatusLabel ?? ''), width: 13 }, { header: '지급완료 근거', value: v(r => r.paidBasis ?? ''), width: 30 } ] });
+    onToast(`건별 상세내역 ${rows.length}건을 Excel로 내보냈습니다.`);
+  };
   return (
     <div>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
-        <select style={inp} value={selPayee} onChange={e => setSelPayee(e.target.value)} aria-label="통번역사 선택" data-testid="pd-item-payee">
-          <option value="__all__">전체 통번역사</option>
+        <select style={inp} value={selPayee} onChange={e => setSelPayee(e.target.value)} aria-label="지급대상 선택" data-testid="pd-item-payee">
+          <option value="__all__">전체 지급대상</option>
           {payees.map(g => <option key={g.masterKey} value={g.masterKey}>{g.name} ({g.count})</option>)}
         </select>
-        <select style={inp} value={status} onChange={e => setStatus(e.target.value)} aria-label="지급상태" data-testid="pd-item-status">{STATUS_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+        <select style={inp} value={status} onChange={e => setStatus(e.target.value)} aria-label="지급상태" data-testid="pd-item-status">{PAY_STATUS_FILTER_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+        <input style={{ ...inp, minWidth: 220 }} value={q} onChange={e => setQ(e.target.value)} placeholder="거래처·판매번호 검색" aria-label="거래처·판매번호 검색" data-testid="pd-item-search" />
         <span style={{ fontSize: 12, color: '#6b7280' }} data-testid="pu-detail-title">{rows.length}건</span>
+        <button type="button" onClick={exportAll} disabled={!rows.length} data-testid="pd-item-excel-all" aria-label="건별 상세내역 전체 Excel"
+          style={{ marginLeft: 'auto', border: 'none', borderRadius: 7, padding: '6px 12px', background: '#059669', color: '#fff', fontWeight: 700, fontSize: 12, cursor: rows.length ? 'pointer' : 'default', opacity: rows.length ? 1 : 0.5 }}>전체 Excel</button>
       </div>
       <div style={{ overflowX: 'auto', border: '1px solid #e5e7eb', borderRadius: 10 }}>
         <table className="veritas-read-table vz-sticky pr-detail-zebra" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-          <thead><tr>{['거래처', '통번역사', '주민번호', '언어', '상품/업무', '상세내역', '납품일', '지급일', '세전지급액', '세후지급액', '원천세공제액', '지급상태', '지급 전환'].map(h => <th key={h} style={{ padding: '9px 12px', textAlign: h.includes('액') ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>)}</tr></thead>
+          <thead><tr>{HEADS.map(h => <th key={h} style={{ padding: '9px 12px', textAlign: AMT.has(h) ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>)}</tr></thead>
           <tbody>
-            {rows.map((p, i) => {
-              const sm = STATUS_META[p.status] ?? STATUS_META.deposit_unconfirmed;
-              return (
-                <tr key={p.sourceKey} data-testid={`pu-detail-${i}`} data-source={p.source} data-status={p.status}>
-                  <td style={{ ...td, whiteSpace: 'normal', maxWidth: 180 }} title={p.client ?? undefined}><div style={clamp2}>{p.client ?? <span style={{ color: '#b45309', fontWeight: 700 }}>거래처 확인 필요</span>}</div></td>
-                  <td style={{ ...td, whiteSpace: 'normal', lineHeight: 1.35 }}>
-                    <div style={{ fontWeight: 600, color: '#111827' }}>{p.translator ?? '-'}</div>
-                    {(p.masterEmail || p.masterPhone) && <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 1 }} title="현재 Master 등록 연락처">{p.masterEmail && <div>{p.masterEmail}</div>}{p.masterPhone && <div>{p.masterPhone}</div>}</div>}
-                  </td>
-                  <td style={{ ...td, fontVariantNumeric: 'tabular-nums', color: p.residentMasked ? '#6b7280' : '#d1d5db' }} title="주민번호 앞 6자리만 표시(마스킹)">{p.residentMasked ?? '-'}</td>
-                  <td style={{ ...td, whiteSpace: 'normal', maxWidth: 140 }}>{p.language ?? '-'}</td>
-                  <td style={{ ...td, maxWidth: 200 }} title={p.content ?? undefined}><div style={clamp2}>{p.content ?? '-'}</div></td>
-                  <td style={{ ...td, maxWidth: 230 }} title={p.filename ?? undefined}><div style={clamp2}>{p.filename ?? '-'}</div></td>
-                  <td style={td}>{p.deliveryDate ?? <span style={{ color: '#b45309' }}>(납품일 미상)</span>}</td>
-                  <td style={td}>{p.payoutDate ?? <span style={{ color: '#b45309', fontWeight: 700 }}>(지급일 미확인)</span>}</td>
-                  <td style={tdR}>{won(p.pretax)}
-                    {p.payCurrency && p.payCurrency !== 'KRW' && <div data-testid={`pu-detail-fx-${i}`} style={{ fontSize: 10, color: '#1d4ed8', fontWeight: 700 }} title="외화 지급 — 원화 합계 제외(별도 해외송금)">외화 {p.payCurrency} {p.foreignAmount != null ? p.foreignAmount.toLocaleString('ko-KR', { maximumFractionDigits: 2 }) : '미입력'}</div>}</td>
-                  <td style={tdR}>{won(p.posttax)}</td>
-                  <td style={{ ...tdR, color: '#dc2626' }}>{won(p.withholdingImplied)}
-                    {p.payeeType === 'vendor' && <div style={{ fontSize: 10, color: '#7c3aed' }}>외주 · 부가세 {p.vat != null ? won(p.vat) : '미확정'}</div>}
-                    {p.taxConflict && <div title={p.taxConflict} style={{ fontSize: 10, color: '#c2410c', fontWeight: 700 }}>⚠ 세금 확인</div>}</td>
-                  <td style={td}><span style={{ padding: '2px 8px', borderRadius: 10, background: sm.bg, color: sm.fg, fontSize: 12, fontWeight: 700, cursor: p.paidBasis ? 'help' : undefined }} title={p.paidBasis ? `지급완료 근거: ${p.paidBasis}` : undefined} data-testid={`pu-detail-status-${i}`} aria-label={`지급상태 ${sm.label}`}>{sm.label}</span></td>
-                  <td style={td}>{p.source === 'legacy'
-                    ? <ConversionCell token={token} rowId={p.id} conversion={p.conversion ?? null} eligible={!!p.conversionEligible} onToast={onToast} onChanged={onChanged} />
-                    : <span style={{ color: '#d1d5db' }}>-</span>}</td>
-                </tr>
-              );
-            })}
-            {rows.length === 0 && <tr><td colSpan={13} style={{ padding: 24, textAlign: 'center', color: '#9ca3af' }}>{loading ? '불러오는 중…' : '상세 내역이 없습니다.'}</td></tr>}
+            {rows.map((p, i) => (
+              <tr key={p.sourceKey} data-testid={`pu-detail-${i}`} data-source={p.source} data-status={p.payStatus}>
+                <td style={{ ...td, whiteSpace: 'normal', maxWidth: 180 }} title={p.client ?? undefined}><div style={clamp2}>{p.client ?? <span style={{ color: '#b45309', fontWeight: 700 }}>거래처 확인 필요</span>}</div></td>
+                <td style={td}><SaleLink projectId={p.projectId} saleNo={p.saleNo} testid={`pu-detail-sale-${i}`} /></td>
+                <td style={{ ...td, whiteSpace: 'normal', lineHeight: 1.35 }}>
+                  <div style={{ fontWeight: 600, color: '#111827' }}>{p.translator ?? '-'}{p.payeeType === 'vendor' && <span style={{ marginLeft: 4, fontSize: 10, color: '#7c3aed', fontWeight: 700 }}>외주업체</span>}</div>
+                  {(p.masterEmail || p.masterPhone) && <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 1 }} title="현재 명부 등록 연락처">{p.masterEmail && <div>{p.masterEmail}</div>}{p.masterPhone && <div>{p.masterPhone}</div>}</div>}
+                </td>
+                <td style={{ ...td, whiteSpace: 'normal', maxWidth: 140 }}>{p.language ?? '-'}</td>
+                <td style={{ ...td, maxWidth: 200 }} title={p.content ?? undefined}><div style={clamp2}>{p.content ?? '-'}</div></td>
+                <td style={{ ...td, maxWidth: 230 }} title={p.filename ?? undefined}><div style={clamp2}>{p.filename ?? '-'}</div></td>
+                <td style={td}>{p.deliveryDate ?? <span style={{ color: '#b45309' }}>(납품일 미상)</span>}</td>
+                <td style={td}>{p.payoutDate ?? <span style={{ color: '#b45309', fontWeight: 700 }}>(지급일 미확인)</span>}</td>
+                <td style={td} data-testid={`pu-detail-actual-${i}`}>{p.actualPaymentDate ?? <span style={{ color: '#d1d5db' }}>-</span>}</td>
+                <td style={tdR}>{won(p.pretax)}</td>
+                <td style={{ ...tdR, color: '#dc2626' }}>{won(p.withholdingImplied)}
+                  {p.taxConflict && <div title={p.taxConflict} style={{ fontSize: 10, color: '#c2410c', fontWeight: 700 }}>⚠ 세금 확인</div>}</td>
+                <td style={{ ...tdR, color: '#7c3aed' }}>{p.payeeType === 'vendor' ? (p.vat != null ? won(p.vat) : '미확정') : '-'}</td>
+                <td style={{ ...tdR, fontWeight: 700 }}>{isFxRow(p)
+                  ? <span data-testid={`pu-detail-fx-${i}`} style={{ color: '#1d4ed8' }} title="외화 지급 — 원화 합계 제외(별도 해외송금)">{fxCell(p)}</span>
+                  : won(payTotalOf(p))}</td>
+                <td style={td}><span title={p.paidBasis ? `지급완료 근거: ${p.paidBasis}` : undefined}><PayStatusBadge status={p.payStatus} label={p.payStatusLabel} testid={`pu-detail-status-${i}`} /></span></td>
+                <td style={td}>{p.source === 'legacy'
+                  ? <ConversionCell token={token} rowId={p.id} conversion={p.conversion ?? null} eligible={!!p.conversionEligible} onToast={onToast} onChanged={onChanged} />
+                  : <span style={{ color: '#d1d5db' }}>-</span>}</td>
+              </tr>
+            ))}
+            {rows.length === 0 && <tr><td colSpan={HEADS.length} style={{ padding: 24, textAlign: 'center', color: '#9ca3af' }}>{loading ? '불러오는 중…' : '상세 내역이 없습니다.'}</td></tr>}
           </tbody>
+          {rows.length > 0 && (
+            <tfoot><tr data-testid="pu-detail-total" style={{ background: '#f8fafc', fontWeight: 800 }}>
+              <td style={{ ...td, fontWeight: 800 }} colSpan={9}>합계 ({rows.length}건)</td>
+              <td style={{ ...tdR, fontWeight: 800 }}>{won(tot.pre)}</td>
+              <td style={{ ...tdR, fontWeight: 800, color: '#dc2626' }}>{won(tot.wh)}</td>
+              <td style={{ ...tdR, fontWeight: 800, color: '#7c3aed' }}>{won(tot.vat)}</td>
+              <td style={{ ...tdR, fontWeight: 800 }}>{won(tot.pay)}{fxT.length > 0 && <div style={{ fontSize: 10, color: '#1d4ed8' }}>{fxSummaryText(fxT)}</div>}</td>
+              <td style={td} colSpan={2} />
+            </tr></tfoot>
+          )}
         </table>
       </div>
     </div>

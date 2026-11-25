@@ -27,6 +27,9 @@ import { isLegacyPlaceholderEmail } from "../lib/mailer";
 import { LEGACY_PAID_DELIVERY_CUTOFF, LEGACY_PAID_BASIS, LEGACY_PAID_BY_ROUND_BASIS } from "../lib/legacyPayoutRule";
 import { conversionsByRow } from "../services/legacyPayoutConversion";
 import { splitPayAmount, type PayeeType } from "../lib/payoutAmount";
+import { payStatusOf, isAmountMissing, PAY_STATUS_LABEL, emptyStatusCounts, type PayStatusKey } from "../lib/payDisplayStatus";
+import { isConfirmedFreeService } from "../lib/payoutDateDecisions";
+import { loadSaleIdentities } from "../services/saleIdentity";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -243,7 +246,7 @@ export const CUR = sql`
       --   (저장된 net_payment 는 구 개별항목(기본료 등) 기준이라 원가 방식 입력 건은 0으로 남아 세후 0원으로 표시되던 오류 수정)
       coalesce(pa.cost_total, 0) - ${CUR_DEDUCTION} + ${CUR_VAT} AS posttax,
       ${CUR_DEDUCTION} AS withholding_tax,
-      pa.withholding_treatment::text AS withholding_treatment, pa.withholding_rate AS withholding_rate,
+      pa.withholding_treatment::text AS withholding_treatment, pa.withholding_rate AS withholding_rate, pa.project_id,
       CASE WHEN coalesce(upper(nullif(btrim(pa.contract_currency), '')), 'KRW') <> 'KRW' AND (pa.performer_category = 'individual' OR (pa.performer_category = 'vendor' AND pa.vendor_settlement_type = 'overseas')) THEN upper(btrim(pa.contract_currency)) END AS pay_currency,
       CASE WHEN CASE WHEN coalesce(upper(nullif(btrim(pa.contract_currency), '')), 'KRW') <> 'KRW' AND (pa.performer_category = 'individual' OR (pa.performer_category = 'vendor' AND pa.vendor_settlement_type = 'overseas')) THEN upper(btrim(pa.contract_currency)) END IS NOT NULL THEN pa.contract_amount_foreign END AS foreign_amount
     FROM performance_assignments pa
@@ -399,7 +402,7 @@ export type UnifiedItem = Record<string, any> & {
 };
 export async function collectUnifiedItems(opts: {
   basis: "payout" | "delivery"; date?: string; translator?: string; client?: string; source?: string;
-  dFrom: string | null; dTo: string | null; q?: string; canViewFullContact: boolean; limit?: number;
+  dFrom: string | null; dTo: string | null; q?: string; canViewFullContact: boolean; limit?: number; withSaleInfo?: boolean;
 }): Promise<{ items: UnifiedItem[]; legacyCount: number; currentCount: number }> {
   const { basis, date, dFrom, dTo, canViewFullContact } = opts;
   const translator = (opts.translator ?? "").trim(), client = (opts.client ?? "").trim(), source = (opts.source ?? "all").trim();
@@ -501,6 +504,7 @@ export async function collectUnifiedItems(opts: {
         payCurrency: r.pay_currency ?? "KRW", foreignAmount: r.pay_currency && r.foreign_amount != null ? num(r.foreign_amount) : null,
         // 수행정보 세금처리 유형(전환 수행정보 등록값, 표시 전용 — 명세서 세금처리 표기). CRM 원본만 있는 건은 null.
         withholdingTreatment: r.act_treatment ?? null, withholdingRate: r.act_rate != null ? num(r.act_rate) : null,
+        actualPaymentDate: r.actual_payment_date ?? null, actPaymentStatus: r.act_payment_status ?? null,
         // 통번역사 Master 가능언어(확정 연결 건만, 원문 그대로) — 지급명세서 상단 언어 표시용. 이름만 같은 후보는 사용하지 않음.
         masterLanguages: r.mapped_user_id != null ? (r.mapped_langpairs ?? null) : null,
       };
@@ -533,6 +537,7 @@ export async function collectUnifiedItems(opts: {
         // 지급완료 근거 — 실제 지급일 기록 / VERITAS OS 지급회차 / 대표 지급 확인(실제 지급일 미기록, 송금 증빙 없음)
         payCurrency: r.pay_currency ?? "KRW", foreignAmount: r.pay_currency && r.foreign_amount != null ? num(r.foreign_amount) : null,
         withholdingTreatment: r.withholding_treatment ?? null, withholdingRate: r.withholding_rate != null ? num(r.withholding_rate) : null,
+        actualPaymentDate: r.actual_payment_date ?? null, projectId: r.project_id != null ? num(r.project_id) : null,
         paidBasis: ps !== "paid" ? null : r.actual_payment_date ? `실제 지급일 ${r.actual_payment_date}` : r.payout_round_id != null ? "지급회차 지급완료 처리" : "대표 지급 확인(실제 지급일 미기록)",
       };
     }),
@@ -609,6 +614,49 @@ export async function collectUnifiedItems(opts: {
     it.conversionEligible = ((it.status === "deposit_unconfirmed" && !it.payoutDate) || (it.status === "scheduled" && !!it.payoutDate && it.payoutDate >= today)) && it.pretax > 0
       && !(it.conversion && (it.conversion.status === "requested" || it.conversion.status === "approved"));
   }
+  // ── 화면 공통 표시값(2026-11-25, 표시 전용 — 저장값·지급 판정·금액 불변) ──
+  //   · payStatus: 지급예정·미지급·지급완료·무료 제공·지급보류·지급확인 필요(lib/payDisplayStatus — 지급준비점검과 같은 기준)
+  //   · 외주업체 지급대상 이름 = 외주업체 명부 이름(지급준비점검과 같은 기준). 원래 이름은 originalTranslator 로 보존.
+  //   · withSaleInfo: 판매번호·판매 id(판매상세 연결) — 지급회차 상세 화면만
+  {
+    for (const it of items as any[]) {
+      const k = payStatusOf({
+        paid: it.status === "paid",
+        free: it.internalZero === true || isConfirmedFreeService(it.payoutDate, it.sourceKey),
+        hold: it.source === "current" && it.status === "excluded",
+        // 과거 지급 여부 미확인(CRM)·전환 수행정보 '과거 지급 확인 필요' 보류·중복 의심
+        review: it.status === "deposit_unconfirmed" || it.status === "dup_suspect" || (it.source === "legacy" && it.actPaymentStatus === "payment_hold"),
+        amountMissing: isAmountMissing(it.pretax, it.payCurrency, it.foreignAmount), payoutDate: it.payoutDate, today,
+      });
+      it.payStatus = k; it.payStatusLabel = PAY_STATUS_LABEL[k];
+    }
+    const vids = [...new Set((items as any[]).filter(it => it.payeeType === "vendor" && it.vendorId != null).map(it => Number(it.vendorId)))];
+    if (vids.length) {
+      const vn = new Map(((await db.execute(sql`SELECT id, nullif(btrim(name), '') AS name FROM companies WHERE id IN (${sql.join(vids.map(i => sql`${i}`), sql`, `)})`)).rows as any[]).map(r => [Number(r.id), r.name as string | null]));
+      for (const it of items as any[]) {
+        const n = it.payeeType === "vendor" && it.vendorId != null ? vn.get(Number(it.vendorId)) : null;
+        if (n && n !== it.translator) { it.originalTranslator = it.originalTranslator ?? it.translator ?? null; it.translator = n; }
+      }
+    }
+    if (opts.withSaleInfo) {
+      const lids = (items as any[]).filter(it => it.source === "legacy").map(it => Number(it.id));
+      if (lids.length) {
+        const li = new Map(((await db.execute(sql`SELECT r.id,
+            (SELECT s.source_raw->>'판매번호' FROM legacy_sales_progress_links l JOIN legacy_archive_rows s ON s.id = l.sale_row_id AND s.is_effective
+              WHERE l.progress_row_id = r.id AND l.decision = 'confirmed' ORDER BY s.id DESC LIMIT 1) AS sale_no,
+            (SELECT pa.project_id FROM import_row_sources s JOIN performance_assignments pa ON pa.id = s.entity_id AND pa.deleted_at IS NULL
+              WHERE s.module = 'legacy_sale_activation' AND s.row_key = 'progress:' || r.id ORDER BY s.id DESC LIMIT 1) AS project_id
+          FROM legacy_archive_rows r WHERE r.id IN (${sql.join(lids.map(i => sql`${i}`), sql`, `)})`)).rows as any[]).map(r => [Number(r.id), r]));
+        for (const it of items as any[]) if (it.source === "legacy") { const x = li.get(Number(it.id)); it.saleNo = x?.sale_no ?? null; it.projectId = x?.project_id != null ? Number(x.project_id) : null; }
+      }
+      const pids = [...new Set((items as any[]).filter(it => it.projectId != null).map(it => Number(it.projectId)))];
+      const idn = pids.length ? await loadSaleIdentities(db, pids) : new Map();
+      for (const it of items as any[]) {
+        if (it.saleNo == null) it.saleNo = it.projectId != null ? ((idn.get(Number(it.projectId)) as any)?.saleNumber ?? null) : null;
+        if (it.projectId === undefined) it.projectId = null;
+      }
+    }
+  }
   return { items: items as UnifiedItem[], legacyCount: legacyItems.length, currentCount: curItems.length };
 }
 
@@ -631,6 +679,7 @@ router.get("/admin/payout-unified/payees", ...adminGuard, requireStaffPermission
 
     const { items, legacyCount, currentCount } = await collectUnifiedItems({
       basis, date, translator, client, source, dFrom, dTo, q: (qp.q ?? "").trim().slice(0, 100), canViewFullContact,
+      withSaleInfo: /^\d{4}-\d{2}-\d{2}$/.test(date ?? ""),   // 지급회차 상세(지급일 지정)만 판매번호·판매 연결
     });
 
     // 상태 필터(조회 후 적용 — 집계는 전체 기준, 표시만 필터).
@@ -639,13 +688,14 @@ router.get("/admin/payout-unified/payees", ...adminGuard, requireStaffPermission
     // ── 통번역사(Master)별 통합 집계(§8) — 확정 연결 기준 masterKey. 미확정은 이름키로 분리.
     const groups = new Map<string, any>();
     for (const it of items) {
-      const g = groups.get(it.masterKey) ?? { masterKey: it.masterKey, name: it.translator ?? "(이름 미상)", confirmed: it.confirmed, matchStatus: it.matchStatus, matchedUserId: it.matchedUserId, email: it.masterEmail ?? null, phone: it.masterPhone ?? it.originalPhone ?? null, count: 0, pretax: 0, posttax: 0, withholding: 0, vat: 0, payeeType: (it as any).payeeType, paidPretax: 0, unpaidPretax: 0, paidCount: 0, unpaidCount: 0, needReview: 0, dupSuspect: 0, scheduled: 0, sources: new Set<string>(), languages: new Set<string>(), foreign: new Map<string, any>() };
+      const g = groups.get(it.masterKey) ?? { masterKey: it.masterKey, name: it.translator ?? "(이름 미상)", confirmed: it.confirmed, matchStatus: it.matchStatus, matchedUserId: it.matchedUserId, email: it.masterEmail ?? null, phone: it.masterPhone ?? it.originalPhone ?? null, count: 0, pretax: 0, posttax: 0, withholding: 0, vat: 0, payeeType: (it as any).payeeType, paidPretax: 0, unpaidPretax: 0, paidCount: 0, unpaidCount: 0, needReview: 0, dupSuspect: 0, scheduled: 0, sources: new Set<string>(), languages: new Set<string>(), foreign: new Map<string, any>(), payStatusCounts: emptyStatusCounts() };
       g.count++; g.pretax += it.pretax; g.posttax += it.posttax; g.withholding += it.withholdingImplied; g.vat += (it as any).vat ?? 0; g.sources.add(it.source); if (it.language) g.languages.add(it.language);
       if ((it as any).status === "paid") { g.paidPretax += it.pretax; g.paidCount++; }
       else if ((it as any).status === "pending") { g.unpaidPretax += it.pretax; g.unpaidCount++; }
       else if ((it as any).status === "deposit_unconfirmed") g.needReview++;
       else if ((it as any).status === "scheduled") g.scheduled++;
       if ((it as any).status === "dup_suspect") g.dupSuspect++;
+      g.payStatusCounts[(it as any).payStatus as PayStatusKey]++;
       if ((it as any).payCurrency && (it as any).payCurrency !== "KRW") { const k = (it as any).payCurrency as string; const f = g.foreign.get(k) ?? { currency: k, count: 0, amount: 0, missing: 0 };
         f.count++; if ((it as any).foreignAmount != null) f.amount = Math.round((f.amount + (it as any).foreignAmount) * 100) / 100; else f.missing++; g.foreign.set(k, f); }
       if (!g.email && it.masterEmail) g.email = it.masterEmail; if (!g.phone && (it.masterPhone || it.originalPhone)) g.phone = it.masterPhone ?? it.originalPhone;
@@ -661,6 +711,7 @@ router.get("/admin/payout-unified/payees", ...adminGuard, requireStaffPermission
       sources: [...g.sources], languages: [...g.languages],   // 해당 회차 수행 언어(중복 제거). 없으면 빈 배열.
       // 외화 지급 합계(통화별, 원화 합계와 별도) — 외화 지급 건이 없으면 빈 배열
       foreignTotals: [...g.foreign.values()].sort((a: any, b: any) => a.currency.localeCompare(b.currency)),
+      payStatusCounts: g.payStatusCounts,   // 화면 공통 지급상태별 건수(표시 전용)
     })).sort((a, b) => a.name.localeCompare(b.name, "ko"));
 
     // 회차 요약(§4) — 선택 회차 기준.
@@ -679,6 +730,7 @@ router.get("/admin/payout-unified/payees", ...adminGuard, requireStaffPermission
       for (const i of items as any[]) { if (!i.payCurrency || i.payCurrency === "KRW") continue; const f = fm.get(i.payCurrency) ?? { currency: i.payCurrency, count: 0, amount: 0, missing: 0 };
         f.count++; if (i.foreignAmount != null) f.amount = Math.round((f.amount + i.foreignAmount) * 100) / 100; else f.missing++; fm.set(i.payCurrency, f); }
       (totals as any).foreignTotals = [...fm.values()].sort((a, b) => a.currency.localeCompare(b.currency));
+      (totals as any).payStatusCounts = (items as any[]).reduce((c: Record<PayStatusKey, number>, i: any) => { c[i.payStatus as PayStatusKey]++; return c; }, emptyStatusCounts());
     }
     (totals as any).statusCounts = items.reduce((c: Record<PayBucket, number>, i: any) => { c[i.payBucket as PayBucket]++; return c; }, { paid: 0, unpaid: 0, scheduled: 0, review: 0 });
 

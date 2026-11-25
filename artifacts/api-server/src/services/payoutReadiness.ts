@@ -18,6 +18,8 @@ import { PROG, CUR } from "../routes/payoutUnified";
 import { checkEligibility } from "./legacyPayoutConversion";
 import { LEGACY_PAID_DELIVERY_CUTOFF, todayKst } from "../lib/legacyPayoutRule";
 import { loadSaleIdentities } from "./saleIdentity";
+import { DATE_DECISIONS } from "../lib/payoutDateDecisions";
+import { payStatusOf, isAmountMissing, PAY_STATUS_LABEL, emptyStatusCounts, type PayStatusKey } from "../lib/payDisplayStatus";
 import { decrypt } from "../lib/encrypt";
 import { splitPayAmount, type PayeeType } from "../lib/payoutAmount";
 import { isLegacyPlaceholderEmail } from "../lib/mailer";
@@ -81,22 +83,7 @@ const PREPAID_REVIEW_EXCLUSIONS: Record<string, Set<string>> = {
   ]),
 };
 
-// 지급일별 대표 확인 결정(2026-11-25 대표 확인) — 해당 지급일 점검(화면·엑셀 2종)에만 적용. 운영 데이터·다른 지급일·전체 기간 점검은 그대로.
-//   exclude      : 지급일 점검 대상에서 제외(sourceKey → 사유). 판매·수행이력·CRM 원본 보존, 지급기록 생성 없음.
-//   freeService  : 무료 제공으로 확인된 0원 건(sourceKey) — '지급액 미입력'·과거 지급 여부 확인 경고 대신 '지급액 없음'(정상 0원, 송금 대상 아님). 다른 0원 건에는 적용하지 않는다.
-//   excludeNoPayoutDate : 지급예정일 미기재 건(후보 no_payout_date)을 이 지급일 점검에서 제외(전체 기간 점검에는 유지, 날짜 임의 입력 없음).
-const DATE_DECISIONS: Record<string, { exclude: Map<string, string>; freeService: Set<string>; excludeNoPayoutDate: boolean }> = {
-  "2026-11-30": {
-    exclude: new Map([
-      // 사단법인한국법학원 — 2026-11-04-0005 건에서 11/13 일괄 지급 완료(대표 확인). 플랫폼 4건 + CRM 원본 3건.
-      ...["current:412", "current:413", "current:414", "current:383", "legacy:44155", "legacy:44159", "legacy:44827"]
-        .map(k => [k, "한국법학원 11/13 지급완료(대표 확인)"] as [string, string]),
-    ]),
-    // 코리아미디어 리시버 100개 이하 무료 제공(대표 확인)
-    freeService: new Set(["current:221", "current:201", "current:220", "current:206", "legacy:44354"]),
-    excludeNoPayoutDate: true,
-  },
-};
+// 지급일별 대표 확인 결정 — lib/payoutDateDecisions(지급회차 통합 조회와 공용)
 
 // 외화 지급 통화별 합계(원화와 합산하지 않음) — 화면·엑셀 공통
 export function foreignTotalsOf(items: any[]): { currency: string; count: number; amount: number; missing: number }[] {
@@ -419,6 +406,10 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
       payAmount: { withholding: pay.withholding, supply: pay.supply, vat: pay.vat, payTotal: pay.payTotal }, taxConflict: pay.taxConflict,
       paymentStatus: p?.payment_status ?? (b.legacy_paid ? "paid" : "unconfirmed"), payoutRoundId: p?.payout_round_id ?? null,
       payDisplay, payDisplayLabel: PAY_DISPLAY_LABEL[payDisplay],
+      // 화면 공통 지급상태(lib/payDisplayStatus — 지급회차 통합 조회와 같은 기준, 표시 전용)
+      ...(() => { const k = payStatusOf({ paid, free: freeService || internalZero, hold: manualHold, review: payDisplay === "review",
+        amountMissing: isAmountMissing(amount, payCurrency, foreignAmount), payoutDate: pd, today });
+        return { payStatus: k, payStatusLabel: PAY_STATUS_LABEL[k] }; })(),
       saleAmount: saleAmountOf(p ? Number(p.project_id) : null),   // { supply, vat, total } | null — 판매건 단위 금액(행마다 같은 값, 합산 시 판매건당 1회)
       hasAccount, roundEligible, conversion, candidate,
       // 합계 이중집계 방지 — 플랫폼 수행과 같은 CRM 원본 행은 합계에서 제외(표시는 유지)
@@ -498,6 +489,8 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
   return {
     scope, payoutDate: scope === "date" ? d : null, deliveryWindow: win, today, items: out, excludedPrepaid, excludedByDecision,
     summary: { total: sum(out), foreignTotals: foreignTotalsOf(out), byState: by(x => x.state), byKind: by(x => x.kind), byCandidate: by(x => x.candidate),
-      roundEligible: sum(out.filter(x => x.roundEligible)), duplicates: out.filter(x => x.blockers.some((b: Blocker) => b.code.startsWith("dup_"))).length, issueCounts },
+      roundEligible: sum(out.filter(x => x.roundEligible)),
+      payStatusCounts: out.reduce((c: Record<PayStatusKey, number>, x: any) => { c[x.payStatus as PayStatusKey]++; return c; }, emptyStatusCounts()),
+      duplicates: out.filter(x => x.blockers.some((b: Blocker) => b.code.startsWith("dup_"))).length, issueCounts },
   };
 }
