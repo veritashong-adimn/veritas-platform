@@ -1070,10 +1070,6 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
                     ? <span data-testid={`pay-paid-unconfirmed-${i}`} title="세금계산서 발행 — 입금 미확인(수금 미반영). 수정에서 입금확인 체크"
                         style={{ fontWeight: 700, color: C.danger }}>{`${won(a.amount)}원`}<span style={{ fontSize: 10, fontWeight: 600, marginLeft: 3 }}>미확인</span></span>
                     : <span data-testid={`pay-paid-confirmed-${i}`} style={{ fontWeight: 700, color: paidOf(r) > 0 ? C.textPrimary : C.textSecondary }}>{`${won(paidOf(r))}원`}</span>}
-                {!editable && pid != null && paidOf(r) > 0 && refundFor !== pid && (
-                  <button type="button" onClick={() => startRefund(r)} data-testid={`txn-refund-open-${i}`} aria-label="입금 환불"
-                    style={{ border: `1px solid ${C.danger}`, borderRadius: 5, background: '#fff5f5', color: C.danger, cursor: 'pointer', fontSize: 11, fontWeight: 700, padding: '2px 8px' }}>환불</button>
-                )}
               </div>
             )}
         </td>
@@ -1174,8 +1170,15 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
                   onSave={async (t) => { if (await putTxn(pid, { rows: [t as PayTxn] })) cancelAdd(); }} onCancel={cancelAdd} />
               : addingFor === pid
               ? renderTxnAddForm(pid)
-              : <button type="button" onClick={() => startAdd(r)} data-testid={`txn-add-open-${i}`}
-                  aria-label="입금 추가" style={{ marginLeft: 28, border: `1px dashed ${C.primary}`, borderRadius: 6, background: '#fff', color: C.primaryText, cursor: 'pointer', fontSize: 12, fontWeight: 700, padding: '3px 12px' }}>└ + {isFxRow(r) ? '입금·상계 추가' : '입금 추가'}</button>}
+              : <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 28 }}>
+                  <button type="button" onClick={() => startAdd(r)} data-testid={`txn-add-open-${i}`}
+                    aria-label="입금 추가" style={{ border: `1px dashed ${C.primary}`, borderRadius: 6, background: '#fff', color: C.primaryText, cursor: 'pointer', fontSize: 12, fontWeight: 700, padding: '3px 12px' }}>└ + {isFxRow(r) ? '입금·상계 추가' : '입금 추가'}</button>
+                  {/* 환불 처리 — 표시 조건 기존 그대로(조회 모드 · 저장된 회차 · 순입금액 > 0 · 환불 입력 중 아님). 접힌 상태에서도 표시 */}
+                  {paidOf(r) > 0 && refundFor !== pid && (
+                    <button type="button" onClick={() => startRefund(r)} data-testid={`txn-refund-open-${i}`} aria-label="환불 처리"
+                      style={{ border: `1px solid ${C.g300}`, borderRadius: 6, background: '#fff', color: C.textSecondary, cursor: 'pointer', fontSize: 12, fontWeight: 600, padding: '3px 12px' }}>환불 처리</button>
+                  )}
+                </div>}
           </td>
         </tr>
       )}
