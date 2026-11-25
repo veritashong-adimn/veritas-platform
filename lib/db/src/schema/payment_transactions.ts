@@ -45,6 +45,14 @@ export const paymentTransactionsTable = pgTable("payment_transactions", {
   //  krw_amount=확정 원화 환산액, fee_amount=거래 통화 단위 수수료, customer_paid_amount=확정 원화 환산액(미확정 0).
   txnType: varchar("txn_type", { length: 20 }),
   offsetSourcePaymentId: integer("offset_source_payment_id").references(() => projectPaymentsTable.id, { onDelete: "set null" }),
+  // 입금내역별 결제구분·입금예정(2026-11 추가, NULL 허용 — lib/db/sql/2026-11-payment-txn-schedule-*.sql).
+  //  · payment_type = 결제구분(lump_sum·advance·interim·balance). NULL = 미지정(기존 입금거래).
+  //  · expected_date·expected_amount = 입금예정일·입금예정액. 예정액은 실제 입금액이 아니다 —
+  //    입금예정 내역은 customer_paid_amount = 0·paid_date NULL 로 저장되어 미수금·수금 집계에 포함되지 않는다.
+  //  · 입금상태는 저장하지 않고 파생: 실제 입금(customer_paid_amount ≠ 0 + paid_date) = 입금완료, 그 외 = 입금예정.
+  paymentType: varchar("payment_type", { length: 20 }),
+  expectedDate: date("expected_date"),
+  expectedAmount: numeric("expected_amount", { precision: 14, scale: 2 }),
 
   createdBy: integer("created_by").references(() => usersTable.id),
   createdAt: timestamp("created_at").notNull().defaultNow(),

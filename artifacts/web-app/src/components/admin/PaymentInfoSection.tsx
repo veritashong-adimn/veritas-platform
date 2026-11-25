@@ -35,7 +35,19 @@ export interface PayTxn {
   note?: string | null;
   txnType?: string | null;            // 'deposit' 실제 입금 · 'offset' 선입금 상계(외화 회차) · 'refund' 입금 환불(음수 금액)
   offsetSourcePaymentId?: number | null;
+  // 입금내역별 결제구분·입금예정(2026-11) — 입금예정 내역은 실제 입금액 0·입금일 없음(예정액은 수금 집계 제외)
+  paymentType?: string | null;        // lump_sum · advance · interim · balance
+  expectedDate?: string | null;
+  expectedAmount?: string | number | null;
+  depositStatus?: 'scheduled' | 'completed';   // 저장 요청 전용(서버 정규화) — 조회 시엔 isScheduledTxn 으로 파생
 }
+// 입금예정 내역 — 실제 입금(입금일·입금액)이 없는 거래. 미수금·입금액·입금상태 계산에서 0으로 처리된다(서버 집계와 동일).
+const isScheduledTxn = (t: PayTxn) => !t.paidDate && Number(t.customerPaidAmount ?? 0) === 0 && Number(t.foreignAmount ?? 0) === 0
+  && t.txnType !== 'offset' && t.txnType !== 'refund';
+const TXN_PAY_TYPE_OPTS = [
+  { value: 'lump_sum', label: '일괄결제' }, { value: 'advance', label: '선금' }, { value: 'interim', label: '중도금' }, { value: 'balance', label: '잔금' },
+];
+const TXN_STATUS_OPTS = [{ value: 'completed', label: '입금완료' }, { value: 'scheduled', label: '입금예정' }];
 interface PayRow {
   id?: number;
   transactions?: PayTxn[];           // 이 청구행의 수금거래(입금/결제 내역) N건
@@ -328,6 +340,8 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   const [txnBusy, setTxnBusy] = useState(false);
   const emptyTxn = (): PayTxn => ({ paidDate: new Date().toISOString().slice(0, 10), method: '기타' });
   const [addForm, setAddForm] = useState<PayTxn>(emptyTxn());
+  const [editingTxnId, setEditingTxnId] = useState<number | null>(null);   // 입금내역 수정 대상(같은 입력줄 재사용)
+  const [carryLegacy, setCarryLegacy] = useState(false);                   // 기존 확정 입금 → 입금내역 이관 요청(입금거래 없는 입금완료 회차)
   // 입금 환불 — 대상 청구행 id·입력값(환불일·환불금액은 직접 입력, 기본값 없음)
   const [refundFor, setRefundFor] = useState<number | null>(null);
   const [refundForm, setRefundForm] = useState<{ date: string; amount: string; note: string }>({ date: '', amount: '', note: '' });
@@ -371,7 +385,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   const mapRow = (r: PayRow): PayRow => {
   // §8 수정모드 복원 — 이 청구행이 '첫 입금' 거래 1건만 가진 경우, 그 거래값을 기본행 임시필드로 되살린다.
   //  (거래 2건 이상은 첫입금 인라인 대상이 아니라 하위행에서 관리 → 시드하지 않음)
-  const only = (r.transactions && r.transactions.length === 1) ? r.transactions[0] : null;
+  const only = (r.transactions && r.transactions.length === 1 && !isScheduledTxn(r.transactions[0])) ? r.transactions[0] : null;   // 입금예정 내역은 첫 입금 인라인 대상 아님
   const seedCurr = only?.currency && only.currency !== 'KRW' ? only.currency : '';
   return {
     id: r.id, transactions: r.transactions ?? [],   // 수금거래는 하위행/기본행에서 관리 — 편집 중에도 계산 일관성 위해 보존
@@ -664,7 +678,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   const hasTxn = (r: PayRow) => (r.transactions?.length ?? 0) > 0;
   const txnPaid = (r: PayRow) => (r.transactions ?? []).reduce((s, t) => s + num(t.customerPaidAmount), 0);
   const paidOf = (r: PayRow) => (isFxRow(r) ? (r.fx?.paidKrwForSale ?? 0) : hasTxn(r) ? txnPaid(r) : (isRowPaid(r) ? haap(r) : 0));
-  const lastTxn = (r: PayRow): PayTxn | null => { const ts = r.transactions ?? []; return ts.length ? ts[ts.length - 1] : null; };  // 최근(마지막) 입금거래
+  const lastTxn = (r: PayRow): PayTxn | null => { const ts = (r.transactions ?? []).filter(t => !isScheduledTxn(t)); return ts.length ? ts[ts.length - 1] : null; };  // 최근(마지막) 실제 입금거래(입금예정 제외)
   const dispPaidDate = (r: PayRow): string => { const t = lastTxn(r); return (t?.paidDate ? formatDisplayDate(t.paidDate) : (formatDisplayDate(r.paidDate) || '—')); };  // §11 입금일: 최종 입금일
   // 입금은행 — 청구 회차 저장값 우선, 없으면(기존 행) 최근 입금거래 은행
   //  둘 다 없으면 기본 은행(국민은행, 외화입금 회차는 기업은행외화)을 미확인(붉은색)으로 표시 — 저장값은 바꾸지 않는다.
@@ -721,11 +735,11 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
 
   // ── 수금거래(payment_transactions) 인라인 저장/삭제 — 기존 배치 API 재사용 ──
   //  · 추가: { rows:[신규] } (미포함 거래는 미변경) / 삭제: { deletedIds:[id] }. onChanged 로 판매상세 재조회.
-  const putTxn = async (paymentId: number, body: { rows?: PayTxn[]; deletedIds?: number[] }): Promise<boolean> => {
+  const putTxn = async (paymentId: number, body: { rows?: PayTxn[]; deletedIds?: number[]; carryLegacyDeposit?: boolean }): Promise<boolean> => {
     setTxnBusy(true);
     try {
       const res = await fetch(api(`/api/admin/project-payments/${paymentId}/transactions`), {
-        method: 'PUT', headers: authH, body: JSON.stringify({ rows: body.rows ?? [], deletedIds: body.deletedIds ?? [] }),
+        method: 'PUT', headers: authH, body: JSON.stringify({ rows: body.rows ?? [], deletedIds: body.deletedIds ?? [], ...(body.carryLegacyDeposit ? { carryLegacyDeposit: true } : {}) }),
       });
       if (!res.ok) { const d = await res.json().catch(() => ({})); onToast(`수금 저장 실패: ${d.error ?? res.status}`); return false; }
       await onChanged();
@@ -738,13 +752,42 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     if (r.id == null) return;
     const m = normMethod(r.paymentMethod) || '기타';
     setExpanded(prev => new Set(prev).add(r.id as number));
-    setAddForm({ paidDate: new Date().toISOString().slice(0, 10), method: m, bankAccount: isOverseas(m) ? '기업은행외화' : ((r.depositBank ?? '').trim() || BANK_DEFAULT), currency: isOverseas(m) ? 'USD' : undefined });
+    // 결제구분 기본값 — 첫 내역은 청구회차의 결제구분(일괄/선금/중도금/잔금), 이후 내역은 잔금. 입금상태 기본 입금완료(입금일 오늘).
+    const rowType = TXN_PAY_TYPE_OPTS.some(o => o.value === r.paymentType) ? (r.paymentType as string) : 'lump_sum';
+    setAddForm({ paidDate: new Date().toISOString().slice(0, 10), method: m, bankAccount: isOverseas(m) ? '기업은행외화' : ((r.depositBank ?? '').trim() || BANK_DEFAULT), currency: isOverseas(m) ? 'USD' : undefined,
+      paymentType: hasTxn(r) || isRowPaid(r) ? 'balance' : rowType, depositStatus: 'completed', expectedDate: hasTxn(r) ? null : (r.expectedDate ?? null) });
+    setEditingTxnId(null);
+    setCarryLegacy(!hasTxn(r) && isRowPaid(r));   // 입금거래 없이 입금완료 확정된 회차 — 기존 입금을 입금내역 1건으로 이관 후 추가(중복 집계 방지)
     setAddingFor(r.id);
   };
-  const cancelAdd = () => { setAddingFor(null); setAddForm(emptyTxn()); };
+  // 입금내역 수정 — 같은 입력줄에 기존 값 채움. 입금예정 내역의 금액칸 = 예정액, 실제 입금 = 입금액(카드는 실제 입금액 + 수수료 별도).
+  const startEditTxn = (r: PayRow, t: PayTxn) => {
+    if (r.id == null || t.id == null) return;
+    const sched = isScheduledTxn(t);
+    const card = isCardMethod(normMethod(t.method)) && t.settledAmount != null && num(t.feeAmount) > 0;
+    setExpanded(prev => new Set(prev).add(r.id as number));
+    setAddForm({ ...t, method: normMethod(t.method) || '기타', depositStatus: sched ? 'scheduled' : 'completed',
+      customerPaidAmount: String(Math.round(sched ? num(t.expectedAmount) : card ? num(t.settledAmount) : num(t.customerPaidAmount))),
+      feeAmount: card ? String(Math.round(num(t.feeAmount))) : null,
+      paidDate: sched ? null : (t.paidDate ?? null) });
+    setEditingTxnId(t.id); setCarryLegacy(false); setRefundFor(null);
+    setAddingFor(r.id);
+  };
+  const cancelAdd = () => { setAddingFor(null); setEditingTxnId(null); setCarryLegacy(false); setAddForm(emptyTxn()); };
   const saveAdd = async (paymentId: number) => {
     const m = addForm.method ?? '기타';
     const amt = num(addForm.customerPaidAmount);
+    const base = { ...(editingTxnId ? { id: editingTxnId } : {}), paymentType: addForm.paymentType || null, expectedDate: addForm.expectedDate || null };
+    // 입금예정 — 실제 입금액에 포함하지 않는다(서버가 실입금 0·입금일 없음으로 저장). 금액칸 = 입금예정액.
+    if (addForm.depositStatus === 'scheduled') {
+      if (isOverseas(m)) { onToast('외화입금은 입금예정 내역을 지원하지 않습니다. 입금완료로 등록하세요.'); return; }
+      if (amt <= 0) { onToast('입금예정액을 입력하세요.'); return; }
+      const ok = await putTxn(paymentId, { rows: [{ ...base, depositStatus: 'scheduled', expectedAmount: amt, paidDate: null, method: m,
+        bankAccount: addForm.bankAccount || null, payerName: addForm.payerName || null, note: addForm.note || null }], carryLegacyDeposit: carryLegacy });
+      if (ok) cancelAdd();
+      return;
+    }
+    if (!addForm.paidDate) { onToast('입금완료는 입금일을 입력하세요.'); return; }
     // §3/§4 — 외화송금은 통화·외화입금액만 있으면 원화(customerPaidAmount) 0/미확정이어도 저장 허용. 그 외는 원화 입금액 필수.
     if (isOverseas(m)) {
       if (!addForm.currency || num(addForm.foreignAmount) <= 0) { onToast('외화송금은 통화·외화입금액이 필요합니다.'); return; }
@@ -752,16 +795,19 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     // 숫자 필드는 정리해서 전송(콤마 제거·빈값 null) — 검증 실패 방지(§13).
     const cardFee = isCardMethod(m) ? num(addForm.feeAmount) : 0;   // 카드: 입력 금액 = 실제 입금액, 수수료 별도
     const payload: PayTxn = {
+      ...base, depositStatus: 'completed',
+      // 예정 내역을 입금완료로 바꾸는 경우 원래 예정액은 기록으로 유지(수정 시 기존 값 그대로 전송)
+      ...(editingTxnId ? { expectedAmount: addForm.expectedAmount != null && addForm.expectedAmount !== '' ? num(addForm.expectedAmount) : null } : {}),
       paidDate: addForm.paidDate || null, method: m,
       customerPaidAmount: amt + cardFee, bankAccount: addForm.bankAccount || null,
-      ...(cardFee > 0 ? { settledAmount: amt, feeAmount: cardFee } : {}),
+      ...(cardFee > 0 ? { settledAmount: amt, feeAmount: cardFee } : (editingTxnId ? { settledAmount: null, feeAmount: null } : {})),
       payerName: addForm.payerName || null, note: addForm.note || null,
       ...(isOverseas(m) ? {
         currency: addForm.currency || null, foreignAmount: num(addForm.foreignAmount) || null,
         fxRate: num(addForm.fxRate) || null, krwAmount: num(addForm.krwAmount) || null,
       } : {}),
     };
-    const ok = await putTxn(paymentId, { rows: [payload] });
+    const ok = await putTxn(paymentId, { rows: [payload], carryLegacyDeposit: carryLegacy });
     if (ok) cancelAdd();
   };
   const deleteTxn = async (paymentId: number, txnId?: number) => {
@@ -788,26 +834,35 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     const overseas = isOverseas(m);
     const tinp: React.CSSProperties = { padding: '4px 7px', borderRadius: 6, border: `1px solid ${C.g300}`, fontSize: 12, boxSizing: 'border-box' };
     // §3/§4 — 외화송금: 통화+외화입금액이면 저장 가능(원화 0 허용). 그 외: 원화 입금액(>0) 필수.
-    const canSave = (overseas ? (!!addForm.currency && num(addForm.foreignAmount) > 0) : num(addForm.customerPaidAmount) > 0) && !txnBusy;
+    // 입금예정: 예정액(>0)만 필수(입금일 없음). 입금완료: 입금일 + 입금액(외화는 통화·외화액).
+    const sched = addForm.depositStatus === 'scheduled';
+    const canSave = (sched ? num(addForm.customerPaidAmount) > 0 && !overseas
+      : !!addForm.paidDate && (overseas ? (!!addForm.currency && num(addForm.foreignAmount) > 0) : num(addForm.customerPaidAmount) > 0)) && !txnBusy;
     return (
-      <div style={{ paddingLeft: 28, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-        <span style={{ fontWeight: 700, color: C.primaryText, fontSize: 12 }}>└ 입금 추가</span>
+      <div style={{ paddingLeft: 28, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }} data-testid="txn-form">
+        <span style={{ fontWeight: 700, color: C.primaryText, fontSize: 12 }}>└ {editingTxnId ? '입금 수정' : '입금 추가'}</span>
+        <span data-testid="txn-add-paytype"><ClickSelect value={addForm.paymentType ?? ''} onChange={(v: string) => setAF({ paymentType: v })} triggerStyle={{ ...tinp, width: 86 }} options={TXN_PAY_TYPE_OPTS} aria-label="결제구분" /></span>
+        <span data-testid="txn-add-status"><ClickSelect value={addForm.depositStatus ?? 'completed'} triggerStyle={{ ...tinp, width: 86 }} options={TXN_STATUS_OPTS} aria-label="입금상태"
+          onChange={(v: string) => setAF(v === 'scheduled' ? { depositStatus: 'scheduled', paidDate: null } : { depositStatus: 'completed', paidDate: addForm.paidDate || new Date().toISOString().slice(0, 10) })} /></span>
         <ClickSelect value={m} onChange={(v: string) => setAF({ method: v, bankAccount: isOverseas(v) ? '기업은행외화' : (addForm.bankAccount || BANK_DEFAULT), currency: isOverseas(v) ? (addForm.currency || 'USD') : undefined })} triggerStyle={{ ...tinp, width: 110 }} options={TXN_METHOD_OPTS} />
-        <DateField style={{ ...tinp, width: 128 }} value={addForm.paidDate ?? ''} onChange={v => setAF({ paidDate: v || null })} testid="txn-add-date" ariaLabel="입금 추가 날짜" />
+        <DateField style={{ ...tinp, width: 128 }} value={addForm.expectedDate ?? ''} onChange={v => setAF({ expectedDate: v || null })} testid="txn-add-expected" ariaLabel="입금예정일" placeholder="입금예정일" />
+        <DateField style={{ ...tinp, width: 128, ...(sched ? { background: C.g50, color: C.g400 } : {}) }} disabled={sched} value={addForm.paidDate ?? ''} onChange={v => setAF({ paidDate: v || null })} testid="txn-add-date" ariaLabel="입금일" placeholder="입금일" />
         <div style={{ width: 130 }}><BankField value={addForm.bankAccount ?? ''} onChange={(v) => setAF({ bankAccount: v })} triggerStyle={{ ...tinp, width: '100%' }} testid="txn-add-bank" /></div>
         {overseas && <>
           <ClickSelect value={addForm.currency ?? ''} onChange={(v: string) => setAF({ currency: v })} triggerStyle={{ ...tinp, width: 78 }} options={CURRENCY_OPTS} />
           <input style={{ ...tinp, width: 88, textAlign: 'right' }} inputMode="decimal" value={String(addForm.foreignAmount ?? '')} onChange={e => setAF({ foreignAmount: e.target.value })} placeholder="외화액" data-testid="txn-add-foreign" />
         </>}
-        <input style={{ ...tinp, width: 120, textAlign: 'right', fontWeight: 700 }} inputMode="numeric" value={String(addForm.customerPaidAmount ?? '')} onChange={e => setAF({ customerPaidAmount: e.target.value })} placeholder={overseas ? '원화 입금액' : isCardMethod(m) ? '실제 입금액' : '입금액'} data-testid="txn-add-amount" />
-        {isCardMethod(m) && <input style={{ ...tinp, width: 100, textAlign: 'right' }} inputMode="numeric" value={String(addForm.feeAmount ?? '')} onChange={e => setAF({ feeAmount: e.target.value.replace(/[^\d]/g, '') })} placeholder="카드 수수료" aria-label="카드사 수수료" data-testid="txn-add-card-fee" />}
+        <input style={{ ...tinp, width: 120, textAlign: 'right', fontWeight: 700 }} inputMode="numeric" value={String(addForm.customerPaidAmount ?? '')} onChange={e => setAF({ customerPaidAmount: e.target.value })} placeholder={sched ? '입금예정액' : overseas ? '원화 입금액' : isCardMethod(m) ? '실제 입금액' : '입금액'} aria-label={sched ? '입금예정액' : '입금액'} data-testid="txn-add-amount" />
+        {isCardMethod(m) && !sched && <input style={{ ...tinp, width: 100, textAlign: 'right' }} inputMode="numeric" value={String(addForm.feeAmount ?? '')} onChange={e => setAF({ feeAmount: e.target.value.replace(/[^\d]/g, '') })} placeholder="카드 수수료" aria-label="카드사 수수료" data-testid="txn-add-card-fee" />}
         <input style={{ ...tinp, width: 140 }} value={addForm.note ?? ''} onChange={e => setAF({ note: e.target.value })} placeholder="비고" data-testid="txn-add-note" />
         <div style={{ display: 'flex', gap: 6 }}>
-          <button type="button" onClick={() => saveAdd(paymentId)} disabled={!canSave} data-testid="txn-add-save"
+          <button type="button" onClick={() => saveAdd(paymentId)} disabled={!canSave} data-testid="txn-add-save" aria-label="입금내역 저장"
             style={{ padding: '6px 14px', borderRadius: 6, border: 'none', color: '#fff', fontSize: 12, fontWeight: 700, background: canSave ? C.primary : '#9ca3af', cursor: canSave ? 'pointer' : 'not-allowed' }}>{txnBusy ? '저장 중…' : '저장'}</button>
-          <button type="button" onClick={cancelAdd} disabled={txnBusy} data-testid="txn-add-cancel"
+          <button type="button" onClick={cancelAdd} disabled={txnBusy} data-testid="txn-add-cancel" aria-label="입금내역 입력 취소"
             style={{ padding: '6px 12px', borderRadius: 6, border: `1px solid ${C.g300}`, background: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', color: '#374151' }}>취소</button>
         </div>
+        {carryLegacy && !editingTxnId && <span data-testid="txn-carry-note" style={{ flexBasis: '100%', fontSize: 11, color: C.textSecondary }}>
+          ※ 이 회차의 기존 입금완료(입금일·청구금액)는 입금내역 1건으로 함께 이관됩니다(중복 집계 없음).</span>}
       </div>
     );
   };
@@ -829,7 +884,8 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     const vatWarn = methodVatWarning(normMethod(r.paymentMethod), a.vat);   // 세금 구분 ↔ 금액 불일치(경고만)
     const schedLabel = scheduledLabel(r.paymentMethod);              // 첫 예정/이벤트 날짜 컬럼명(행별)
     // 입금 미확인(붉은색) — 예정일이 입력됐지만 입금확인 체크 전(수행정보 미확인 납품일과 동일). 확인 시 검정색.
-    const confirmed = !!r.depositConfirmed;   // 입금예정일 색상 기준(기존 그대로)
+    // 입금예정일 색상 기준 — 회차 입금확인, 또는 입금내역 합계로 입금완료된 회차(입금내역 방식은 회차 확인 플래그를 쓰지 않음)
+    const confirmed = !!r.depositConfirmed || (hasTxn(r) && effStatus(r) === 'completed');
     const expUnconfirmed = !!r.expectedDate && !confirmed;
     const cols = 13;   // 하위행 colSpan — 최종 13컬럼(§1).
     const pid = r.id ?? null;
@@ -839,7 +895,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     // 첫 입금(§6/§8) — 편집모드 + 수출바우처 아님 + 거래 0~1건 → 기본 청구행에서 입금은행/입금액/외화 직접 입력.
     //  거래 1건이면 그 거래값을 임시필드로 시드(mapRow)해 복원·update-in-place. 2건 이상은 하위행 관리라 인라인 편집 대상 아님.
     //  수출바우처(부가세·공급가 2회차)도 회차별로 입금액 입력·입금확인(2026-11).
-    const firstPayMode = editable && txns.length <= 1;
+    const firstPayMode = editable && (txns.length === 0 || (txns.length === 1 && r._txnId != null));   // 입금예정 내역 1건뿐인 회차는 하위행에서 관리
     // 미수금 미리보기 — 첫 입금 입력 중이면 입력값 반영, 그 외 기존 계산.
     const cardRow = isCardMethod(normMethod(r.paymentMethod));
     const firstCovered = num(r._paidAmt) + (cardRow ? num(r._cardFee) : 0);   // 카드: 실제 입금액 + 수수료
@@ -1009,8 +1065,8 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
                     ? <span data-testid={`pay-paid-unconfirmed-${i}`} title="세금계산서 발행 — 입금 미확인(수금 미반영). 수정에서 입금확인 체크"
                         style={{ fontWeight: 700, color: C.danger }}>{`${won(a.amount)}원`}<span style={{ fontSize: 10, fontWeight: 600, marginLeft: 3 }}>미확인</span></span>
                     : <span data-testid={`pay-paid-confirmed-${i}`} style={{ fontWeight: 700, color: paidOf(r) > 0 ? C.textPrimary : C.textSecondary }}>{`${won(paidOf(r))}원`}</span>}
-                {!editable && pid != null && hasTxn(r) && addingFor !== pid && (
-                  <button type="button" onClick={() => startAdd(r)} data-testid={`txn-add-open-${i}`}
+                {!editable && pid != null && addingFor !== pid && (
+                  <button type="button" onClick={() => startAdd(r)} data-testid={`txn-add-open-${i}`} aria-label="입금 추가"
                     style={{ border: `1px solid ${C.primary}`, borderRadius: 5, background: '#eff6ff', color: C.primaryText, cursor: 'pointer', fontSize: 11, fontWeight: 700, padding: '2px 8px' }}>+ 입금</button>
                 )}
                 {!editable && pid != null && paidOf(r) > 0 && refundFor !== pid && (
@@ -1060,9 +1116,14 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
       {!editable && isOpen && txns.map((t, ti) => (
         <tr key={`t-${t.id ?? ti}`} data-testid={`txn-subrow-${i}-${ti}`}>
           <td colSpan={cols} style={{ ...tdBase, background: '#fbfdff', whiteSpace: 'normal' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, paddingLeft: 28, fontSize: 12, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, paddingLeft: 28, fontSize: 12, flexWrap: 'wrap', ...(editingTxnId === t.id ? { opacity: 0.45 } : {}) }}>
               <span style={{ fontWeight: 700, color: C.primaryText }}>└ {ti + 1}차</span>
-              <span>{t.paidDate || '—'}</span>
+              {t.paymentType && <span data-testid={`txn-paytype-${i}-${ti}`} style={{ fontWeight: 600 }}>{labelOf(TXN_PAY_TYPE_OPTS, t.paymentType)}</span>}
+              {isScheduledTxn(t)
+                ? <span data-testid={`txn-status-${i}-${ti}`} style={{ padding: '1px 7px', borderRadius: 4, background: '#f3f4f6', color: '#6b7280', fontWeight: 700 }}>입금예정</span>
+                : t.txnType !== 'refund' && t.txnType !== 'offset' && <span data-testid={`txn-status-${i}-${ti}`} style={{ padding: '1px 7px', borderRadius: 4, background: '#dcfce7', color: '#15803d', fontWeight: 700 }}>입금완료</span>}
+              {t.expectedDate && <span style={{ color: isScheduledTxn(t) && String(t.expectedDate).slice(0, 10) < todayStr() ? C.danger : '#6b7280' }}>예정 {formatDisplayDate(t.expectedDate)}</span>}
+              <span>{t.paidDate || (isScheduledTxn(t) ? '' : '—')}</span>
               <span style={{ padding: '1px 7px', borderRadius: 4, background: '#eef2ff', color: '#4338ca', fontWeight: 600 }}>{displayMethod(t.method) || '—'}</span>
               <span style={{ color: '#374151' }}>{t.bankAccount || '—'}</span>
               {isFxRow(r) && isForeignCur(t.currency)
@@ -1070,17 +1131,23 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
                 : t.txnType === 'refund'
                 ? <><span data-testid={`txn-refund-${i}-${ti}`} style={{ padding: '1px 7px', borderRadius: 4, background: '#fee2e2', color: C.danger, fontWeight: 700 }}>환불</span>
                   <span style={{ fontWeight: 700, color: C.danger }}>−{won(Math.abs(num(t.customerPaidAmount)))}원</span></>
+                : isScheduledTxn(t)
+                ? <span data-testid={`txn-expected-amt-${i}-${ti}`} style={{ fontWeight: 700, color: '#6b7280' }} title="입금예정액 — 실제 입금액·미수금 계산에 포함하지 않음">예정 {won(num(t.expectedAmount))}원</span>
                 : <><span style={{ fontWeight: 700 }}>{won(num(t.customerPaidAmount))}원</span>
                   {txnDetail(t) && <span style={{ color: '#6b7280' }}>{txnDetail(t)}</span>}</>}
               {t.note ? <span style={{ color: '#9ca3af' }}>· {t.note}</span> : null}
-              <button type="button" onClick={() => deleteTxn(pid!, t.id)} disabled={txnBusy} data-testid={`txn-sub-del-${i}-${ti}`}
-                style={{ marginLeft: 'auto', border: `1px solid ${C.g300}`, borderRadius: 5, background: '#fff', color: C.danger, cursor: 'pointer', padding: '2px 8px', fontSize: 11 }}>삭제</button>
+              {!isFxRow(r) && t.txnType !== 'refund' && t.txnType !== 'offset' && (
+                <button type="button" onClick={() => startEditTxn(r, t)} disabled={txnBusy} data-testid={`txn-sub-edit-${i}-${ti}`} aria-label="입금내역 수정"
+                  style={{ marginLeft: 8, border: `1px solid ${C.g300}`, borderRadius: 5, background: '#fff', color: C.primaryText, cursor: 'pointer', padding: '2px 8px', fontSize: 11 }}>수정</button>)}
+              <button type="button" onClick={() => deleteTxn(pid!, t.id)} disabled={txnBusy} data-testid={`txn-sub-del-${i}-${ti}`} aria-label="입금내역 삭제"
+                style={{ ...(!isFxRow(r) && t.txnType !== 'refund' && t.txnType !== 'offset' ? {} : { marginLeft: 8 }), border: `1px solid ${C.g300}`, borderRadius: 5, background: '#fff', color: C.danger, cursor: 'pointer', padding: '2px 8px', fontSize: 11 }}>삭제</button>
             </div>
           </td>
         </tr>
       ))}
       {/* 2차+ 입금 추가(§6/§8) — 거래가 1건 이상인 행에서만. 첫 입금은 기본행(수정모드)에서 직접 입력. */}
-      {!editable && isOpen && pid != null && (hasTxn(r) || isFxRow(r)) && (
+      {!editable && isOpen && pid != null && (
+        // '+ 입금 추가'는 모든 저장된 청구회차에서 가능(청구회차·발행일·청구금액은 그대로, 입금내역만 추가)
         <tr data-testid={`txn-addrow-${i}`}>
           <td colSpan={cols} style={{ ...tdBase, background: '#f8fbff', whiteSpace: 'normal' }}>
             {addingFor === pid && isFxRow(r)
@@ -1089,7 +1156,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
               : addingFor === pid
               ? renderTxnAddForm(pid)
               : <button type="button" onClick={() => startAdd(r)} data-testid={`txn-add-open-${i}`}
-                  style={{ marginLeft: 28, border: `1px dashed ${C.primary}`, borderRadius: 6, background: '#fff', color: C.primaryText, cursor: 'pointer', fontSize: 12, fontWeight: 700, padding: '5px 12px' }}>└ + 입금 추가</button>}
+                  aria-label="입금 추가" style={{ marginLeft: 28, border: `1px dashed ${C.primary}`, borderRadius: 6, background: '#fff', color: C.primaryText, cursor: 'pointer', fontSize: 12, fontWeight: 700, padding: '5px 12px' }}>└ + 입금 추가</button>}
           </td>
         </tr>
       )}

@@ -291,7 +291,19 @@ const txnRowSchema = z.object({
   //   · 'refund'(입금 환불 — 원화 청구회차만. 환불액은 음수 고객결제액으로 저장 → 순입금액·미수금 자동 반영. 실제 송금 기능 아님)
   txnType: z.enum(["deposit", "offset", "refund"]).nullable().optional(),
   offsetSourcePaymentId: z.number().int().nullable().optional(),   // 상계 원천 청구회차(초과입금 발생 회차)
+  // 입금내역별 결제구분·입금예정(2026-11) — 생략(undefined) 시 기존 값 유지(구버전 화면·첫 입금 인라인 저장 호환).
+  paymentType: z.enum(["lump_sum", "advance", "interim", "balance"]).nullable().optional(),
+  expectedDate: z.string().nullable().optional(),
+  expectedAmount: money,
+  // 입금상태(저장 안 함, 검증·정규화용) — 'scheduled' 입금예정: 실제 입금액 0·입금일 없음으로 저장(예정액만). 'completed'·생략: 기존 실제 입금 규칙.
+  depositStatus: z.enum(["scheduled", "completed"]).nullable().optional(),
 }).superRefine((r, ctx) => {
+  if (r.depositStatus === "scheduled") {
+    if (r.txnType === "offset" || r.txnType === "refund" || r.method === "외화송금") ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['depositStatus'], message: '입금예정은 원화 입금내역만 등록할 수 있습니다.' });
+    if (!(typeof r.expectedAmount === 'number' && r.expectedAmount > 0)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['expectedAmount'], message: '입금예정액은 0보다 커야 합니다.' });
+    return;
+  }
+  if (r.depositStatus === "completed" && !r.paidDate) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['paidDate'], message: '입금완료는 입금일이 필요합니다.' });
   if (r.txnType === "offset") {
     if (!r.currency) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['currency'], message: '상계는 통화가 필요합니다.' });
     if (!(typeof r.foreignAmount === 'number' && r.foreignAmount > 0)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['foreignAmount'], message: '상계금액은 0보다 커야 합니다.' });
@@ -315,14 +327,16 @@ const txnRowSchema = z.object({
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['customerPaidAmount'], message: '고객결제금액은 0보다 커야 합니다.' });
   }
 });
-const txnBatchSchema = z.object({ rows: z.array(txnRowSchema), deletedIds: z.array(z.number().int()).default([]) });
+// carryLegacyDeposit — 입금거래 없이 기존 방식으로 입금완료 확정된 회차에 '+ 입금 추가'로 내역을 더할 때, 기존 입금(입금일·청구금액)을
+//  입금거래 1건으로 먼저 이관한다(서버가 조건 재검증). 이관 없이 거래를 추가하면 수금 집계가 거래 합계 기준으로 바뀌어 기존 입금이 누락된다.
+const txnBatchSchema = z.object({ rows: z.array(txnRowSchema), deletedIds: z.array(z.number().int()).default([]), carryLegacyDeposit: z.boolean().optional() });
 
 router.put("/admin/project-payments/:paymentId/transactions", ...adminGuard, requireRolePermission("payment.update"), async (req, res) => {
   const paymentId = Number(req.params.paymentId);
   if (!Number.isInteger(paymentId) || paymentId <= 0) { res.status(400).json({ error: "잘못된 청구행 ID" }); return; }
   const parsed = txnBatchSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: "유효성 검증 실패", detail: parsed.error.flatten() }); return; }
-  const { rows, deletedIds } = parsed.data;
+  const { rows, deletedIds, carryLegacyDeposit } = parsed.data;
   const userId = req.user?.id ?? null;
 
   // 청구행 존재 확인 + projectId 확보(수금거래 denormalized projectId 세팅용).
@@ -345,7 +359,7 @@ router.put("/admin/project-payments/:paymentId/transactions", ...adminGuard, req
         note: "기존 입금확인 회차의 입금 — 환불 처리 시 입금거래로 이관(입금일·금액 그대로)", createdBy: userId, updatedBy: userId };
     }
     // 저장 후 거래 집합의 순입금액(원화 고객결제액 합) ≥ 0 이어야 한다.
-    const signed = (r: typeof rows[number]) => r.txnType === "refund" ? -Math.abs(Number(r.customerPaidAmount ?? 0)) : Number(r.customerPaidAmount ?? 0);
+    const signed = (r: typeof rows[number]) => r.depositStatus === "scheduled" ? 0 : r.txnType === "refund" ? -Math.abs(Number(r.customerPaidAmount ?? 0)) : Number(r.customerPaidAmount ?? 0);
     const upd = new Map(rows.filter(r => r.id).map(r => [r.id!, r]));
     const net = txBefore.filter(t => !deletedIds.includes(t.id)).reduce((s, t) => s + (upd.has(t.id) ? signed(upd.get(t.id)!) : Number(t.customerPaidAmount ?? 0)), 0)
       + rows.filter(r => !r.id).reduce((s, r) => s + signed(r), 0)
@@ -353,11 +367,25 @@ router.put("/admin/project-payments/:paymentId/transactions", ...adminGuard, req
     if (net < -0.005) { res.status(400).json({ error: `환불금액이 순입금액을 초과합니다(초과 ${Math.round(-net).toLocaleString("ko-KR")}원).` }); return; }
   }
 
+  // ── 기존 확정 입금 이관(입금내역 추가) — 요청(carryLegacyDeposit) + 서버 조건 모두 충족할 때만. 환불 이관과 같은 형식(중복 생성 없음) ──
+  const legacyPaidRow = txBefore.length === 0 && pay.depositStatus === "completed" && pay.depositConfirmed && !!pay.paidDate && Number(pay.amount) > 0;
+  if (!legacyDeposit && carryLegacyDeposit && legacyPaidRow && rows.some(r => !r.id) && !isForeignCurrency(pay.billingCurrency)) {
+    legacyDeposit = { projectPaymentId: paymentId, projectId: pay.projectId, paidDate: pay.paidDate, method: pay.paymentMethod ?? null,
+      customerPaidAmount: String(pay.amount), currency: "KRW", bankAccount: (pay.depositBank ?? "").trim() || null,
+      paymentType: pay.paymentType && ["lump_sum", "advance", "interim", "balance"].includes(pay.paymentType) ? pay.paymentType : null,
+      note: "기존 입금확인 회차의 입금 — 입금내역 추가 시 입금거래로 이관(입금일·금액 그대로)", createdBy: userId, updatedBy: userId };
+  }
+  // 입금거래 없이 확정된 회차에 이관 없이 새 내역을 더하면 기존 입금이 집계에서 빠진다 — 차단(화면은 carryLegacyDeposit 으로 이관 요청).
+  if (!legacyDeposit && legacyPaidRow && rows.some(r => !r.id)) {
+    res.status(409).json({ error: "입금완료로 확정된 회차입니다. 기존 입금을 입금내역으로 이관한 뒤 추가해야 합니다(화면을 새로고침한 뒤 다시 시도하세요)." }); return;
+  }
+
   // ── 외화 청구회차 검증·환산(원화 청구회차는 기존 동작 그대로) ──
   const billCur = isForeignCurrency(pay.billingCurrency) ? String(pay.billingCurrency).toUpperCase() : null;
   const fxCalc = new Map<number, { krw: number | null; paid: number }>();   // rows index → 확정 원화 환산·고객결제(원화)
   for (const [i, r] of rows.entries()) {
     const label = `${i + 1}번째 거래`;
+    if (billCur && r.depositStatus === "scheduled") { res.status(400).json({ error: `${label}: 외화 청구회차는 입금예정 내역을 지원하지 않습니다.` }); return; }
     if (!billCur) {
       if (r.txnType === "offset") { res.status(400).json({ error: `${label}: 원화 청구회차의 상계는 선입금 관리에서 처리합니다.` }); return; }
       continue;
@@ -395,18 +423,20 @@ router.put("/admin/project-payments/:paymentId/transactions", ...adminGuard, req
       for (const [i, r] of rows.entries()) {
         const num = (v: number | null | undefined) => (v == null ? null : String(v));
         const fx = fxCalc.get(i);
+        const scheduled = r.depositStatus === "scheduled";   // 입금예정 — 실제 입금액 0·입금일 없음(예정액·예정일만)
         const values = {
-          paidDate: r.paidDate || null,
+          paidDate: scheduled ? null : (r.paidDate || null),
           method: fx ? (r.txnType === "offset" ? "상계" : (r.method || "외화송금")) : (r.method ?? null),
           // 카드결제(실제 입금액 + 카드사 수수료가 함께 입력된 거래): 고객결제액 = 실제 입금액 + 수수료(원 단위).
           //  → 미수금 = 청구금액 − 실제 입금액 − 수수료. 수수료는 fee_amount 로 별도 보관(매출·할인 아님). 그 외 결제방법은 기존 그대로.
           customerPaidAmount: fx ? String(fx.paid)
+            : scheduled ? "0"
             : r.txnType === "refund" ? String(-Math.abs(Number(r.customerPaidAmount ?? 0)))   // 환불 = 음수 거래
             : (isCardMethod(r.method) && r.settledAmount != null && r.feeAmount != null
                 ? String(Math.round(Number(r.settledAmount)) + Math.round(Number(r.feeAmount)))
                 : String(r.customerPaidAmount ?? 0)),
-          settledAmount: num(r.settledAmount),
-          feeAmount: num(r.feeAmount),
+          settledAmount: scheduled ? null : num(r.settledAmount),
+          feeAmount: scheduled ? null : num(r.feeAmount),
           currency: r.currency || "KRW",
           fxRate: num(r.fxRate),
           foreignAmount: num(r.foreignAmount),
@@ -418,6 +448,10 @@ router.put("/admin/project-payments/:paymentId/transactions", ...adminGuard, req
           note: r.note ?? null,
           txnType: r.txnType === "offset" ? "offset" : r.txnType === "refund" ? "refund" : (fx ? "deposit" : null),
           offsetSourcePaymentId: r.txnType === "offset" ? (r.offsetSourcePaymentId ?? null) : null,
+          // 결제구분·입금예정일·입금예정액 — 전달된 경우만 반영(생략 시 기존 값 유지)
+          ...(r.paymentType !== undefined ? { paymentType: r.paymentType ?? null } : {}),
+          ...(r.expectedDate !== undefined ? { expectedDate: r.expectedDate || null } : {}),
+          ...(r.expectedAmount !== undefined ? { expectedAmount: num(r.expectedAmount) } : {}),
           updatedBy: userId,
           updatedAt: new Date(),
         };
@@ -431,8 +465,8 @@ router.put("/admin/project-payments/:paymentId/transactions", ...adminGuard, req
     });
     // 갱신된 프로젝트 전체 청구정보(청구행 + 거래) 반환 → 화면이 미수금/입금상태를 재계산.
     await logEvent("project", pay.projectId, "payment_transactions_saved", req.log, req.user ? { id: req.user.id, email: req.user.email } : undefined,
-      JSON.stringify({ paymentId, beforeTx: txBefore.map(t => ({ id: t.id, paidDate: t.paidDate, customerPaidAmount: t.customerPaidAmount, currency: t.currency, foreignAmount: t.foreignAmount, fxRate: t.fxRate, krwAmount: t.krwAmount, feeAmount: t.feeAmount, txnType: t.txnType, offsetSourcePaymentId: t.offsetSourcePaymentId })),
-        saved: rows.map((r, i) => ({ id: r.id ?? null, paidDate: r.paidDate ?? null, customerPaidAmount: fxCalc.get(i)?.paid ?? r.customerPaidAmount ?? null, currency: r.currency ?? null, foreignAmount: r.foreignAmount ?? null, fxRate: r.fxRate ?? null, krwAmount: fxCalc.get(i)?.krw ?? r.krwAmount ?? null, feeAmount: r.feeAmount ?? null, txnType: r.txnType ?? null, offsetSourcePaymentId: r.offsetSourcePaymentId ?? null })), deletedIds }));
+      JSON.stringify({ paymentId, carriedLegacyDeposit: !!legacyDeposit, beforeTx: txBefore.map(t => ({ id: t.id, paidDate: t.paidDate, customerPaidAmount: t.customerPaidAmount, paymentType: t.paymentType, expectedDate: t.expectedDate, expectedAmount: t.expectedAmount, currency: t.currency, foreignAmount: t.foreignAmount, fxRate: t.fxRate, krwAmount: t.krwAmount, feeAmount: t.feeAmount, txnType: t.txnType, offsetSourcePaymentId: t.offsetSourcePaymentId })),
+        saved: rows.map((r, i) => ({ id: r.id ?? null, depositStatus: r.depositStatus ?? null, paymentType: r.paymentType ?? null, expectedDate: r.expectedDate ?? null, expectedAmount: r.expectedAmount ?? null, paidDate: r.depositStatus === "scheduled" ? null : (r.paidDate ?? null), customerPaidAmount: fxCalc.get(i)?.paid ?? r.customerPaidAmount ?? null, currency: r.currency ?? null, foreignAmount: r.foreignAmount ?? null, fxRate: r.fxRate ?? null, krwAmount: fxCalc.get(i)?.krw ?? r.krwAmount ?? null, feeAmount: r.feeAmount ?? null, txnType: r.txnType ?? null, offsetSourcePaymentId: r.offsetSourcePaymentId ?? null })), deletedIds }));
     res.json({ rows: await loadPaymentRecords(pay.projectId) });
   } catch (err) {
     req.log.error({ err }, "수금거래 저장 실패");
