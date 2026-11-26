@@ -800,10 +800,6 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     const paid = txnPaid(r); const bill = num(haap(r));
     return paid <= 0 ? 'scheduled' : (paid < bill ? 'partial' : 'completed');
   };
-  // 분할청구 판별 — 서로 다른 청구업체가 2곳 이상이면 '업체별 분할청구'(예: 분할견적 판매전환).
-  //  이 경우 각 청구행 미수금 = MAX(행 청구액 − 행 입금액, 0)(행 자체 기준). project 전체 미수금을 행에 쓰지 않는다.
-  //  단일 업체의 회차청구(선금/중도금/잔금)는 기존 '총판매 − 누적입금'(러닝) 유지 → 일반/누적 회귀 없음.
-  const isSplitBilling = new Set(data.map(r => r.billingCompanyId).filter((x): x is number => x != null)).size > 1;
   const summary = useMemo(() => {
     const totalPaid = data.reduce((s, r) => s + paidOf(r), 0);     // 총 입금액(입금완료 행)
     const receivable = saleTotal - totalPaid;                      // 미수금 = 총판매 − 총입금액
@@ -981,13 +977,9 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     // 수출바우처 행은 금액이 자동(시스템 관리) — 편집·삭제 불가. 청구업체는 payer 기준 고정 표시.
     const voucher = editable ? category === CAT_VOUCHER : r.paymentCategory === CAT_VOUCHER;
     const a = effAmounts(r, voucher);
-    // 미수금(행):
-    //  · 일반/누적 견적 판매건(단일 업체 회차청구) = 총 판매금액 − 누적 입금완료액(회차순, 하단 요약과 일치) — 기존 로직 유지.
-    //  · 차감견적 판매건 / 분할청구(업체별) = '청구금액(합계) − 해당 행 실제 입금액'. 행 자체 기준이며 음수가 되지 않는다.
-    //    (max(…,0)로 과입금도 0 처리 — §6. 하단 총 미수금은 SUM(행)=총판매−총입금과 일치하므로 요약 불변 §2)
-    const cumulativePaid = data.slice(0, i + 1).reduce((s, x) => s + paidOf(x), 0);
-    // 거래(transactions)가 있는 행 / 분할청구 / 차감견적 = 행 자체 기준(청구 − 행 고객결제액). 그 외 단일업체 회차청구는 러닝.
-    const receivable = (isPrepaidSale || isSplitBilling || hasTxn(r)) ? Math.max(a.amount - paidOf(r), 0) : saleTotal - cumulativePaid;
+    // 미수금(행) — 모든 회차 공통: 해당 회차 청구금액 − 해당 회차 유효 입금액(음수 없음, 과입금 0). 외화 회차는 별도 외화 기준 셀.
+    //  하단 총 미수금은 총 판매금액 기준(총판매 − 총입금) 그대로 — 미청구분·과입금이 있으면 회차 합계와 달라도 정상.
+    const receivable = Math.max(a.amount - paidOf(r), 0);
     const companyLabel = r.billingCompanyName || r.payer || '—';
     const isTaxMethod = isInvoiceMethod(normMethod(r.paymentMethod));   // 발행일 입력 대상 여부(세금·영세율·면세 계산서)
     const vatWarn = methodVatWarning(normMethod(r.paymentMethod), a.vat);   // 세금 구분 ↔ 금액 불일치(경고만)
