@@ -157,15 +157,21 @@ const ITEM_SUPPLY = '공급가액', ITEM_VAT = '부가세', ITEM_TOTAL = '전체
 //   · 기존 '기타'(other + '전체금액'·비어 있음)는 그대로 '기타'로 조회된다. 결제구분 선택은 청구금액을 바꾸지 않는다.
 //   · 부분결제(2026-11) = payment_type 'other' + deposit_item '부분결제'(비율 입력 시 '부분결제비율:N'). 금액은 청구금액 직접 입력 또는 비율.
 const ITEM_PARTIAL = '부분결제';
+//   · 마이너스 발행(2026-11) = payment_type 'other' + deposit_item '마이너스발행:{원청구회차 id}' · 금액 음수 · 입금 없음.
+//     원청구회차 미수금 = max(청구금액 + 연결된 마이너스 합계 − 입금액, 0). 총 청구금액에는 반영, 입금액·환불과 무관(서버 lib/minusIssue 와 같은 규칙).
+const ITEM_MINUS = '마이너스발행';
+const isMinusRow = (r: { depositItem?: string | null }) => String(r.depositItem ?? '').startsWith(ITEM_MINUS);
+const minusSrcOf = (r: { depositItem?: string | null }): number | null => { const m = String(r.depositItem ?? '').match(/^마이너스발행:(\d+)$/); return m ? Number(m[1]) : null; };
 const PAY_TYPE_UI_OPTS = [
   { value: 'lump_sum', label: '일괄결제' }, { value: 'partial', label: '부분결제' }, { value: 'advance', label: '선금' }, { value: 'interim', label: '중도금' }, { value: 'balance', label: '잔금' },
-  { value: 'vat', label: '부가세' }, { value: 'supply', label: '공급가' }, { value: 'custom', label: '직접입력' },
+  { value: 'vat', label: '부가세' }, { value: 'supply', label: '공급가' }, { value: 'custom', label: '직접입력' }, { value: 'minus', label: '마이너스 발행' },
 ];
 const payTypeKey = (r: { paymentType?: string | null; depositItem?: string | null; _customType?: boolean }): string => {
   if (r._customType) return 'custom';
   if (r.paymentType !== 'other') return r.paymentType ?? '';
   const it = (r.depositItem ?? '').trim();
   if (it === ITEM_PARTIAL || it.startsWith(`${ITEM_PARTIAL}비율:`)) return 'partial';
+  if (it.startsWith(ITEM_MINUS)) return 'minus';
   return it === ITEM_VAT ? 'vat' : it === ITEM_SUPPLY ? 'supply' : (!it || it === ITEM_TOTAL) ? 'other' : 'custom';
 };
 // 결제구분 비율(2026-11) — 스키마 변경 없이 일반결제 행의 deposit_item 에 '{구분}비율:N' 형식으로 저장.
@@ -550,6 +556,16 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     const r = rows[i];
     const voucher = category === CAT_VOUCHER;
     const defItem = voucher ? (r.payer === PAYER_OPERATOR ? ITEM_SUPPLY : ITEM_VAT) : ITEM_TOTAL;
+    // 마이너스 발행 — 입금 없는 청구 감액 회차. 입금내역·외화 회차는 불가. 금액은 비워 다시 입력(음수 저장), 결제방법은 세금계산서.
+    if (key === 'minus') {
+      if ((r.transactions?.length ?? 0) > 0 || r._paidOk) { onToast('입금기록이 있는 회차는 마이너스 발행으로 바꿀 수 없습니다. 새 회차를 추가하세요.'); return; }
+      if (isFxRow(r)) { onToast('마이너스 발행은 원화 청구회차만 가능합니다.'); return; }
+      patchRow(i, { paymentType: 'other', depositItem: ITEM_MINUS, _customType: false, _advRate: '', supplyAmount: '', vatAmount: '', amount: '',
+        _paidAmt: '', _paidAuto: false, _paidOk: false, paidDate: null, expectedDate: null, depositStatus: 'scheduled', depositConfirmed: false,
+        ...(isInvoiceMethod(normMethod(r.paymentMethod)) ? {} : { paymentMethod: '세금계산서' }) });
+      return;
+    }
+    if (isMinusRow(r)) patchRow(i, { supplyAmount: '', vatAmount: '', amount: '' });   // 마이너스 발행 해제 — 음수 금액은 비움(다시 입력)
     if (key === 'vat') patchRow(i, { paymentType: 'other', depositItem: ITEM_VAT, _customType: false, _advRate: '' });
     else if (key === 'supply') patchRow(i, { paymentType: 'other', depositItem: ITEM_SUPPLY, _customType: false, _advRate: '' });
     else if (key === 'custom') patchRow(i, { paymentType: 'other', depositItem: payTypeKey(r) === 'custom' ? r.depositItem : '', _customType: true, _advRate: '' });
@@ -580,7 +596,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   const patchIssue = (i: number, v: string) => setRows(prev => prev.map((r, idx) => {
     if (idx !== i) return r;
     const next: PayRow = { ...r, issueDate: v || null };
-    const locked = (r.transactions?.length ?? 0) > 0 || r._paidOk || r._legacyPaid;
+    const locked = (r.transactions?.length ?? 0) > 0 || r._paidOk || r._legacyPaid || isMinusRow(r);   // 마이너스 발행: 입금 자동입력 없음
     if (!locked) {
       if (v && (!r._paidAmt || r._paidAuto)) { next._paidAmt = String(effAmounts(r, category === CAT_VOUCHER).amount); next._paidAuto = true; }
       else if (!v && r._paidAuto) { next._paidAmt = ''; next._paidAuto = false; }
@@ -617,6 +633,13 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
       return syncAutoPaid(r, { ...r, ...amountsFromTotal(digits, zeroVatSale || isZeroVatMethod(r.paymentMethod)) });
     }));
   };
+  // 마이너스 발행 금액 — 감액(양수)으로 입력받아 공급가·부가세·청구금액을 음수로 저장(청구금액 입력과 같은 역산 규칙)
+  const patchMinusAmt = (i: number, digits: string) => setRows(prev => prev.map((r, idx) => {
+    if (idx !== i) return r;
+    const a = amountsFromTotal(digits, zeroVatSale || isZeroVatMethod(r.paymentMethod));
+    const neg = (v: string) => (v === '' || num(v) === 0 ? v : String(-num(v)));
+    return { ...r, amount: neg(a.amount), supplyAmount: neg(a.supplyAmount), vatAmount: neg(a.vatAmount) };
+  }));
   // 새 청구 기본값 — 청구업체=판매 거래처, 결제방법 세금계산서, 결제구분 일괄결제, 입금주체 고객사, 입금항목 전체금액.
   const addRow = () => setRows(prev => [...prev, { _bank: BANK_DEFAULT, _bankOk: false, depositStatus: 'scheduled', supplyAmount: '', vatAmount: '', amount: '', paymentMethod: category === CAT_GENERAL ? defaultMethod : '세금계산서', paymentType: 'lump_sum', paymentCategory: category, payer: PAYER_CUSTOMER, depositItem: ITEM_TOTAL, billingCompanyId: defaultCompany?.id ?? null, billingCompanyName: defaultCompany?.name ?? null }]);
   // 청구회차 삭제 — 서버와 같은 조건: 저장된 입금내역(입금·환불·입금예정)이 없는 회차만. 입금확인된 회차는 체크 해제 후 삭제.
@@ -628,6 +651,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
       onToast(firstPayEditable(r) && !r._schedTxn ? '입금기록이 있는 회차입니다. 입금확인 체크를 해제해 저장한 뒤 삭제하세요.' : '입금내역이 있는 회차입니다. 입금내역을 먼저 삭제한 뒤 회차를 삭제하세요.'); return;
     }
     if (r.id != null && r._paidOk) { onToast('입금확인된 회차입니다. 입금확인 체크를 해제한 뒤 삭제하세요.'); return; }
+    if (r.id != null && rows.some(x => minusSrcOf(x) === r.id)) { onToast('마이너스 발행이 연결된 회차입니다. 마이너스 발행을 먼저 삭제하세요.'); return; }
     removeRow(i);
   };
   const removeRow = (i: number) => setRows(prev => {
@@ -713,6 +737,9 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     }).filter((x): x is string => !!x);
     if (lost.length && !(await confirmDialog({ title: '미확정 입력 안내', variant: 'warning', confirmLabel: '저장',
       message: `입금확인(입금액 체크) 전의 아래 입력값은 저장되지 않습니다.\n${lost.join('\n')}\n입금으로 반영하려면 입금액 옆 체크로 입금확인 후 저장하세요.` }))) return;
+    // 마이너스 발행 — 원청구회차·감액·발행일 필수(서버도 같은 조건으로 검증: 연결 유효성·차감 한도)
+    const badMinus = rows.findIndex(r => isMinusRow(r) && (minusSrcOf(r) == null || !(num(r.amount) < 0) || !r.issueDate));
+    if (badMinus >= 0) { const r = rows[badMinus]; onToast(`${badMinus + 1}회차: 마이너스 발행의 ${minusSrcOf(r) == null ? '원청구회차를 선택' : !(num(r.amount) < 0) ? '감액(청구금액)을 입력' : '발행일을 입력'}하세요.`); return; }
     const noLabel = rows.findIndex(r => payTypeKey(r) === 'custom' && !(r.depositItem ?? '').trim());
     if (noLabel >= 0) { onToast(`${noLabel + 1}회차: 직접입력 결제구분 명칭을 입력하세요.`); return; }
     const badRate = category === CAT_GENERAL ? rows.findIndex(r => isRateType(payTypeKey(r)) && (r._advRate ?? '').trim() !== '' && parseAdvRateInput(r._advRate) == null) : -1;
@@ -748,8 +775,8 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
             ...((r.billingCompanyName ?? '').trim() || r.billingCompanyId != null ? {} : { billingCompanyId: defaultCompany?.id ?? null }),
             note: r.note || null,
             // 입금은행·확인(청구 회차 단위) — 입금 전에도 저장. 은행이 없으면 확인도 해제.
-            depositBank: (r._bank ?? '').trim() || null,
-            depositBankConfirmed: !!r._bankOk && !!(r._bank ?? '').trim(),
+            depositBank: isMinusRow(r) ? null : ((r._bank ?? '').trim() || null),   // 마이너스 발행: 입금 없음
+            depositBankConfirmed: !isMinusRow(r) && !!r._bankOk && !!(r._bank ?? '').trim(),
             // 첫 입금 — 청구회차와 같은 트랜잭션(생략 시 입금기록 변경 없음)
             ...(deposits[idx] !== undefined ? { firstDeposit: deposits[idx] } : {}),
           };
@@ -793,7 +820,10 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   //  다중입금·환불·입금예정·외화 회차와 조회 모드는 기존 계산(입금내역 합계 / 입금확정 3필드) 그대로. 취소하면 rows 를 비워 저장값 기준으로 복귀.
   const previewPaid = (r: PayRow): number | null => (editMode && !isFxRow(r) && firstPayEditable(r))
     ? (r._paidOk ? num(r._paidAmt) + (isCardMethod(normMethod(r.paymentMethod)) ? num(r._cardFee) : 0) : 0) : null;
-  const paidOf = (r: PayRow) => previewPaid(r) ?? (isFxRow(r) ? (r.fx?.paidKrwForSale ?? 0) : hasTxn(r) ? txnPaid(r) : (isRowPaid(r) ? haap(r) : 0));
+  // 마이너스 발행 — 원청구회차 수금 기준 청구액(due) = 청구금액 + 연결된 마이너스 합계. 마이너스 행 자체는 입금 0(서버 lib/minusIssue 와 같은 규칙).
+  const minusOf = (r: PayRow) => (r.id == null ? 0 : data.reduce((s, x) => s + (minusSrcOf(x) === r.id ? haap(x) : 0), 0));
+  const dueOf = (r: PayRow) => haap(r) + minusOf(r);
+  const paidOf = (r: PayRow) => isMinusRow(r) ? 0 : previewPaid(r) ?? (isFxRow(r) ? (r.fx?.paidKrwForSale ?? 0) : hasTxn(r) ? txnPaid(r) : (isRowPaid(r) ? Math.max(dueOf(r), 0) : 0));
   const lastTxn = (r: PayRow): PayTxn | null => { const ts = (r.transactions ?? []).filter(t => !isScheduledTxn(t)); return ts.length ? ts[ts.length - 1] : null; };  // 최근(마지막) 실제 입금거래(입금예정 제외)
   const dispPaidDate = (r: PayRow): string => { const t = lastTxn(r); return (t?.paidDate ? formatDisplayDate(t.paidDate) : (formatDisplayDate(r.paidDate) || '—')); };  // §11 입금일: 최종 입금일
   // 입금은행 — 청구 회차 저장값 우선, 없으면(기존 행) 최근 입금거래 은행
@@ -804,7 +834,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   // 입금상태(§F) — 거래 존재 시 결제액 vs 청구액으로 파생. 없으면 기존 depositStatus.
   const effStatus = (r: PayRow): string => {
     if (!hasTxn(r)) return r.depositStatus ?? 'scheduled';
-    const paid = txnPaid(r); const bill = num(haap(r));
+    const paid = txnPaid(r); const bill = num(dueOf(r));
     return paid <= 0 ? 'scheduled' : (paid < bill ? 'partial' : 'completed');
   };
   const summary = useMemo(() => {
@@ -986,7 +1016,9 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     const a = effAmounts(r, voucher);
     // 미수금(행) — 모든 회차 공통: 해당 회차 청구금액 − 해당 회차 유효 입금액(음수 없음, 과입금 0). 외화 회차는 별도 외화 기준 셀.
     //  하단 총 미수금은 총 판매금액 기준(총판매 − 총입금) 그대로 — 미청구분·과입금이 있으면 회차 합계와 달라도 정상.
-    const receivable = Math.max(a.amount - paidOf(r), 0);
+    const minusRow = isMinusRow(r);   // 마이너스 발행 — 입금 칸 없음(입금일·입금액·입금확인·입금은행 '—'), 미수금 0
+    const due = a.amount + minusOf(r);   // 수금 기준 청구액(원청구회차 = 청구금액 + 연결된 마이너스)
+    const receivable = minusRow ? 0 : Math.max(due - paidOf(r), 0);
     const companyLabel = r.billingCompanyName || r.payer || '—';
     const isTaxMethod = isInvoiceMethod(normMethod(r.paymentMethod));   // 발행일 입력 대상 여부(세금·영세율·면세 계산서)
     const vatWarn = methodVatWarning(normMethod(r.paymentMethod), a.vat);   // 세금 구분 ↔ 금액 불일치(경고만)
@@ -1010,9 +1042,14 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     const cardRow = isCardMethod(normMethod(r.paymentMethod));
     const firstCovered = num(r._paidAmt) + (cardRow ? num(r._cardFee) : 0);   // 카드: 실제 입금액 + 수수료
     //  미확인(체크 전) 입금액은 미수금에서 빼지 않는다 — 실제 확인된 금액만 반영.
-    const rowReceivable = firstPayMode && r._paidOk && num(r._paidAmt) > 0 ? Math.max(a.amount - firstCovered, 0) : receivable;
-    const unconfirmedAuto = !hasTxn(r) && !isRowPaid(r) && !!r.issueDate;   // 조회: 발행일만 있고 미확인 → 청구금액을 붉은색 예정 입금액으로 표시
-    const firstStatus = num(r._paidAmt) <= 0 ? 'scheduled' : (firstCovered < a.amount ? 'partial' : 'completed');
+    const rowReceivable = !minusRow && firstPayMode && r._paidOk && num(r._paidAmt) > 0 ? Math.max(due - firstCovered, 0) : receivable;
+    const unconfirmedAuto = !minusRow && !hasTxn(r) && !isRowPaid(r) && !!r.issueDate;   // 조회: 발행일만 있고 미확인 → 청구금액을 붉은색 예정 입금액으로 표시
+    const firstStatus = num(r._paidAmt) <= 0 ? 'scheduled' : (firstCovered < due ? 'partial' : 'completed');
+    const dash = <span style={{ color: C.g400 }}>—</span>;
+    // 원청구회차 후보 — 저장된 원화 일반 회차(마이너스 아님, 청구금액 > 0). 새 회차는 저장 후 연결.
+    const minusSrcOpts = data.map((x, xi) => ({ x, xi })).filter(({ x }) => x.id != null && x !== r && !isMinusRow(x) && !isFxRow(x) && haap(x) > 0)
+      .map(({ x, xi }) => ({ value: String(x.id), label: `${xi + 1}회차 · ${won(haap(x))}원` }));
+    const srcIdx = minusRow ? data.findIndex(x => x.id != null && x.id === minusSrcOf(r)) : -1;
     return (
       <React.Fragment key={r.id ?? `new-${i}`}>
       <tr>
@@ -1074,7 +1111,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
         {/* 첫 예정/이벤트 날짜 — 결제방법별 라벨(입금예정일/카드결제일/송금예정일). 입력 후 입금확인 전이면 붉은색, 확인 체크 시 검정색.
             우측 확인 체크박스(수행정보 납품확인과 동일) — 체크 시 입금일 자동복사·입금상태 입금완료. */}
         <td style={{ ...tdBase, width: 160 }}>
-          {editable ? (
+          {minusRow ? dash : editable ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
               <DateField testid={`pay-expected-${i}`} ariaLabel={schedLabel}
                 title={expUnconfirmed ? '입금 미확인 — 확인 체크 시 입금일로 반영' : (confirmed ? '입금확인 완료' : undefined)}
@@ -1098,7 +1135,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
         {/* 입금일(§11) — 거래 있으면 최종 입금일(읽기전용). 없으면 기존 입력/표시(fallback) */}
         <td style={{ ...tdBase, width: 150 }}>
           {/* 수정모드 + 첫 입금 정정 대상(입금기록 0~1건, 원화)은 입금일 입력·정정 가능. 그 외 입금내역 회차는 최종 입금일(읽기전용) */}
-          {editable && firstPayMode && !isFxRow(r)
+          {minusRow ? dash : editable && firstPayMode && !isFxRow(r)
             ? dateCell(r.paidDate, v => patchPaid(i, v), `pay-paid-${i}`, '입금일')
             : hasTxn(r)
             ? dispPaidDate(r)
@@ -1109,7 +1146,11 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
           {editable
             ? <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }} data-testid={`pay-type-${i}`}>
                 <ClickSelect value={payTypeKey(r)} onChange={(v: string) => changePayType(i, v)} triggerStyle={inp}
-                  options={payTypeKey(r) === 'other' ? [...PAY_TYPE_UI_OPTS, { value: 'other', label: '기타' }] : PAY_TYPE_UI_OPTS} />
+                  options={(() => { const o = voucher ? PAY_TYPE_UI_OPTS.filter(x => x.value !== 'minus') : PAY_TYPE_UI_OPTS; return payTypeKey(r) === 'other' ? [...o, { value: 'other', label: '기타' }] : o; })()} />
+                {minusRow && (minusSrcOpts.length
+                  ? <div data-testid={`pay-minus-src-${i}`}><ClickSelect value={minusSrcOf(r) != null ? String(minusSrcOf(r)) : ''} onChange={(v: string) => patchRow(i, { depositItem: `${ITEM_MINUS}:${v}` })}
+                      triggerStyle={{ ...inp, ...(minusSrcOf(r) == null ? { color: C.danger, borderColor: C.danger } : {}) }} options={[{ value: '', label: '원청구회차 선택' }, ...minusSrcOpts]} /></div>
+                  : <span style={{ fontSize: 11, color: C.danger, whiteSpace: 'normal' }}>저장된 원청구회차가 없습니다</span>)}
                 {payTypeKey(r) === 'custom' && <input style={inp} value={r.depositItem ?? ''} placeholder="결제구분 명칭" maxLength={50}
                   onChange={e => patchRow(i, { depositItem: e.target.value, _customType: true })} data-testid={`pay-type-label-${i}`} aria-label="결제구분 직접입력" />}
                 {isRateType(payTypeKey(r)) && !voucher && (
@@ -1122,16 +1163,18 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
               </div>
             : isSplitDepositRow(txns)
               ? <span data-testid={`pay-type-text-${i}`} title={`입금내역 ${txns.filter(t => t.txnType !== 'refund' && t.txnType !== 'offset').length}건으로 분할 입금 · 저장된 결제구분: ${payTypeLabel(r)}`}>분할결제</span>
-              : <span data-testid={`pay-type-text-${i}`}>{payTypeLabel(r)}</span>}
+              : <span data-testid={`pay-type-text-${i}`}>{payTypeLabel(r)}{minusRow && srcIdx >= 0 ? <span style={{ fontSize: 11, color: C.textSecondary }}> ({srcIdx + 1}회차)</span> : null}</span>}
         </td>
         {/* 청구금액(§1/§14) = project_payments.amount. 공급가/부가세는 내부 자동산출(컬럼 미표시). 일반결제: 입력 / 수출바우처: 자동 */}
         <td style={{ ...tdR, width: 132, fontWeight: 700 }}>
-          {editable && !voucher ? priceCell(r.amount, v => patchHaap(i, v), `pay-haap-${i}`, '청구금액')
+          {editable && !voucher && minusRow
+            ? <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}><span style={{ color: C.danger, fontWeight: 700 }}>−</span>{priceCell(Math.abs(num(r.amount)), v => patchMinusAmt(i, v), `pay-haap-${i}`, '마이너스 발행 금액')}</div>
+            : editable && !voucher ? priceCell(r.amount, v => patchHaap(i, v), `pay-haap-${i}`, '청구금액')
             : isFxRow(r) ? <FxBilledCell krw={a.amount} cur={String(r.billingCurrency).toUpperCase()} foreign={r.foreignAmount} /> : `${won(a.amount)}원`}
         </td>
         {/* 입금은행 + 확인 체크 — 미확인 붉은색 / 확인 검정색. 은행을 바꾸면 확인 해제. 편집모드에서 모든 회차 선택·저장(입금 전에도). */}
         <td style={{ ...tdBase, width: 168, overflow: 'visible' }} data-testid={`pay-bank-${i}`}>
-          {editable ? (() => {
+          {minusRow ? dash : editable ? (() => {
             const hasBank = !!(r._bank ?? '').trim();
             return (
               <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
@@ -1152,7 +1195,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
         </td>
         {/* 입금액(§5/§6/§14) — 첫 입금이면 기본행에서 직접 입력(저장 시 payment_transaction 생성). 그 외엔 Σ거래. 2차+는 '+ 입금' */}
         <td style={{ ...tdR, width: 128 }} data-testid={`pay-paid-amt-${i}`}>
-          {firstPayMode && isFxRow(r)
+          {minusRow ? dash : firstPayMode && isFxRow(r)
             ? <span style={{ fontSize: 11, color: C.textSecondary }}>아래 외화 입력</span>
             : firstPayMode
             ? (() => {
@@ -1190,11 +1233,13 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
         </td>
         {/* 미수금 — 첫 입금 입력 중이면 미리보기 반영 */}
         <td style={{ ...tdR, width: 128, color: rowReceivable > 0 ? C.danger : C.textSecondary }}>
-          {isFxRow(r) ? (r.fx && !editable ? <FxReceivableCell fx={r.fx} /> : <span style={{ fontSize: 11, color: C.textSecondary }}>외화 기준</span>) : `${won(rowReceivable)}원`}
+          {minusRow ? dash : isFxRow(r) ? (r.fx && !editable ? <FxReceivableCell fx={r.fx} /> : <span style={{ fontSize: 11, color: C.textSecondary }}>외화 기준</span>) : `${won(rowReceivable)}원`}
         </td>
         {/* 입금상태 — 거래 있으면 파생 / 첫 입금 입력 중이면 미리보기 / 그 외 기존 */}
         <td style={{ ...tdBase, width: 110 }}>
-          {isFxRow(r) && r.fx && !editable
+          {minusRow
+            ? <span data-testid={`pay-minus-badge-${i}`} style={{ fontSize: 11, padding: '2px 8px', borderRadius: 5, fontWeight: 700, background: '#fee2e2', color: '#b91c1c' }}>마이너스 발행</span>
+            : isFxRow(r) && r.fx && !editable
             ? <FxStatusBadge status={r.fx.status} title={r.fx.reviewReasons.join(', ') || undefined} />
             : hasTxn(r) && !previewRow
             ? <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 5, fontWeight: 700, background: effStatus(r) === 'completed' ? '#dcfce7' : effStatus(r) === 'partial' ? '#fef9c3' : '#f3f4f6', color: effStatus(r) === 'completed' ? '#15803d' : effStatus(r) === 'partial' ? '#854d0e' : '#6b7280' }}>{labelOf(DEPOSIT_OPTS, effStatus(r))}</span>
@@ -1280,7 +1325,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
       })}
       {/* '+ 입금 추가' — 저장된 모든 청구회차에서, 입금내역이 접혀 있어도 항상 표시(누르면 펼치고 입력줄 열기).
           청구회차·발행일·청구금액은 그대로 두고 입금내역만 추가. 외화 청구회차는 외화 입금·상계 입력. */}
-      {!editable && pid != null && (
+      {!editable && pid != null && !minusRow && (
         <tr data-testid={`txn-addrow-${i}`}>
           <td colSpan={cols} style={{ ...tdBase, background: '#f8fbff', whiteSpace: 'normal' }}>
             {addingFor === pid && isFxRow(r)

@@ -22,6 +22,7 @@ import { inArray, asc, sql } from "drizzle-orm";
 import { requireAuth, requireRole, requireStaffPermission } from "../middlewares/auth";
 import { parseDepositAmounts } from "../services/legacySaleActivation";
 import { loadFxSummaries, sumFxByCurrency, type FxSummary, type FxStatus } from "../services/fxBilling";
+import { isMinusItem, minusSumBySource } from "../lib/minusIssue";
 
 // 외화 청구회차(fx) → 수금관리 원화 열·상태. 외화 기준 판정(환율 차이로 미수 생성 없음). 확인 필요는 review(집계 제외).
 const FX_TO_ROW_STATUS: Record<FxStatus, "scheduled" | "partial" | "completed" | "review"> = { unpaid: "scheduled", partial: "partial", completed: "completed", overpaid: "completed", review: "review" };
@@ -52,6 +53,7 @@ type MainRow = {
   deposit_status: string | null;
   deposit_confirmed: boolean | null;
   note: string | null;
+  deposit_item: string | null;
   billing_company_id: number | null;
   billing_company_name: string | null;
   project_title: string | null;
@@ -73,7 +75,7 @@ router.get("/admin/collections", ...adminGuard, requireStaffPermission(["payment
         pp.amount, pp.supply_amount, pp.vat_amount,
         pp.issue_date, pp.expected_date, pp.paid_date,
         pp.payment_method, pp.deposit_status, pp.deposit_confirmed,
-        pp.note, pp.billing_company_id,
+        pp.note, pp.deposit_item, pp.billing_company_id,
         -- 청구업체 = 회차에 저장된 청구업체명 우선 → 없으면 거래처 Master 이름(판매 상세 D.청구정보와 같은 기준)
         COALESCE(pp.billing_company_name_snapshot, c.name) AS billing_company_name,
         p.title AS project_title,
@@ -141,25 +143,32 @@ router.get("/admin/collections", ...adminGuard, requireStaffPermission(["payment
     const today = todayKst();
     const fxMap = await loadFxSummaries(db, ids);
 
+    // 마이너스 발행(lib/minusIssue) — 원청구회차 id → 연결된 마이너스 합계(음수). 청구정보 화면과 같은 규칙.
+    const minusBy = minusSumBySource(rows);
     const out = rows.map((r) => {
       const amount = Number(r.amount ?? 0);
       const txCnt = Number(r.tx_cnt ?? 0);
       const isLegacyFallback = txCnt === 0;
       const fxs = fxMap.get(r.id) ?? null;
+      const isMinus = isMinusItem(r.deposit_item);
+      // 수금 기준 청구액 = 청구금액 + 연결된 마이너스 발행 합계(원청구회차). 마이너스 행은 입금·미수 없음.
+      const due = amount + (minusBy.get(r.id) ?? 0);
 
-      // 실입금액: 거래 존재 시 SUM(customer_paid_amount), 없으면 legacy fallback(completed → 전액, 그 외 0).
+      // 실입금액: 거래 존재 시 SUM(customer_paid_amount), 없으면 legacy fallback(completed → 수금 기준 청구액 전액, 그 외 0).
       let paidAmount: number;
-      if (txCnt > 0) {
+      if (isMinus) paidAmount = 0;
+      else if (txCnt > 0) {
         paidAmount = Number(r.tx_paid ?? 0);
       } else {
-        paidAmount = r.deposit_status === "completed" ? amount : 0;
+        paidAmount = r.deposit_status === "completed" ? Math.max(due, 0) : 0;
       }
-      let receivable = Math.max(amount - paidAmount, 0);
+      let receivable = isMinus ? 0 : Math.max(due - paidAmount, 0);
 
-      // 입금상태(신규 거래 기준 재계산) — legacy completed 라도 거래가 있으면 거래 기준을 우선(§13).
-      let status: "scheduled" | "partial" | "completed" | "review";
-      if (paidAmount <= 0) status = "scheduled";
-      else if (paidAmount < amount) status = "partial";
+      // 입금상태(신규 거래 기준 재계산) — legacy completed 라도 거래가 있으면 거래 기준을 우선(§13). 마이너스 행 = 'minus'(마이너스 발행).
+      let status: "scheduled" | "partial" | "completed" | "review" | "minus";
+      if (isMinus) status = "minus";
+      else if (paidAmount <= 0) status = "scheduled";
+      else if (paidAmount < due) status = "partial";
       else status = "completed";
       if (fxs) { const k = fxKrw(amount, fxs); paidAmount = k.paid; receivable = k.receivable; status = k.status; }
 
@@ -262,6 +271,7 @@ export type SalePayRow = {
   id: number; project_id: number; sequence: number; amount: string | null; payment_method: string | null;
   issue_date: string | null; expected_date: string | null; paid_date: string | null;
   deposit_status: string | null; deposit_confirmed: boolean | null; billing_company_name: string | null;
+  deposit_item?: string | null;   // 마이너스 발행 판정(lib/minusIssue)
   tx_cnt: string | null; tx_paid: string | null; last_paid_date: string | null;
   fx?: FxSummary | null;   // 외화 청구회차 요약(라우트에서 loadFxSummaries 로 채움)
 };
@@ -273,13 +283,16 @@ export function summarizeSaleCollection(b: SaleBaseRow, rows: SalePayRow[], toda
   const saleTotal = Number(b.price ?? 0);
   let billed = 0, paidTotal = 0, unissued = 0, issuedAwaiting = 0, invoiceTarget = 0, overdue = false;
   let lastPaidDate: string | null = null, nextExpectedDate: string | null = null;
+  const minusBy = minusSumBySource(rows);   // 마이너스 발행 — 원청구회차 수금 기준 청구액에 반영(lib/minusIssue)
   const installments = rows.map((r) => {
     const amount = Number(r.amount ?? 0);
     const txCnt = Number(r.tx_cnt ?? 0);
-    let paid = txCnt > 0 ? Number(r.tx_paid ?? 0)
-      : (r.deposit_status === "completed" && r.deposit_confirmed === true && !!r.paid_date ? amount : 0);
-    let rowRecv = Math.max(amount - paid, 0);
-    let status: "scheduled" | "partial" | "completed" | "review" = paid <= 0 ? "scheduled" : paid < amount ? "partial" : "completed";
+    const isMinus = isMinusItem(r.deposit_item);
+    const due = amount + (minusBy.get(r.id) ?? 0);
+    let paid = isMinus ? 0 : txCnt > 0 ? Number(r.tx_paid ?? 0)
+      : (r.deposit_status === "completed" && r.deposit_confirmed === true && !!r.paid_date ? Math.max(due, 0) : 0);
+    let rowRecv = isMinus ? 0 : Math.max(due - paid, 0);
+    let status: "scheduled" | "partial" | "completed" | "review" | "minus" = isMinus ? "minus" : paid <= 0 ? "scheduled" : paid < due ? "partial" : "completed";
     if (r.fx) { const k = fxKrw(amount, r.fx); paid = k.paid; rowRecv = k.receivable; status = k.status; }
     const paidDate = r.last_paid_date ?? (txCnt === 0 && paid > 0 ? r.paid_date : null);
     billed += amount; paidTotal += paid;
@@ -348,7 +361,7 @@ router.get("/admin/collections/sales", ...adminGuard, requireStaffPermission(["p
     const pids = base.rows.map((r) => r.project_id);
     const pays = pids.length ? await db.execute<SalePayRow>(sql`
       SELECT pp.id, pp.project_id, pp.sequence, pp.amount, pp.payment_method, pp.issue_date, pp.expected_date, pp.paid_date,
-        pp.deposit_status, pp.deposit_confirmed, COALESCE(pp.billing_company_name_snapshot, c.name) AS billing_company_name,
+        pp.deposit_status, pp.deposit_confirmed, pp.deposit_item, COALESCE(pp.billing_company_name_snapshot, c.name) AS billing_company_name,
         COALESCE(tx.tx_cnt, 0) AS tx_cnt, COALESCE(tx.tx_paid, 0) AS tx_paid, tx.last_paid_date
       FROM project_payments pp
       LEFT JOIN companies c ON c.id = pp.billing_company_id

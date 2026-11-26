@@ -154,18 +154,23 @@ router.get("/admin/customer-management", ...viewGuard, async (req, res) => {
       for (const r of await rowsOf(sql`
         SELECT r.company_id, count(*)::int AS rows,
                coalesce(sum(r.amount), 0) AS billed, coalesce(sum(r.paid_row), 0) AS paid,
-               coalesce(sum(greatest(r.amount - r.paid_row, 0)), 0) AS receivable,
+               coalesce(sum(greatest(r.due - r.paid_row, 0)), 0) AS receivable,
                max(r.last_paid)::text AS last_paid
         FROM (
+          -- 마이너스 발행(lib/minusIssue): due = 청구금액 + 연결된 마이너스 합계(원청구회차). 마이너스 행은 입금 0·미수 0(due 음수 → greatest 0).
           SELECT coalesce(pp.billing_company_id, p.company_id) AS company_id, coalesce(pp.amount, 0) AS amount,
+            coalesce(pp.amount, 0) + coalesce(mn.minus_sum, 0) AS due,
             CASE WHEN pp.billing_currency IS NOT NULL AND upper(pp.billing_currency) <> 'KRW' THEN 0   -- 외화 청구회차: 아래 외화 기준으로 보정
+                 WHEN coalesce(pp.deposit_item, '') LIKE '마이너스발행%' THEN 0
                  WHEN coalesce(tx.tx_cnt, 0) > 0 THEN coalesce(tx.tx_paid, 0)
-                 WHEN pp.deposit_status = 'completed' THEN coalesce(pp.amount, 0) ELSE 0 END AS paid_row,
+                 WHEN pp.deposit_status = 'completed' THEN greatest(coalesce(pp.amount, 0) + coalesce(mn.minus_sum, 0), 0) ELSE 0 END AS paid_row,
             coalesce(tx.last_paid, CASE WHEN coalesce(tx.tx_cnt, 0) = 0 THEN pp.paid_date END) AS last_paid
           FROM project_payments pp
           JOIN projects p ON p.id = pp.project_id
           LEFT JOIN (SELECT project_payment_id, count(*) AS tx_cnt, coalesce(sum(customer_paid_amount), 0) AS tx_paid, max(paid_date) FILTER (WHERE coalesce(txn_type, '') <> 'refund') AS last_paid
                      FROM payment_transactions GROUP BY project_payment_id) tx ON tx.project_payment_id = pp.id
+          LEFT JOIN (SELECT substring(m.deposit_item from '^마이너스발행:([0-9]+)$')::int AS src_id, sum(m.amount) AS minus_sum
+                     FROM project_payments m WHERE m.deposit_item ~ '^마이너스발행:[0-9]+$' GROUP BY 1) mn ON mn.src_id = pp.id
           WHERE coalesce(pp.billing_company_id, p.company_id) IN (${ids(pageIds)})
             AND NOT EXISTS (SELECT 1 FROM quotes q2 WHERE q2.project_id = pp.project_id AND q2.is_current = true
                               AND q2.deleted_at IS NULL AND q2.quote_type IN ('b2c_prepaid', 'prepaid_deduction'))

@@ -56,6 +56,7 @@ const STATUS_STYLE: Record<SaleCollectionRow['status'], { bg: string; color: str
 const INST_STYLE: Record<string, { bg: string; color: string }> = {
   completed: { bg: '#dcfce7', color: '#15803d' }, partial: { bg: '#fef3c7', color: '#b45309' }, scheduled: { bg: '#f3f4f6', color: '#6b7280' },
   review: { bg: '#ffedd5', color: '#c2410c' },
+  minus: { bg: '#fee2e2', color: '#b91c1c' },   // 마이너스 발행(청구 감액)
 };
 
 const th: React.CSSProperties = {

@@ -13,6 +13,7 @@ import { requireAuth, requireRole, requireRolePermission } from "../middlewares/
 import { logEvent } from "../lib/logEvent";
 import { fetchCompanyName, fetchContactName } from "../lib/nameSnapshot";
 import { summarizeFxRow, isForeignCurrency, toScaled, fromScaled, krwOf, FX_CURRENCIES, loadFxSummaries } from "../services/fxBilling";
+import { isMinusItem, minusSourceOf } from "../lib/minusIssue";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -221,9 +222,10 @@ const rowSchema = z.object({
   paidDate: z.string().nullable().optional(),       // 입금일
   paymentType: z.enum(PAYMENT_TYPE).nullable().optional(),
   paymentMethod: z.string().max(100).nullable().optional(),   // 결제방법 — 자유 입력(text). 기본 4개 라벨 또는 사용자 직접입력.
-  supplyAmount: z.coerce.number().min(0).nullable().optional(),
-  vatAmount: z.coerce.number().min(0).nullable().optional(),
-  amount: z.coerce.number().min(0).nullable().optional(),
+  // 금액 — 음수는 마이너스 발행 행(deposit_item '마이너스발행:{원청구회차 id}')만 허용(아래 저장 검증). 그 외 행은 0 이상.
+  supplyAmount: z.coerce.number().nullable().optional(),
+  vatAmount: z.coerce.number().nullable().optional(),
+  amount: z.coerce.number().nullable().optional(),
   depositStatus: z.enum(DEPOSIT_STATUS).nullable().optional(),
   depositConfirmed: z.boolean().nullable().optional(),         // 입금확인 — 체크 시 입금일=입금예정일·상태 입금완료
   paymentCategory: z.string().max(50).nullable().optional(),   // 결제유형: 일반결제 · 수출바우처(자유 확장)
@@ -281,6 +283,53 @@ router.put("/admin/projects/:id/payment-records", ...adminGuard, requireRolePerm
   for (const [i, r] of rows.entries()) {
     const e = fxBillingError(r);
     if (e) { res.status(400).json({ error: `${i + 1}회차: ${e}` }); return; }
+  }
+  // ── 마이너스 발행(lib/minusIssue) 검증 — 저장 후 최종 청구회차(전송 행 + 전송·삭제되지 않은 기존 행) 기준 ──
+  //  · 마이너스 행: 결제구분 기타 · 청구금액 음수(공급가·부가세 0 이하) · 발행일 필수 · 원화 · 입금 등록 불가.
+  //  · 원청구회차: 같은 판매의 저장된 원화 일반 회차(마이너스 아님, 청구금액 > 0), 삭제 불가(연결 보호).
+  //  · 차감 한도: 원청구회차별 마이너스 합계 ≤ 원청구금액. 그 외 행은 금액 음수 불가.
+  {
+    const curOf = (c?: string | null) => { const v = (c ?? "").trim().toUpperCase(); return v && v !== "KRW" ? v : null; };
+    const sentIds = new Set(rows.map(r => r.id).filter((v): v is number => v != null));
+    type FinalRow = { label: string; id: number | null; depositItem: unknown; amount: number; cur: string | null };
+    const finalRows: FinalRow[] = [
+      ...rows.map((r, i) => ({ label: `${i + 1}회차`, id: r.id ?? null, depositItem: r.depositItem, amount: Number(r.amount ?? 0),
+        cur: curOf(r.billingCurrency !== undefined ? r.billingCurrency : (r.id != null ? beforeById.get(r.id)?.billingCurrency : null)) })),
+      ...before.filter(b => !sentIds.has(b.id) && !deletedIds.includes(b.id))
+        .map(b => ({ label: `기존 청구회차(id ${b.id})`, id: b.id, depositItem: b.depositItem, amount: Number(b.amount ?? 0), cur: curOf(b.billingCurrency) })),
+    ];
+    const finalById = new Map(finalRows.filter(f => f.id != null).map(f => [f.id as number, f]));
+    for (const [i, r] of rows.entries()) {
+      const L = `${i + 1}회차`;
+      const neg = [r.supplyAmount, r.vatAmount, r.amount].some(v => Number(v ?? 0) < 0);
+      if (!isMinusItem(r.depositItem)) {
+        if (neg) { res.status(400).json({ error: `${L}: 청구금액은 음수로 저장할 수 없습니다(마이너스 발행만 음수 입력).` }); return; }
+        continue;
+      }
+      if (minusSourceOf(r.depositItem) == null) { res.status(400).json({ error: `${L}: 마이너스 발행의 원청구회차를 선택하세요(저장된 회차만 선택할 수 있습니다).` }); return; }
+      if (r.paymentType !== "other") { res.status(400).json({ error: `${L}: 마이너스 발행 결제구분 형식 오류.` }); return; }
+      if (!(Number(r.amount ?? 0) < 0) || Number(r.supplyAmount ?? 0) > 0 || Number(r.vatAmount ?? 0) > 0) { res.status(400).json({ error: `${L}: 마이너스 발행은 청구금액을 음수로 입력하세요(공급가·부가세 0 이하).` }); return; }
+      if (!r.issueDate) { res.status(400).json({ error: `${L}: 마이너스 발행은 발행일이 필요합니다.` }); return; }
+      if (finalRows[i].cur) { res.status(400).json({ error: `${L}: 마이너스 발행은 원화 청구회차만 가능합니다.` }); return; }
+      if (r.firstDeposit) { res.status(400).json({ error: `${L}: 마이너스 발행 회차에는 입금을 등록할 수 없습니다.` }); return; }
+      if (r.id != null && (txByPay.get(r.id)?.length ?? 0) > 0) { res.status(409).json({ error: `${L}: 입금내역이 있는 청구회차는 마이너스 발행으로 바꿀 수 없습니다.` }); return; }
+    }
+    const minusBySrc = new Map<number, number>();
+    for (const f of finalRows) {
+      if (!isMinusItem(f.depositItem)) continue;
+      const src = minusSourceOf(f.depositItem);
+      const s0 = src != null ? finalById.get(src) : undefined;
+      if (src == null || !s0) {
+        const del = src != null && deletedIds.includes(src);
+        res.status(409).json({ error: del ? `마이너스 발행(${f.label})이 연결된 원청구회차는 삭제할 수 없습니다. 마이너스 발행을 먼저 삭제하세요.` : `${f.label}: 마이너스 발행의 원청구회차가 이 판매에 없습니다.` }); return;
+      }
+      if (isMinusItem(s0.depositItem) || s0.cur || !(s0.amount > 0)) { res.status(400).json({ error: `${f.label}: 원청구회차는 청구금액이 있는 원화 일반 회차여야 합니다(${s0.label}).` }); return; }
+      minusBySrc.set(src, (minusBySrc.get(src) ?? 0) + Math.abs(f.amount));
+    }
+    for (const [src, m] of minusBySrc) {
+      const s0 = finalById.get(src)!;
+      if (m > s0.amount + 0.005) { res.status(400).json({ error: `${s0.label}: 마이너스 발행 합계(${m.toLocaleString("ko-KR")}원)가 원청구금액(${s0.amount.toLocaleString("ko-KR")}원)을 넘습니다.` }); return; }
+    }
   }
   // 첫 입금(firstDeposit) 검증 — 중복 생성·다건/환불 회차 덮어쓰기 금지. 외화 청구회차는 수금거래 저장과 같은 환산 규칙.
   const normCur = (c?: string | null) => { const v = (c ?? "").trim().toUpperCase(); return v && v !== "KRW" ? v : null; };
@@ -343,8 +392,9 @@ router.put("/admin/projects/:id/payment-records", ...adminGuard, requireRolePerm
         //  · 미입금으로 정규화 시 completed 는 scheduled 로 강등하고, 그 외 상태(scheduled/partial/unpaid)는 유지한다.
         const paidDateVal = r.paidDate || null;
         //  · 입금확인 해제(firstDeposit=null) — 회차의 입금을 지우므로 회차도 미입금(입금거래 없는 '기존 확정' 상태로 남지 않게).
-        const isPaid = r.firstDeposit !== null && r.depositConfirmed === true && r.depositStatus === "completed" && paidDateVal !== null;
-        const reconciledStatus: (typeof DEPOSIT_STATUS)[number] = isPaid
+        const minusRow = isMinusItem(r.depositItem);   // 마이너스 발행 — 입금 없음(입금일·입금확인·입금예정일 저장 안 함)
+        const isPaid = !minusRow && r.firstDeposit !== null && r.depositConfirmed === true && r.depositStatus === "completed" && paidDateVal !== null;
+        const reconciledStatus: (typeof DEPOSIT_STATUS)[number] = minusRow ? "scheduled" : isPaid
           ? "completed"
           : (r.depositStatus === "completed" ? "scheduled" : (r.depositStatus ?? "scheduled"));
         // 청구업체·담당자 표시명 Snapshot — 회차별 저장값 우선(§청구업체 독립 저장).
@@ -357,7 +407,7 @@ router.put("/admin/projects/:id/payment-records", ...adminGuard, requireRolePerm
         const values = {
           sequence: seq++,                         // 회차 자동번호(프로젝트별, 순서 기준)
           issueDate: r.issueDate || null,
-          expectedDate: r.expectedDate || null,
+          expectedDate: minusRow ? null : (r.expectedDate || null),
           paidDate: isPaid ? paidDateVal : null,
           paymentType: r.paymentType ?? null,
           paymentMethod: r.paymentMethod ?? null,
@@ -439,6 +489,8 @@ router.put("/admin/project-payments/:paymentId/transactions", ...adminGuard, req
   const [pay] = await db.select().from(projectPaymentsTable).where(eq(projectPaymentsTable.id, paymentId));
   if (!pay) { res.status(404).json({ error: "청구행을 찾을 수 없습니다." }); return; }
   const txBefore = await db.select().from(paymentTransactionsTable).where(eq(paymentTransactionsTable.projectPaymentId, paymentId));
+  // 마이너스 발행 회차 — 입금·환불·입금예정 등록 불가(청구 감액 기록일 뿐 입금과 무관)
+  if (isMinusItem(pay.depositItem) && rows.length) { res.status(409).json({ error: "마이너스 발행 회차에는 입금내역을 등록할 수 없습니다." }); return; }
 
   // ── 입금 환불(txnType='refund') — 원화 청구회차만. 순입금액(입금 − 환불)을 넘는 환불은 차단 ──
   //  · 입금거래 없이 기존 방식으로 입금완료 확정된 회차(과거 CRM 전환 입금 등)는 환불 시 그 입금(입금일·금액)을 입금거래 1건으로

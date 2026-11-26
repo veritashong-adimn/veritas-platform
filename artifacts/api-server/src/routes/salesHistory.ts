@@ -18,6 +18,7 @@ import { requireAuth, requireRole } from "../middlewares/auth";
 import { buildFilteredSalesProjectList } from "./admin";
 import { loadSaleIdentities, saleIdentityMatches, type SaleIdentity } from "../services/saleIdentity";
 import { loadFxSummaries, fmtForeign, fmtForeignWithKrw, type FxSummary } from "../services/fxBilling";
+import { minusSumBySource } from "../lib/minusIssue";
 import { parseSaleDateFilter, legacyPeriodCond } from "../services/saleDateSearch";
 
 const router: IRouter = Router();
@@ -242,6 +243,7 @@ export function summarizeBillingForList(saleTotal: number | null, pays: any[], t
   const issues = [...new Set(pays.map(p => toDateStr(p.issue_date)).filter((d): d is string => !!d))].sort();
   const deposits: { date: string | null; bank: string | null; amount: number; label?: string; refund?: boolean }[] = [];
   let fxPaidKrw = 0, fxAny = false;
+  const minusBy = minusSumBySource(pays);   // 마이너스 발행 — 입금거래 없는 입금완료 회차의 입금액 = 청구금액 + 연결된 마이너스(수금관리와 같은 규칙)
   for (const p of pays) {
     const ts = txByPay.get(Number(p.id)) ?? [];
     const fx = fxMap.get(Number(p.id));
@@ -265,7 +267,7 @@ export function summarizeBillingForList(saleTotal: number | null, pays: any[], t
       deposits.push({ date: toDateStr(t.paid_date), bank: (t.bank_account ?? "").trim() || null, amount: Number(t.customer_paid_amount ?? 0),
         ...(card && fee > 0 && t.settled_amount != null ? { label: `${won(Number(t.settled_amount))} (카드수수료 ${won(fee)})` } : {}) });
     }
-    else if (p.deposit_status === "completed" && p.deposit_confirmed === true && p.paid_date) deposits.push({ date: toDateStr(p.paid_date), bank: null, amount: Number(p.amount ?? 0) });
+    else if (p.deposit_status === "completed" && p.deposit_confirmed === true && p.paid_date) deposits.push({ date: toDateStr(p.paid_date), bank: null, amount: Math.max(Number(p.amount ?? 0) + (minusBy.get(Number(p.id)) ?? 0), 0) });
   }
   const paid = deposits.filter(d => d.amount > 0 || d.label).sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
   const paidTotal = paid.reduce((s, d) => s + d.amount, 0) + fxPaidKrw;
@@ -280,7 +282,7 @@ export function summarizeBillingForList(saleTotal: number | null, pays: any[], t
 async function fillBillingInfo(dbx: any, list: SalesHistoryRow[]) {
   if (!list.length) return;
   const ids = sql.join(list.map(r => sql`${Number(r.id)}`), sql`, `);
-  const pays = (await dbx.execute(sql`SELECT id, project_id, sequence, issue_date::text, amount, paid_date::text, deposit_status, deposit_confirmed
+  const pays = (await dbx.execute(sql`SELECT id, project_id, sequence, issue_date::text, amount, paid_date::text, deposit_status, deposit_confirmed, deposit_item
     FROM project_payments WHERE project_id IN (${ids}) ORDER BY project_id, sequence, id`)).rows as any[];
   const fxMap = await loadFxSummaries(dbx, pays.map(p => Number(p.id)));
   const txns = pays.length ? (await dbx.execute(sql`SELECT t.project_payment_id, t.paid_date::text, t.bank_account, t.customer_paid_amount, t.settled_amount, t.fee_amount, t.method, t.txn_type, t.currency, t.foreign_amount, t.fx_rate, t.krw_amount

@@ -22,7 +22,7 @@ export interface CollectionExportRow {
   amount: number;
   paidAmount: number | null;         // 과거 CRM '확인 필요' → null(blank)
   receivable: number | null;
-  status: 'scheduled' | 'partial' | 'completed' | 'review';
+  status: 'scheduled' | 'partial' | 'completed' | 'review' | 'minus';
   source?: 'current' | 'legacy';
   reviewReason?: string | null;
   overdue: boolean;
@@ -35,7 +35,7 @@ export interface CollectionExportRow {
 
 // 입금상태 라벨 — 수금현황 화면(STATUS_META)과 동일. 미지 값은 원본 그대로.
 const STATUS_LABEL: Record<string, string> = {
-  scheduled: '입금예정', partial: '부분입금', completed: '입금완료', review: '확인 필요',
+  scheduled: '입금예정', partial: '부분입금', completed: '입금완료', review: '확인 필요', minus: '마이너스 발행',
 };
 const statusLabel = (r: CollectionExportRow) => {
   const base = STATUS_LABEL[r.status] ?? r.status;
@@ -111,7 +111,7 @@ export interface SaleCollectionExportRow {
   status: 'unpaid' | 'partial' | 'completed' | 'review';
   overpaid: boolean;
   overpaidAmount: number;
-  installments: { sequence: number; amount: number; status: 'scheduled' | 'partial' | 'completed' | 'review'; fx?: FxSummary | null }[];
+  installments: { sequence: number; amount: number; status: 'scheduled' | 'partial' | 'completed' | 'review' | 'minus'; fx?: FxSummary | null }[];
   unbilledAmount: number | null;
   unissuedAmount: number | null;
   issuedAwaitingAmount: number | null;
@@ -124,7 +124,7 @@ export interface SaleCollectionExportRow {
 export const SALE_STATUS_LABEL: Record<SaleCollectionExportRow['status'], string> = {
   unpaid: '미입금', partial: '부분입금', completed: '입금완료', review: '확인 필요',
 };
-export const INSTALLMENT_STATUS_LABEL: Record<string, string> = { scheduled: '대기', partial: '부분', completed: '완료', review: '확인 필요' };
+export const INSTALLMENT_STATUS_LABEL: Record<string, string> = { scheduled: '대기', partial: '부분', completed: '완료', review: '확인 필요', minus: '마이너스 발행' };
 /** 판매건의 외화 청구회차 통화별 요약 — "EUR 청구 5,161.34 · 수금 3,000.00 · 미수 2,161.34 · 원화 환산 입금 4,500,000원"(통화 간 합산 없음) */
 export const saleFxText = (r: Pick<SaleCollectionExportRow, 'installments'>) => {
   const by = new Map<string, FxSummary[]>();

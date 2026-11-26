@@ -37,7 +37,8 @@ async function loadState(quoteId: number) {
   }).from(projectPaymentsTable)
     .where(and(eq(projectPaymentsTable.projectId, q.projectId), isNotNull(projectPaymentsTable.issueDate)))
     .orderBy(asc(projectPaymentsTable.sequence), asc(projectPaymentsTable.id));
-  const taxRounds = rounds.filter(r => isTaxInvoiceMethod(r.paymentMethod));
+  // 마이너스 발행(청구금액 음수) 회차는 거래명세서 거래일 후보에서 제외 — 원 발행 회차만
+  const taxRounds = rounds.filter(r => isTaxInvoiceMethod(r.paymentMethod) && Number(r.amount ?? 0) >= 0);
   const suggestion = saved
     ? { transactionDate: saved.transactionDate, dateSource: saved.dateSource, linkedPaymentId: saved.linkedPaymentId, needsRoundSelection: false, basis: "saved" as const }
     : taxRounds.length === 1

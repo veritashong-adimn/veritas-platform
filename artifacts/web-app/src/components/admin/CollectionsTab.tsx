@@ -40,7 +40,7 @@ type CollectionRow = {
   amount: number;
   paidAmount: number | null;       // 과거 CRM '확인 필요' → null(미확정)
   receivable: number | null;
-  status: "scheduled" | "partial" | "completed" | "review";
+  status: "scheduled" | "partial" | "completed" | "review" | "minus";   // minus = 마이너스 발행(청구 감액 — 입금·미수 없음)
   overdue: boolean;
   depositStatus: string | null;
   isLegacyFallback: boolean;
@@ -84,6 +84,7 @@ const STATUS_META: Record<CollectionRow["status"], { label: string; bg: string; 
   partial: { label: "부분입금", bg: "#fef3c7", color: "#b45309" },
   completed: { label: "입금완료", bg: "#dcfce7", color: "#15803d" },
   review: { label: "확인 필요", bg: "#ede9fe", color: "#6d28d9" },
+  minus: { label: "마이너스 발행", bg: "#fee2e2", color: "#b91c1c" },
 };
 const wonOrDash = (n: number | null) => (n == null ? "-" : formatWon(n));
 const sortDateOf = (r: CollectionRow) => (r.source === "legacy" ? r.saleDate : (r.issueDate ?? r.expectedDate ?? r.lastPaidDate)) ?? "";
