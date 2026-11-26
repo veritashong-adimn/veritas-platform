@@ -30,6 +30,7 @@ import { splitPayAmount, type PayeeType } from "../lib/payoutAmount";
 import { payStatusOf, isAmountMissing, PAY_STATUS_LABEL, emptyStatusCounts, type PayStatusKey } from "../lib/payDisplayStatus";
 import { isConfirmedFreeService } from "../lib/payoutDateDecisions";
 import { loadSaleIdentities } from "../services/saleIdentity";
+import { remitGroupOf, type RemitRegistry } from "../lib/payeeRemitGroup";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -701,6 +702,20 @@ router.get("/admin/payout-unified/payees", ...adminGuard, requireStaffPermission
       if (!g.email && it.masterEmail) g.email = it.masterEmail; if (!g.phone && (it.masterPhone || it.originalPhone)) g.phone = it.masterPhone ?? it.originalPhone;
       groups.set(it.masterKey, g);
     }
+    // 지급대상별 요약 Excel 정렬 그룹(lib/payeeRemitGroup) — 명부 지급방식·통화·계좌 + 수행정보 거주 구분·세금처리·지급통화. 표시·정렬 전용(추가 필드).
+    const regUids = [...new Set([...groups.values()].map(g => g.matchedUserId).filter((v: unknown) => v != null))] as number[];
+    const regBy = new Map<number, RemitRegistry>();
+    if (regUids.length) for (const r of (await db.execute(sql`SELECT translator_id, payment_method, currency, base_currency,
+        (coalesce(bank_account_enc, bank_account, '') <> '') AS kr_acct,
+        (coalesce(iban, '') <> '' OR coalesce(swift_code, '') <> '' OR coalesce(paypal_email, '') <> '') AS os_acct
+      FROM translator_sensitive WHERE translator_id IN (${sql.join(regUids.map(u => sql`${u}`), sql`, `)})`)).rows as any[])
+      regBy.set(Number(r.translator_id), { paymentMethod: r.payment_method ?? null, currency: r.currency ?? null, baseCurrency: r.base_currency ?? null, domesticAccount: !!r.kr_acct, overseasAccount: !!r.os_acct });
+    const curIds = items.filter(i => i.source === "current").map(i => i.id);
+    const resBy = new Map<number, string | null>();
+    if (curIds.length) for (const r of (await db.execute(sql`SELECT id, residency_type::text AS rt FROM performance_assignments WHERE id IN (${sql.join(curIds.map(v => sql`${v}`), sql`, `)})`)).rows as any[])
+      resBy.set(Number(r.id), r.rt ?? null);
+    const rowsByKey = new Map<string, any[]>();
+    for (const it of items as any[]) { const a = rowsByKey.get(it.masterKey) ?? []; a.push({ payCurrency: it.payCurrency, withholdingTreatment: it.withholdingTreatment, residencyType: it.source === "current" ? resBy.get(it.id) ?? null : null }); rowsByKey.set(it.masterKey, a); }
     const payees = [...groups.values()].map(g => ({
       masterKey: g.masterKey, name: g.name, confirmed: g.confirmed, matchStatus: g.matchStatus, matchedUserId: g.matchedUserId,
       email: g.email, phone: g.phone, count: g.count,
@@ -712,6 +727,8 @@ router.get("/admin/payout-unified/payees", ...adminGuard, requireStaffPermission
       // 외화 지급 합계(통화별, 원화 합계와 별도) — 외화 지급 건이 없으면 빈 배열
       foreignTotals: [...g.foreign.values()].sort((a: any, b: any) => a.currency.localeCompare(b.currency)),
       payStatusCounts: g.payStatusCounts,   // 화면 공통 지급상태별 건수(표시 전용)
+      // 지급대상별 요약 Excel 정렬 그룹(1 국내 · 2 해외·국내송금 · 3 해외·해외송금 · 4 외주업체) + 판정 근거 — 추가 필드(화면 순서 불변)
+      ...(() => { const r = remitGroupOf(g.payeeType, rowsByKey.get(g.masterKey) ?? [], g.matchedUserId != null ? regBy.get(Number(g.matchedUserId)) ?? null : null); return { remitGroup: r.group, remitGroupReason: r.reason }; })(),
     })).sort((a, b) => a.name.localeCompare(b.name, "ko"));
 
     // 회차 요약(§4) — 선택 회차 기준.

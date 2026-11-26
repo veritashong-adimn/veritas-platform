@@ -56,6 +56,8 @@ export type PayeeGroup = {
   scheduledCount?: number;
   foreignTotals?: ForeignTotal[];
   payStatusCounts?: Record<string, number>;
+  // Excel 정렬 그룹(서버 lib/payeeRemitGroup) — 1 국내 · 2 해외·국내송금 · 3 해외·해외송금 · 4 외주업체. 화면 순서에는 쓰지 않음.
+  remitGroup?: number; remitGroupReason?: string;
 };
 // 지급상태 — 실제 '지급' 여부만(검증상태와 분리).
 export const STATUS_META: Record<string, { label: string; bg: string; fg: string }> = {
@@ -219,7 +221,9 @@ function PayeeTable({ payees, items, payoutDate, loading, onToast, onPick }: { p
   const tot = { count: sumBy(payees, g => g.count), pre: sumBy(payees, g => g.pretaxTotal), wh: sumBy(payees, g => g.withholdingImplied), vat: sumBy(payees, g => g.vatTotal), pay: sumBy(payees, g => g.posttaxTotal) };
   const exportAll = () => {
     type R = { name: string; type: string; langs: string; email: string; phone: string; count: number; pre: number; wh: number; vat: number; pay: number; fx: string; st: string };
-    const rows: R[] = payees.map(g => ({ name: g.name, type: g.payeeType === 'vendor' ? '외주업체' : '개인', langs: g.languages.join(', '), email: g.email ?? '', phone: g.phone ?? '', count: g.count,
+    // 행 순서(Excel만) — 지급 그룹(국내 → 해외·국내송금 → 해외·해외송금 → 외주업체) 후 그룹 안 가나다순. 항목·금액·합계 불변, 화면 목록 순서 불변.
+    const ordered = [...payees].sort((a, b) => ((a.remitGroup ?? 1) - (b.remitGroup ?? 1)) || a.name.localeCompare(b.name, 'ko'));
+    const rows: R[] = ordered.map(g => ({ name: g.name, type: g.payeeType === 'vendor' ? '외주업체' : '개인', langs: g.languages.join(', '), email: g.email ?? '', phone: g.phone ?? '', count: g.count,
       pre: g.pretaxTotal, wh: g.withholdingImplied, vat: num(g.vatTotal), pay: g.posttaxTotal, fx: fxSummaryText(g.foreignTotals ?? []), st: statusText(g.payStatusCounts) }));
     rows.push({ name: `합계 (${payees.length}명)`, type: '', langs: '', email: '', phone: '', count: tot.count, pre: tot.pre, wh: tot.wh, vat: tot.vat, pay: tot.pay, fx: fxSummaryText(fxAll), st: '' });
     exportDataset<R>({ filename: `지급대상별요약_${payoutDate ?? '지급일미확인'}.xlsx`, sheetName: '지급대상별 요약', rows, columns: [
