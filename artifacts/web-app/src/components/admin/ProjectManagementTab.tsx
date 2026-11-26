@@ -14,6 +14,7 @@ import { UnifiedSalesHistoryView } from './UnifiedSalesHistoryView';
 import { DateField } from './DatePickerShared';
 import { SaleDateSearchBar, EMPTY_SALE_PERIOD, appendSalePeriod, hasSalePeriod, type SalePeriod } from './SaleDateSearchBar';
 import './readTableView.css';
+import { Pagination } from '../ui/Paginator';
 
 // ─── 인라인 스타일 ─────────────────────────────────────────────────────────────
 const inputStyle: React.CSSProperties = {
@@ -31,7 +32,6 @@ const tableTd: React.CSSProperties = {
   borderBottom: "1px solid #edf0f3", verticalAlign: "middle",
 };
 
-const PROJECT_PAGE_SIZE = 20;
 
 // 배정 전(취소·배정 가능) 판매 상태 — matched/in_progress/completed/cancelled 은 불가
 const SALE_ACTIONABLE = new Set(["approved", "paid"]);
@@ -238,6 +238,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
   const goToDetail = (id: number) => (onOpenSalesDetail ? onOpenSalesDetail(id) : openDetail(id));
   // 자료범위(C-4C): 전체자료(Current+Legacy) / 현재(기존 경로 그대로) / 과거 CRM(Legacy only).
   const [salesRange, setSalesRange] = useState<'all' | 'current' | 'legacy'>('all');
+  const [unifiedTotal, setUnifiedTotal] = useState<number | null>(null);   // 전체자료·과거 CRM 조회 전체 건수(본문 제목용)
 
   // ── 프로젝트 목록 ──────────────────────────────────────────────────────────
   const [projects, setProjects] = useState<AdminProject[]>([]);
@@ -263,6 +264,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
   const salePeriodMounted = useRef(false);
   const [assignedAdminFilter, setAssignedAdminFilter] = useState<string>("all");
   const [projectPage, setProjectPage] = useState(1);
+  const [projectPageSize, setProjectPageSize] = useState(50);   // 목록 공통 기본 50건(공통 Pagination 10/20/50/100/200)
   const [projectFinancialFilter, setProjectFinancialFilter] = useState<string>("all");
   const [projectQuickFilter, setProjectQuickFilter] = useState<string>("all");
   const [projectBillingTypeFilter, setProjectBillingTypeFilter] = useState<string>("all");
@@ -636,7 +638,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
     return next;
   });
   const handleAssignSelected = () => { if (canAssignSelected) goToDetail(selectedProjects[0].id); };
-  useEffect(() => { setSelectedIds(new Set()); }, [projectPage]); // 페이지 이동 시 선택 초기화
+  useEffect(() => { setSelectedIds(new Set()); }, [projectPage, projectPageSize]); // 페이지·페이지당 이동 시 선택 초기화
 
   // ── JSX ──────────────────────────────────────────────────────────────────
   return (
@@ -870,6 +872,10 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
         </div>
       )}
 
+      {/* 본문 제목 — 목록 공통 '○○ 목록 (건수)'. 건수 = 현재 자료범위의 조회 결과 전체 */}
+      <h2 data-testid="sales-list-title" style={{ margin: "0 0 14px", fontSize: 16, fontWeight: 800, color: "#111827" }}>
+        판매 목록{(() => { const n = salesRange === "current" ? projects.length : unifiedTotal; return n != null ? ` (${n.toLocaleString()})` : ""; })()}
+      </h2>
       {/* ── 자료범위 (C-4C): 현재 + 과거 CRM 통합조회 ── */}
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
         {([["all", "전체자료"], ["current", "현재"], ["legacy", "과거 CRM"]] as [typeof salesRange, string][]).map(([v, l]) => (
@@ -885,7 +891,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
         <UnifiedSalesHistoryView
           authHeaders={authHeaders} setToast={setToast} adminUsers={adminUsers}
           range={salesRange} search={projectSearch} returnTick={returnTick}
-          period={salePeriod} onPeriodChange={setSalePeriod}
+          period={salePeriod} onPeriodChange={setSalePeriod} onTotalChange={setUnifiedTotal}
           onOpenSalesDetail={goToDetail}
           onOpenLegacyDetail={(id) => onOpenLegacyDetail?.(id)}
         />
@@ -1054,9 +1060,9 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
             해당 조건의 프로젝트가 없습니다.
           </Card>
         ) : (() => {
-          const totalPages = Math.ceil(projects.length / PROJECT_PAGE_SIZE);
+          const totalPages = Math.max(1, Math.ceil(projects.length / projectPageSize));
           const safePage = Math.min(projectPage, totalPages);
-          const pagedProjects = projects.slice((safePage - 1) * PROJECT_PAGE_SIZE, safePage * PROJECT_PAGE_SIZE);
+          const pagedProjects = projects.slice((safePage - 1) * projectPageSize, safePage * projectPageSize);
           const allSelected = pagedProjects.length > 0 && pagedProjects.every(p => selectedIds.has(p.id));
           const toggleSelectAll = () => setSelectedIds(allSelected ? new Set() : new Set(pagedProjects.map(p => p.id)));
 
@@ -1246,26 +1252,10 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
                 </div>
               </div>
 
-              {/* 페이지네이션 */}
-              {totalPages > 1 && (
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 12 }}>
-                  <button
-                    onClick={() => setProjectPage(p => Math.max(1, p - 1))}
-                    disabled={safePage <= 1}
-                    style={{ background: safePage <= 1 ? "#f3f4f6" : "#fff", border: "1px solid #d1d5db", borderRadius: 8, padding: "6px 14px", fontSize: 13, cursor: safePage <= 1 ? "default" : "pointer", color: safePage <= 1 ? "#9ca3af" : "#374151" }}>
-                    이전
-                  </button>
-                  <span style={{ fontSize: 13, color: "#6b7280" }}>
-                    {safePage} / {totalPages} 페이지
-                    <span style={{ marginLeft: 6, color: "#9ca3af" }}>({projects.length}건)</span>
-                  </span>
-                  <button
-                    onClick={() => setProjectPage(p => Math.min(totalPages, p + 1))}
-                    disabled={safePage >= totalPages}
-                    style={{ background: safePage >= totalPages ? "#f3f4f6" : "#fff", border: "1px solid #d1d5db", borderRadius: 8, padding: "6px 14px", fontSize: 13, cursor: safePage >= totalPages ? "default" : "pointer", color: safePage >= totalPages ? "#9ca3af" : "#374151" }}>
-                    다음
-                  </button>
-                </div>
+              {/* 페이지네이션 — 목록 공통 Pagination(10/20/50/100/200, 기본 50) */}
+              {projects.length > 0 && (
+                <Pagination idPrefix="sales-current" page={safePage} pageSize={projectPageSize} total={projects.length} unit="건"
+                  onPageChange={setProjectPage} onPageSizeChange={(n) => { setProjectPageSize(n); setProjectPage(1); }} />
               )}
             </>
           );

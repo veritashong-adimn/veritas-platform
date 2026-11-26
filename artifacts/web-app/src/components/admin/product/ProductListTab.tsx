@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef, type CSSProperties } from 'react';
 import { api, Product, ProductOption, PRODUCT_TYPES_META } from '../../../lib/constants';
 import { Card, PrimaryBtn, GhostBtn, ClickSelect } from '../../ui';
+import { Pagination } from '../../ui/Paginator';
 import { ProductReviewPanel } from '../ProductReviewPanel';
 import ImportPreviewPanel, {
   type ImportPreviewData,
@@ -17,7 +18,7 @@ import '../readTableView.css';
 import {
   type ProductFormType,
   Section, emptyProductForm, inputStyle, TYPE_COLORS, DEACTIVATION_REASONS,
-  bulkBtnStyle, pageNavBtnStyle,
+  bulkBtnStyle,
 } from './productShared';
 import { stickyBulkBarStyle } from '../bulkListShared';
 
@@ -29,7 +30,6 @@ interface Props {
   onNavigate: (tab: "products" | "product-register" | "product-trash") => void;
 }
 
-const PAGE_SIZE_OPTIONS = [20, 50, 100];
 
 /** 상품목록 — 서버 페이지네이션 + 선택 기반 일괄 관리(수정/활성/비활성/선택삭제). */
 export function ProductListTab({ token, hasPerm, setToast, authHeaders, onNavigate }: Props) {
@@ -70,7 +70,7 @@ export function ProductListTab({ token, hasPerm, setToast, authHeaders, onNaviga
 
   // 페이지네이션
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const [pageSize, setPageSize] = useState(50);   // 목록 공통 기본 50건(공통 Pagination 10/20/50/100/200)
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
 
@@ -317,26 +317,13 @@ export function ProductListTab({ token, hasPerm, setToast, authHeaders, onNaviga
   const bulkBtn = (enabled: boolean, color: string, bg: string, border: string): CSSProperties =>
     bulkBtnStyle(enabled, color, bg, border, { padding: "6px 14px" });
 
-  // 페이지 번호 윈도우 (최대 7개)
-  const pageNumbers = (): number[] => {
-    const maxButtons = 7;
-    if (totalPages <= maxButtons) return Array.from({ length: totalPages }, (_, i) => i + 1);
-    let start = Math.max(1, page - 3);
-    const end = Math.min(totalPages, start + maxButtons - 1);
-    start = Math.max(1, end - maxButtons + 1);
-    return Array.from({ length: end - start + 1 }, (_, i) => start + i);
-  };
-  const rangeStart = total === 0 ? 0 : (page - 1) * pageSize + 1;
-  const rangeEnd = Math.min(page * pageSize, total);
-
-  const navBtn = pageNavBtnStyle;
 
   // 검수 리포트(상품 표준화/품질검수) — 일반 운영 UI 비노출, 코드는 유지(§4). 개발/검수 시에만 노출.
   const SHOW_REVIEW_REPORT = false;
 
   return (
     <>
-      <Section title={canView ? `상품목록 (${total})` : "상품목록"} action={
+      <Section title={canView ? `상품 목록 (${total.toLocaleString()})` : "상품 목록"} action={
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
           {/* 엑셀 다운로드 — 현재 검색/필터 결과 전체 다운로드(§2). Export 로직 무변경. */}
           <button onClick={() => handleProductExcelDownload("export")}
@@ -463,7 +450,7 @@ export function ProductListTab({ token, hasPerm, setToast, authHeaders, onNaviga
             triggerStyle={{ padding: "8px 10px", fontSize: 13, width: "100%" }}
           />
           <select value={filterActiveOnly} onChange={e => { setFilterActiveOnly(e.target.value as "" | "true" | "false"); setPage(1); }}
-            style={{ ...inputStyle, padding: "8px 10px", fontSize: 13, minWidth: 100 }}>
+            style={{ ...inputStyle, padding: "8px 10px", fontSize: 13, minWidth: 100, width: "auto", flex: "0 0 auto" }}>
             <option value="">전체 상태</option>
             <option value="true">✅ 활성만</option>
             <option value="false">🔴 비활성만</option>
@@ -571,38 +558,11 @@ export function ProductListTab({ token, hasPerm, setToast, authHeaders, onNaviga
           </Card>
         )}
 
-        {/* 페이지네이션 */}
+        {/* 페이지네이션 — 목록 공통 Pagination(10/20/50/100/200, 기본 50). 페이지·페이지당 변경 시 선택 초기화는 기존 규칙 그대로.
+            '전체 상태' select 는 공통 inputStyle(width:100%) 때문에 한 줄을 차지해 검색 버튼이 다음 줄로 밀렸음 → width:auto */}
         {canView && total > 0 && (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginTop: 16 }}>
-            <span data-testid="pagination-info" style={{ fontSize: 13, color: "#6b7280" }}>
-              전체 {total}건 중 {rangeStart}–{rangeEnd}건 표시
-              <span style={{ marginLeft: 8, color: "#9ca3af" }}>({total}건 / {totalPages}페이지)</span>
-            </span>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <select value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
-                aria-label="페이지당 표시 수" data-testid="page-size"
-                style={{ ...inputStyle, padding: "6px 8px", fontSize: 12, width: "auto", minWidth: 110 }}>
-                {PAGE_SIZE_OPTIONS.map(n => <option key={n} value={n}>페이지당 {n}건</option>)}
-              </select>
-              <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                <button data-testid="page-prev" disabled={page <= 1}
-                  onClick={() => { if (page > 1) setPage(page - 1); }} style={navBtn(page > 1)}>이전</button>
-                {pageNumbers().map(n => (
-                  <button key={n} data-testid={`page-${n}`} onClick={() => setPage(n)}
-                    style={{
-                      fontSize: 12, minWidth: 32, padding: "6px 10px", borderRadius: 7, cursor: "pointer", fontWeight: n === page ? 700 : 500,
-                      border: `1px solid ${n === page ? "#2563eb" : "#e5e7eb"}`,
-                      background: n === page ? "#2563eb" : "#fff",
-                      color: n === page ? "#fff" : "#374151",
-                    }}>
-                    {n}
-                  </button>
-                ))}
-                <button data-testid="page-next" disabled={page >= totalPages}
-                  onClick={() => { if (page < totalPages) setPage(page + 1); }} style={navBtn(page < totalPages)}>다음</button>
-              </div>
-            </div>
-          </div>
+          <Pagination idPrefix="product" page={page} pageSize={pageSize} total={total} unit="건" disabled={productsLoading}
+            onPageChange={setPage} onPageSizeChange={(n) => { setPageSize(n); setPage(1); }} />
         )}
       </Section>
 

@@ -11,6 +11,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../lib/constants';
 import { formatPhoneDisplay, formatWon } from '../../lib/utils';
+import { formatDisplayDate } from '../../lib/dateFormat';
 import { Card, PrimaryBtn, GhostBtn, confirmDialog } from '../ui';
 import { Pagination } from '../ui/Paginator';
 import { CompanyDetailModal } from './CompanyDetailModal';
@@ -112,7 +113,7 @@ export function CustomerManagementTab({ token, isAdmin, onToast, onOpenProject }
   const [search, setSearch] = useState('');
   const [applied, setApplied] = useState('');
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const [pageSize, setPageSize] = useState(50);   // 목록 공통 기본 50건
   const [data, setData] = useState<ListResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -218,8 +219,8 @@ export function CustomerManagementTab({ token, isAdmin, onToast, onOpenProject }
 
       <div style={{ marginBottom: 32 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: 6 }}>
-          <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#111827' }}>
-            고객 관리 ({(data?.counts.active ?? 0).toLocaleString()})
+          <h2 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: '#111827' }}>
+            고객 목록 ({(data?.counts.active ?? 0).toLocaleString()})
           </h2>
           {mode === 'list' && <div style={{ display: 'flex', gap: 6 }} role="tablist" aria-label="고객 목록 구분">
             {([['active', `활성 고객 ${data ? data.counts.active.toLocaleString() : ''}`], ['excluded', `삭제된 고객 ${data ? data.counts.excluded.toLocaleString() : ''}`]] as const).map(([v, label]) => (
@@ -365,10 +366,10 @@ export function CustomerManagementTab({ token, isAdmin, onToast, onOpenProject }
                           )}
                         </td>
                         <td style={{ ...cellStyle('last', tableTd), whiteSpace: 'nowrap', fontSize: 12 }} data-col="last">
-                          {c.lastTransaction ?? (c.legacyRef?.lastDate ? <span style={{ color: '#9ca3af' }} title="과거 CRM 최근 판매일(참고)">과거 {c.legacyRef.lastDate}</span> : <span style={{ color: '#9ca3af' }}>거래 없음</span>)}
+                          {c.lastTransaction ? (formatDisplayDate(c.lastTransaction) || c.lastTransaction) : (c.legacyRef?.lastDate ? <span style={{ color: '#9ca3af' }} title="과거 CRM 최근 판매일(참고)">과거 {formatDisplayDate(c.legacyRef.lastDate) || c.legacyRef.lastDate}</span> : <span style={{ color: '#9ca3af' }}>거래 없음</span>)}
                           {c.lastTransaction && c.lastPaidAt === c.lastTransaction && <div style={sub}>입금</div>}
                         </td>
-                        {excludedView && <td style={{ ...cellStyle('excludedAt', tableTd), whiteSpace: 'nowrap', fontSize: 12, color: '#6b7280' }} data-col="excludedAt">{c.excludedAt ? String(c.excludedAt).slice(0, 10) : '-'}</td>}
+                        {excludedView && <td style={{ ...cellStyle('excludedAt', tableTd), whiteSpace: 'nowrap', fontSize: 12, color: '#6b7280' }} data-col="excludedAt">{c.excludedAt ? formatDisplayDate(c.excludedAt) || '-' : '-'}</td>}
                         {excludedView && (
                           <td style={{ ...cellStyle('action', tableTd), whiteSpace: 'nowrap' }} data-col="action" onClick={(e) => e.stopPropagation()}>
                             {isAdmin && (

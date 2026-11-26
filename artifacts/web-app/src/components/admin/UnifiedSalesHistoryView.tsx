@@ -26,14 +26,17 @@ type Row = {
 
 // 열 구성(폭 px) — 판매번호·프로젝트명 추가로 표가 넓어지면 기존 표 가로 스크롤(overflowX)을 사용한다.
 const COLUMNS: [string, number][] = [
-  ['날짜', 120], ['판매번호', 136], ['거래처', 160], ['고객 담당자', 96], ['프로젝트명', 190], ['통역/번역', 64],
-  ['상품', 140], ['공급가액', 96], ['부가세', 80], ['합계', 104], ['계산서발행일', 100], ['입금일', 92], ['입금내역', 110], ['담당PM', 80],
+  // 날짜(출처·취소 배지 포함)·입금일은 YYYY.MM.DD 가 잘리지 않는 폭(프로젝트명·상품 폭에서 조정)
+  ['날짜', 148], ['판매번호', 136], ['거래처', 160], ['고객 담당자', 96], ['프로젝트명', 170], ['통역/번역', 64],
+  ['상품', 128], ['공급가액', 96], ['부가세', 80], ['합계', 104], ['계산서발행일', 104], ['입금일', 104], ['입금내역', 110], ['담당PM', 80],
 ];
 const TABLE_MIN_WIDTH = COLUMNS.reduce((s, [, w]) => s + w, 0);
 
 // 금액 칸 — 우측 정렬. 미확인(부가세 유형 확인 필요·원본 구분 없음)은 '—'(임의 계산 없음)
 const AMOUNT_COLS = new Set(['공급가액', '부가세', '합계']);
 const amt = (v: number | null | undefined) => (v == null ? '—' : Math.round(v).toLocaleString());
+// 날짜 표시 — 목록 공통 YYYY.MM.DD(여러 날짜가 이어진 문자열도 각각 변환, 그 외 문자는 그대로)
+const dotDate = (v: string | null | undefined) => (v ? String(v).replace(/(\d{4})-(\d{2})-(\d{2})/g, '$1.$2.$3') : v);
 const vatTitle = (r: Row) => r.vatMode === 'unknown' ? '부가세 유형 확인 필요 — 공급가액·부가세를 임의로 계산하지 않습니다'
   : r.vatMode === 'zero_rate' ? '영세율(부가세 0원)' : r.vatMode === 'exempt' ? '면세(부가세 0원)' : undefined;
 
@@ -54,7 +57,9 @@ type Result = { rows: Row[]; pagination: { page: number; pageSize: number; total
 const PAGE_SIZE = 50;
 const WORKFLOW_KR: Record<string, string> = { created: '접수', quoted: '견적', approved: '확정', paid: '입금', matched: '배정', in_progress: '진행중', completed: '완료', cancelled: '취소' };
 
-export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, range, search, onOpenSalesDetail, onOpenLegacyDetail, returnTick = 0, period, onPeriodChange }: {
+export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, range, search, onOpenSalesDetail, onOpenLegacyDetail, returnTick = 0, period, onPeriodChange, onTotalChange }: {
+  /** 조회 결과 전체 건수(상위 '판매 목록 (n)' 제목 표시용) */
+  onTotalChange?: (n: number) => void;
   // 날짜별 검색(판매날짜/계산서 발행일/입금일) — 적용값은 상위(판매관리)에서 탭 공통으로 보관
   period: SalePeriod; onPeriodChange: (p: SalePeriod) => void;
   // 판매 상세에서 돌아올 때마다 증가 — 마지막 조회 조건(검색어·페이지·페이지당)으로 조용히 재조회 + 표 스크롤 복원
@@ -120,6 +125,7 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
   }, [returnTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const p = result?.pagination;
+  useEffect(() => { if (p) onTotalChange?.(p.total); }, [p?.total]); // eslint-disable-line react-hooks/exhaustive-deps
   const srcCurrentFailed = result && !result.sources.current.ok && range !== 'legacy';
   const srcLegacyFailed = result && !result.sources.legacy.ok;
 
@@ -152,7 +158,7 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
           <thead>
             <tr style={{ textAlign: 'left' }}>
               {COLUMNS.map(([h, w]) => (
-                <th key={h} style={{ width: w, padding: '10px 12px', textAlign: AMOUNT_COLS.has(h) ? 'right' : undefined, borderBottom: '1px solid #e5e7eb', whiteSpace: 'nowrap', position: 'sticky', top: 0, zIndex: 2, background: '#f3f4f6' }}>{h}</th>
+                <th key={h} style={{ width: w, padding: '10px 12px', textAlign: AMOUNT_COLS.has(h) ? 'right' : undefined, borderBottom: '1px solid #e5e7eb', whiteSpace: 'nowrap', position: 'sticky', top: 0, zIndex: 2, background: '#f3f4f6', fontSize: 12, fontWeight: 600, color: '#374151' }}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -169,7 +175,7 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
                   {/* 구분 badge 열 제거 — 현재/과거 구분은 탭 필터·행 클릭 라우팅(isLegacy)으로 유지 */}
                   {/* 열 순서: 날짜 | 판매번호 | 거래처 | 고객 담당자 | 프로젝트명 | 통역/번역 | 상품 | 공급가액 | 부가세 | 합계 | 계산서발행일 | 입금일 | 입금내역 | 담당PM */}
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {r.recordDate ?? '-'}
+                    {dotDate(r.recordDate) ?? '-'}
                     {/* 과거 CRM 에서 운영 전환된 판매건 — 출처 표시(목록에는 운영 판매 1건만 표시) */}
                     {r.origin === 'legacy_crm' && <span style={{ marginLeft: 6, padding: '1px 5px', borderRadius: 4, background: '#fef3c7', color: '#92400e', fontSize: 10, fontWeight: 700 }} data-testid={`sh-origin-${r.key}`}>과거 CRM</span>}
                     {/* 판매취소 — 판매번호·최초 계약금액은 그대로 표시, 취소 상태만 붉은색으로 구분 */}
@@ -220,9 +226,9 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
                   <td data-testid={`sh-supply-${r.key}`} title={vatTitle(r)} style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: r.supplyAmount == null ? '#9ca3af' : undefined }}>{amt(r.supplyAmount)}</td>
                   <td data-testid={`sh-vat-${r.key}`} title={vatTitle(r)} style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: r.vatAmount == null ? '#9ca3af' : undefined }}>{amt(r.vatAmount)}</td>
                   <td data-testid={`sh-total-${r.key}`} style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600, color: '#111827' }}>{amt(r.totalAmount ?? r.amount)}</td>
-                  <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.taxInvoiceDate ?? '-'}</td>
+                  <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{dotDate(r.taxInvoiceDate) ?? '-'}</td>
                   {/* 입금일(YYYY-MM-DD) · 입금내역(원문 보존, 상태 변환 없음) — 원본 값 없으면 '-' */}
-                  <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.paymentDate ?? '-'}</td>
+                  <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{dotDate(r.paymentDate) ?? '-'}</td>
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
                       title={r.paymentMemo ? `${r.paymentStatus === 'partial' ? '[부분입금] ' : r.paymentStatus === 'completed' ? '[입금완료] ' : ''}${r.paymentMemo}` : undefined}>
                     {/* current: 청구정보 입금상태 — 부분입금 / 입금완료 (입금 없음은 표시 없음) */}

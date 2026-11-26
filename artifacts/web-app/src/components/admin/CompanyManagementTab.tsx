@@ -105,7 +105,7 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
   const [companyCustomerTypeFilter, setCompanyCustomerTypeFilter] = useState<string>("all");
   // ── 서버 페이지네이션 상태 ──
   const [companyPage, setCompanyPage] = useState(1);
-  const [companyPageSize, setCompanyPageSize] = useState(20);
+  const [companyPageSize, setCompanyPageSize] = useState(50);   // 목록 공통 기본 50건
   const [companyTotal, setCompanyTotal] = useState(0);
   const [appliedSearch, setAppliedSearch] = useState("");   // 실제 조회에 반영된 검색어(입력값과 분리)
   const [companyCounts, setCompanyCounts] = useState<{ all: number; client: number; vendor: number; customer: Record<string, number> }>(
@@ -359,7 +359,7 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
         />
       )}
 
-      <Section title={`거래처 관리 (${companyTotal.toLocaleString()})`} action={
+      <Section title={`거래처 목록 (${companyTotal.toLocaleString()})`} action={
         (
           <div style={{ display: "flex", gap: 8 }}>
             {/* Excel 다운로드 — 목록 조회 권한(현재 화면 진입 권한)으로 충분. 전체 매칭 rows 내보내기. */}

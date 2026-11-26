@@ -11,6 +11,8 @@ import { formatDisplayDate } from '../../lib/dateFormat';
 import { api } from '../../lib/constants';
 import { CHANNEL_LABEL, PROCESSING_META, QUOTE_PROGRESS_META, kstTodayStr, inquiryServiceLabel } from '../../lib/inquiryMeta';
 import { DateField } from './DatePickerShared';
+import { Pagination } from '../ui/Paginator';
+import { stickyBulkBarStyle } from './bulkListShared';
 import './readTableView.css';
 
 interface InquiryRow {
@@ -43,12 +45,20 @@ interface ListResponse {
   rows: InquiryRow[];
 }
 
-const th: React.CSSProperties = { padding: '8px 10px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#6b7280', borderBottom: '1px solid #e5e7eb', whiteSpace: 'nowrap' };
-const td: React.CSSProperties = { padding: '8px 10px', fontSize: 12, color: '#374151', whiteSpace: 'nowrap' };
+// 목록 공통 표 기준(공통 veritas-read-table 헤더 규격 · 셀 여백 9px 12px · 본문 13px)
+const th: React.CSSProperties = { padding: '9px 12px', textAlign: 'left', fontSize: 12, fontWeight: 600, color: '#374151', borderBottom: '1px solid #e5e7eb', whiteSpace: 'nowrap' };
+const td: React.CSSProperties = { padding: '9px 12px', fontSize: 13, color: '#374151', whiteSpace: 'nowrap' };
 const badge = (m: { label: string; color: string; bg: string; border: string }): React.CSSProperties => ({
   display: 'inline-block', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 5, background: m.bg, color: m.color, border: `1px solid ${m.border}`, whiteSpace: 'nowrap',
 });
-const fmtDateTime = (s: string | null) => s ? new Date(s).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', year: '2-digit', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+// 일시 표시 — 목록 공통 YYYY.MM.DD HH:mm(KST)
+const KST_PARTS = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+const fmtDateTime = (s: string | null) => {
+  if (!s) return '—';
+  const d = new Date(s); if (Number.isNaN(d.getTime())) return '—';
+  const p = Object.fromEntries(KST_PARTS.formatToParts(d).map(x => [x.type, x.value]));
+  return `${p.year}.${p.month}.${p.day} ${p.hour}:${p.minute}`;
+};
 const lang = (r: InquiryRow) => [r.languageFrom, r.languageTo].filter(Boolean).join('→') || '—';
 
 // 조회 기간(등록일 기준) — 기준일(date)로부터 거슬러 시작일 계산
@@ -69,7 +79,7 @@ function periodFrom(base: string, p: PeriodKey): string {
 
 function StatCard({ label, value, accent, highlight }: { label: string; value: number; accent?: string; highlight?: boolean }) {
   return (
-    <div style={{ flex: '1 1 120px', minWidth: 110, background: highlight ? '#fef2f2' : '#fff', border: `1px solid ${highlight ? '#fecaca' : '#e5e7eb'}`, borderRadius: 10, padding: '12px 14px' }}>
+    <div style={{ flex: '0 0 200px', width: 200, minHeight: 72, boxSizing: 'border-box', background: highlight ? '#fef2f2' : '#fff', border: `1px solid ${highlight ? '#fecaca' : '#e5e7eb'}`, borderRadius: 10, padding: '12px 14px' }}>   {/* 현황 카드 공통 약 200×72(가로로 늘어나지 않음) */}
       <div style={{ fontSize: 11, color: highlight ? '#b91c1c' : '#9ca3af', fontWeight: 600, whiteSpace: 'nowrap' }}>{label}</div>
       <div style={{ fontSize: 22, fontWeight: 800, color: accent ?? (highlight ? '#dc2626' : '#111827'), marginTop: 2 }}>{value}</div>
     </div>
@@ -94,6 +104,10 @@ export function InquiryListTab({ token, onOpenDetail, onOpenQuote, onRegister, r
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [period, setPeriod] = useState<PeriodKey>('today');
   const from = periodFrom(date, period);
+  // 페이지네이션 — 기간 필터 조회 결과 전체를 화면에서 나눔(목록 공통 10/20/50/100/200, 기본 50). 조회 조건 변경 시 1페이지.
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  useEffect(() => { setPage(1); }, [date, from]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -111,14 +125,20 @@ export function InquiryListTab({ token, onOpenDetail, onOpenQuote, onRegister, r
 
   const toggle = (id: number) => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const s = data?.summary;
-  const rows = data?.rows ?? [];
+  const allRows = data?.rows ?? [];
+  const totalPages = Math.max(1, Math.ceil(allRows.length / pageSize));
+  const curPage = Math.min(page, totalPages);
+  const rows = allRows.slice((curPage - 1) * pageSize, curPage * pageSize);   // 현재 페이지 행
+  // 전체선택 = 현재 페이지 기준. 페이지·페이지당 변경 시 선택 초기화(다른 목록과 같은 규칙)
   const allChecked = rows.length > 0 && rows.every(r => selected.has(r.id));
   const toggleAll = () => setSelected(allChecked ? new Set() : new Set(rows.map(r => r.id)));
+  const goPage = (p: number) => { setPage(p); setSelected(new Set()); };
+  const changeSize = (n: number) => { setPageSize(n); setPage(1); setSelected(new Set()); };
   const bulkDelete = async () => {
     if (bulkDeleting || selected.size === 0) return;
     setBulkDeleting(true);
     try {
-      const items = rows.filter(r => selected.has(r.id)).map(r => ({ id: r.id, label: r.inquiryNumber ?? `#${r.id}` }));
+      const items = allRows.filter(r => selected.has(r.id)).map(r => ({ id: r.id, label: r.inquiryNumber ?? `#${r.id}` }));
       const out = await confirmAndDeleteInquiries(token, items);
       if (out.deletedCount > 0) { onToast?.(`의뢰건 ${out.deletedCount}건이 삭제 처리되었습니다.`); await load(); }
     } finally { setBulkDeleting(false); }
@@ -129,7 +149,7 @@ export function InquiryListTab({ token, onOpenDetail, onOpenQuote, onRegister, r
     <div data-testid="inquiry-list-tab">
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
         <div>
-          <h1 style={{ fontSize: 20, fontWeight: 800, color: '#111827', margin: 0 }}>의뢰건 목록</h1>
+          <h1 style={{ fontSize: 16, fontWeight: 800, color: '#111827', margin: 0 }} data-testid="inquiry-list-title">의뢰건 목록 ({allRows.length.toLocaleString()})</h1>
           <p style={{ fontSize: 12, color: '#9ca3af', margin: '4px 0 0' }}>당일 접수는 당일 처리를 원칙으로 합니다. 이월 미처리를 우선 확인하세요.</p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -145,13 +165,6 @@ export function InquiryListTab({ token, onOpenDetail, onOpenQuote, onRegister, r
           </div>
           <DateField value={date} onChange={v => setDate(v)} testid="input-inquiry-date" ariaLabel="조회 날짜"
             style={{ padding: '7px 10px', fontSize: 13, border: '1px solid #d1d5db', borderRadius: 8, outline: 'none' }} />
-          {canDelete && (
-            <button type="button" onClick={bulkDelete} disabled={selected.size === 0 || bulkDeleting}
-              data-testid="inquiry-bulk-delete" aria-label="선택한 의뢰건 삭제"
-              style={{ padding: '8px 12px', fontSize: 13, fontWeight: 700, borderRadius: 8, border: `1px solid ${selected.size ? '#fca5a5' : '#e5e7eb'}`, background: selected.size ? '#fef2f2' : '#f9fafb', color: selected.size ? '#dc2626' : '#9ca3af', cursor: selected.size && !bulkDeleting ? 'pointer' : 'not-allowed', whiteSpace: 'nowrap' }}>
-              {bulkDeleting ? '삭제 중…' : `선택 삭제${selected.size ? ` (${selected.size})` : ''}`}
-            </button>
-          )}
           {onRegister && (
             <button type="button" onClick={onRegister} data-testid="btn-inquiry-register-nav"
               style={{ padding: '8px 14px', fontSize: 13, fontWeight: 700, borderRadius: 8, border: 'none', background: '#2563eb', color: '#fff', cursor: 'pointer' }}>+ 의뢰건 등록</button>
@@ -172,7 +185,24 @@ export function InquiryListTab({ token, onOpenDetail, onOpenQuote, onRegister, r
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
         <StatCard label={period === 'today' ? '오늘 미처리' : '기간 내 미처리'} value={s?.unresolvedToday ?? 0} highlight={(s?.unresolvedToday ?? 0) > 0} />
         <StatCard label="이월 미처리" value={data?.carryoverCount ?? 0} highlight={(data?.carryoverCount ?? 0) > 0} />
-        {selected.size > 0 && <div style={{ alignSelf: 'center', fontSize: 12, color: '#2563eb', fontWeight: 700 }}>선택 {selected.size}건</div>}
+      </div>
+
+      {/* 현재 페이지 전체선택 바 — 목록 공통(고객·상품·견적서와 같은 형태). 선택 삭제는 기존 권한·삭제 흐름 그대로 */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10, padding: '9px 12px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, ...stickyBulkBarStyle }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#374151', cursor: 'pointer', fontWeight: 600 }}>
+          <input type="checkbox" checked={allChecked} onChange={toggleAll} disabled={!rows.length}
+            aria-label="현재 페이지 전체 선택" data-testid="inquiry-select-page" style={{ width: 15, height: 15, cursor: 'pointer' }} />
+          현재 페이지 전체선택
+        </label>
+        <span data-testid="inquiry-selected-count" style={{ fontSize: 13, fontWeight: 700, color: selected.size > 0 ? '#2563eb' : '#9ca3af' }}>선택 {selected.size}건</span>
+        <div style={{ flex: 1 }} />
+        {canDelete && (
+          <button type="button" onClick={bulkDelete} disabled={selected.size === 0 || bulkDeleting}
+            data-testid="inquiry-bulk-delete" aria-label="선택한 의뢰건 삭제"
+            style={{ padding: '6px 14px', fontSize: 13, fontWeight: 700, borderRadius: 8, border: `1px solid ${selected.size ? '#fca5a5' : '#e5e7eb'}`, background: selected.size ? '#fef2f2' : '#f9fafb', color: selected.size ? '#dc2626' : '#9ca3af', cursor: selected.size && !bulkDeleting ? 'pointer' : 'not-allowed', whiteSpace: 'nowrap' }}>
+            {bulkDeleting ? '삭제 중…' : '선택 삭제'}
+          </button>
+        )}
       </div>
 
       {/* 목록 */}
@@ -182,17 +212,17 @@ export function InquiryListTab({ token, onOpenDetail, onOpenQuote, onRegister, r
             <tr style={{ background: '#f9fafb' }}>
               <th style={{ ...th, width: 40 }}>
                 <input type="checkbox" checked={allChecked} onChange={toggleAll} disabled={rows.length === 0}
-                  aria-label="현재 목록 전체 선택" data-testid="inquiry-select-all" style={{ width: 15, height: 15, cursor: 'pointer' }} />
+                  aria-label="현재 페이지 전체 선택" data-testid="inquiry-select-all" style={{ width: 15, height: 15, cursor: 'pointer' }} />
               </th>
               {['등록일시', '접수번호', '회사명', '담당자', '서비스', '언어', '접수경로', '담당PM', '처리상태', '견적상태', '견적번호', '견적발송일시', '종결'].map(h => <th key={h} style={th}>{h}</th>)}
             </tr>
           </thead>
           <tbody>
-            {!data || data.rows.length === 0 ? (
+            {!data || rows.length === 0 ? (
               <tr><td colSpan={14} style={{ ...td, textAlign: 'center', color: '#9ca3af', padding: '32px 8px' }}>
                 {loading ? '불러오는 중…' : '해당 기간의 의뢰건이 없습니다.'}
               </td></tr>
-            ) : data.rows.map(r => {
+            ) : rows.map(r => {
               const pm = PROCESSING_META[r.processingStatus] ?? PROCESSING_META.new;
               const qm = QUOTE_PROGRESS_META[r.quoteProgress] ?? QUOTE_PROGRESS_META.none;
               return (
@@ -209,7 +239,7 @@ export function InquiryListTab({ token, onOpenDetail, onOpenQuote, onRegister, r
                     {fmtDateTime(r.receivedAt)}
                     {/* 고객 접수일시(별도 데이터) — 확정이면 값, 확인 필요면 표시. 기존 자료(미분류)는 표시하지 않음 */}
                     {r.customerReceivedStatus === 'confirmed' && r.customerReceivedDate && (
-                      <div style={{ fontSize: 11, color: '#6b7280' }}>고객 {r.customerReceivedDate.slice(2).replace(/-/g, '.')}{r.customerReceivedTime ? ` ${r.customerReceivedTime.slice(0, 5)}` : ''}</div>
+                      <div style={{ fontSize: 11, color: '#6b7280' }}>고객 {formatDisplayDate(r.customerReceivedDate) || r.customerReceivedDate}{r.customerReceivedTime ? ` ${r.customerReceivedTime.slice(0, 5)}` : ''}</div>
                     )}
                     {r.customerReceivedStatus === 'needs_review' && <div style={{ fontSize: 11, color: '#b45309' }}>고객 접수 확인 필요</div>}
                   </td>
@@ -238,6 +268,10 @@ export function InquiryListTab({ token, onOpenDetail, onOpenQuote, onRegister, r
           </tbody>
         </table>
       </div>
+      {allRows.length > 0 && (
+        <Pagination idPrefix="inquiry" page={curPage} pageSize={pageSize} total={allRows.length} unit="건" disabled={loading}
+          onPageChange={goPage} onPageSizeChange={changeSize} />
+      )}
       <p style={{ marginTop: 12, fontSize: 11, color: '#9ca3af' }}>
         ※ 처리상태·견적상태는 연결된 견적서 상태에서 자동 판단됩니다(중복 저장 없음). 주황색 배경 「이월」 행은 이전 날짜 접수 후 아직 처리(견적/종결)되지 않은 건입니다.
         견적발송일시는 연결 견적의 발행일 기준입니다.

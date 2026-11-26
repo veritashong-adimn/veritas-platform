@@ -357,7 +357,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [showInactiveContacts, setShowInactiveContacts] = useState(false);
   // ── 담당자 서버 페이지네이션 상태 ──
   const [contactPage, setContactPage] = useState(1);
-  const [contactPageSize, setContactPageSize] = useState(20);
+  const [contactPageSize, setContactPageSize] = useState(50);   // 목록 공통 기본 50건
   const [contactTotal, setContactTotal] = useState(0);
   const [appliedContactSearch, setAppliedContactSearch] = useState("");   // 조회 반영된 검색어(입력값과 분리)
   const [contactModal, setContactModal] = useState<number | null>(null);
@@ -382,7 +382,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [translatorsLoading, setTranslatorsLoading] = useState(false);
   // 서버 페이지네이션(거래처/담당자와 동일 패턴). 기본 50개, 선택 50/100/200. total은 검색/필터 적용 후 전체 건수.
   const [translatorPage, setTranslatorPage] = useState(1);
-  const [translatorPageSize, setTranslatorPageSize] = useState(20);  // 거래처 목록과 동일 기본 페이지당 건수(페이지네이션 UI 통일)
+  const [translatorPageSize, setTranslatorPageSize] = useState(50);  // 거래처 목록과 동일 기본 페이지당 건수(페이지네이션 UI 통일)
   const [translatorTotal, setTranslatorTotal] = useState(0);
   const [translatorSearch, setTranslatorSearch] = useState("");
   const [translatorLangFilter, setTranslatorLangFilter] = useState("");
@@ -1887,7 +1887,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
         />
       )}
       {adminTab === "contacts" && !showContactBulkImport && !showContactTrash && (
-        <Section title={`담당자 관리 (${contactTotal.toLocaleString()})`} action={
+        <Section title={`담당자 목록 (${contactTotal.toLocaleString()})`} action={
           <div style={{ display: "flex", gap: 8 }}>
             <PrimaryBtn onClick={() => setShowCreateContactModal(true)} style={{ fontSize: 13, padding: "7px 14px" }}
               data-testid="contact-create-btn" aria-label="담당자 등록">
@@ -1998,7 +1998,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                           title="전체 선택"
                         />
                       </th>
-                      {["ID","거래처","담당자명","부서/직책","휴대폰","이메일","역할","상태","등록일"].map(h => <th key={h} style={tableTh}>{h}</th>)}
+                      {["ID","거래처","담당자명","부서/직책","휴대폰","이메일","역할","상태","등록일"].map(h => <th key={h} style={h === "거래처" ? { ...tableTh, width: 220 } : tableTh}>{h}</th>)}
                     </tr>
                   </thead>
                   <tbody>
@@ -2022,7 +2022,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                           </td>
                           <td style={{ ...tableTd, color: "#9ca3af" }} onClick={() => setContactModal(c.id)}>#{c.id}</td>
                           <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }} onClick={() => setContactModal(c.id)}>
-                            <div>{c.companyName ?? "-"}</div>
+                            {/* 거래처 열 — 긴 거래처명으로 열이 과도하게 넓어지지 않도록 220px 말줄임(전체 이름은 툴팁) */}
+                            <div title={c.companyName ?? undefined} style={{ maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.companyName ?? "-"}</div>
                             {c.divisionName && <div style={{ color: "#7c3aed", fontWeight: 600, fontSize: 11, marginTop: 1 }}>↳ {c.divisionName}</div>}
                           </td>
                           <td style={{ ...tableTd, fontWeight: 700, color: "#111827" }} onClick={() => setContactModal(c.id)}>{c.name}</td>
@@ -2391,7 +2392,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       {adminTab === "translators" && (
         // 목록: 조회/검색/필터/선택/상세 + [Excel 다운로드](§22). 민감정보는 다운로드에서 제외(§4).
         // 엑셀 대량등록은 목록이 아니라 [통번역사 등록 → 엑셀 대량등록] 탭으로 이동(§2).
-        <Section title={`통번역사 목록 (${translatorTotal})`} action={
+        <Section title={`통번역사 목록 (${translatorTotal.toLocaleString()})`} action={
           <div style={{ display: "flex", gap: 8 }}>
             <GhostBtn onClick={handleExportTranslators} disabled={translatorExporting} style={{ fontSize: 13, padding: "7px 14px" }}
               data-testid="translator-excel-export-btn" aria-label="통번역사 Excel 다운로드">
@@ -2402,7 +2403,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14, alignItems: "center" }}>
             <input value={translatorSearch} onChange={e => { setTranslatorSearch(e.target.value); setTranslatorPage(1); }}
               placeholder="이름, Master ID(#), 별칭, 이메일, 가능언어, 학력, 지역 검색..."
-              style={{ ...inputStyle, maxWidth: 240, flex: "1 1 180px", padding: "8px 12px", fontSize: 13 }}
+              style={{ ...inputStyle, maxWidth: 320, flex: "1 1 240px", padding: "8px 12px", fontSize: 13 }}
               onKeyDown={e => e.key === "Enter" && fetchTranslators()} />
             <input value={translatorLangFilter} onChange={e => { setTranslatorLangFilter(e.target.value); setTranslatorPage(1); }}
               placeholder="가능언어 검색..."
@@ -2507,7 +2508,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: "calc(100vh - 300px)" }}>
                 <table className="veritas-read-table vz-sticky" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", minWidth: 1180 }}>
                   <colgroup>
-                    {/* 이름(12%) 주민번호(6%) 가능언어(8%) 학력(8%) 업무유형(6%) 세부유형(8%) 전문분야(8%) 상세정보(13%) 평점(5%) 지역(8%·말줄임) 가용상태(6%·고정) 운영상태(7%·고정) 등록일(5%) */}
+                    {/* 이름(12%) 주민번호(6%) 가능언어(8%) 학력(8%) 업무유형(6%) 세부유형(8%) 전문분야(8%) 상세정보(10%) 평점(5%) 지역(8%·말줄임) 가용상태(6%·고정) 운영상태(7%·고정) 등록일(8% — 날짜 잘림 방지) */}
                     <col style={{ width: "12%" }} />
                     <col style={{ width: "6%" }} />
                     <col style={{ width: "8%" }} />
@@ -2515,12 +2516,12 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                     <col style={{ width: "6%" }} />
                     <col style={{ width: "8%" }} />
                     <col style={{ width: "8%" }} />
-                    <col style={{ width: "13%" }} />
+                    <col style={{ width: "10%" }} />
                     <col style={{ width: "5%" }} />
                     <col style={{ width: "8%" }} />
                     <col style={{ width: "6%" }} />
                     <col style={{ width: "7%" }} />
-                    <col style={{ width: "5%" }} />
+                    <col style={{ width: "8%" }} />
                   </colgroup>
                   <thead>
                     <tr>

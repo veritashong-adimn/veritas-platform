@@ -578,6 +578,8 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
   return (
     <>
     <div style={{ padding: '0 0 48px' }}>
+      {/* 본문 제목 — 목록 공통 '○○ 목록 (건수)'. 건수 = 원견적(묶음 기준 행) 수 */}
+      <h2 data-testid="quote-list-title" style={{ margin: '0 0 14px', fontSize: 16, fontWeight: 800, color: '#111827' }}>견적서 목록 ({roots.length.toLocaleString()})</h2>
 
       {/* ── Card 1: 검색 및 필터 ────────────────────────────────────────────────── */}
       <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: '10px 16px', marginBottom: 8 }}>
@@ -614,7 +616,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="견적번호 · 견적서명 · 고객사 · 고객명 · 담당PM · 상품명 검색"
-            style={{ flex: '1 1 240px', padding: '6px 10px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 6, outline: 'none' }}
+            style={{ flex: '1 1 240px', maxWidth: 420, padding: '6px 10px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 6, outline: 'none' }}
           />
           <div style={{ width: 120 }}>
             <ClickSelect
@@ -685,7 +687,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                 key={item.label}
                 onClick={() => setStatusFilter(item.value)}
                 style={{
-                  flex: '1 1 70px', minWidth: 70, padding: '6px 8px',
+                  flex: '0 0 200px', width: 200, minHeight: 72, boxSizing: 'border-box', padding: '10px 12px',   // 현황 카드 공통 약 200×72
                   background: isActive ? item.bg : '#fafafa',
                   border: `1.5px solid ${isActive ? item.border : '#e5e7eb'}`,
                   borderRadius: 8, textAlign: 'center', cursor: 'pointer',
@@ -693,10 +695,10 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                   boxShadow: isActive ? `0 0 0 2px ${item.border}50` : 'none',
                 }}
               >
-                <div style={{ fontSize: 10, fontWeight: 600, color: isActive ? item.color : '#9ca3af', letterSpacing: '0.3px', marginBottom: 2 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: isActive ? item.color : '#9ca3af', letterSpacing: '0.3px', marginBottom: 4 }}>
                   {item.label}
                 </div>
-                <div style={{ fontSize: 18, fontWeight: 800, color: isActive ? item.color : '#374151', lineHeight: 1 }}>
+                <div style={{ fontSize: 22, fontWeight: 800, color: isActive ? item.color : '#374151', lineHeight: 1.1 }}>
                   {item.count}
                 </div>
               </button>
@@ -753,7 +755,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
             <table className="veritas-read-table vz-sticky" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e5e7eb' }}>
-                  <th style={{ padding: '6px 10px', textAlign: 'center', width: 36 }}>
+                  <th style={{ padding: '9px 12px', textAlign: 'center', width: 36 }}>
                     <input type="checkbox" checked={allSelected} onChange={toggleSelectAll}
                       aria-label="현재 페이지 전체 선택" data-testid="quote-select-all"
                       style={{ width: 15, height: 15, cursor: 'pointer' }} />
@@ -771,7 +773,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                     { label: '상태', align: 'center' },
                     { label: '견적서', align: 'center' },
                   ] as const).map(h => (
-                    <th key={h.label} style={{ padding: '6px 10px', textAlign: h.align, verticalAlign: 'middle', fontSize: 11, fontWeight: 700, color: '#6b7280', whiteSpace: 'nowrap' }}>{h.label}</th>
+                    <th key={h.label} style={{ padding: '9px 12px', textAlign: h.align, verticalAlign: 'middle', fontSize: 12, fontWeight: 600, color: '#374151', whiteSpace: 'nowrap' }}>{h.label}</th>
                   ))}
                 </tr>
               </thead>
@@ -788,13 +790,13 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                       data-testid={`quote-row-${q.id}`} data-depth={depth}
                       style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer', background: selected ? '#eff6ff' : (depth === 1 ? '#fbfcfe' : undefined) }}>
                       {/* 선택 체크박스 — 각 견적 독립(§15). 클릭은 선택만(행 상세 진입과 분리) */}
-                      <td onClick={e => e.stopPropagation()} style={{ padding: '6px 10px', textAlign: 'center' }}>
+                      <td onClick={e => e.stopPropagation()} style={{ padding: '9px 12px', textAlign: 'center' }}>
                         <input type="checkbox" checked={selected} onChange={() => toggleSelect(q.id)}
                           aria-label={`견적 선택: ${q.quoteNumber ?? q.id}`} data-testid={`quote-select-${q.id}`}
                           style={{ width: 15, height: 15, cursor: 'pointer' }} />
                       </td>
                       {/* 견적번호 — family 계층: 부모는 펼침 토글, 자식은 들여쓰기 + 관계 배지 */}
-                      <td style={{ padding: '6px 10px', whiteSpace: 'nowrap', textAlign: 'left' }}>
+                      <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', textAlign: 'left' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 5, paddingLeft: depth === 1 ? 20 : 0 }}>
                           {hasKids ? (
                             <button type="button" onClick={e => { e.stopPropagation(); toggleExpand(q.id); }}
@@ -839,18 +841,18 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                         </div>
                       </td>
                       {/* 발행일 */}
-                      <td style={{ padding: '6px 10px', fontSize: 12, color: '#6b7280', whiteSpace: 'nowrap', textAlign: 'center' }}>
+                      <td style={{ padding: '9px 12px', fontSize: 12, color: '#6b7280', whiteSpace: 'nowrap', textAlign: 'center' }}>
                         {q.issueDate ? formatDisplayDate(q.issueDate) : '—'}
                       </td>
                       {/* 견적서명 — 지정 범위(min 220 ~ max 420, 약 24vw ≈ 테이블 30~34% 이내)에서만 반응형, 좌측 정렬, 클릭 시 편집 */}
-                      <td style={{ padding: '6px 10px', textAlign: 'left' }}>
+                      <td style={{ padding: '9px 12px', textAlign: 'left' }}>
                         <button
                           onClick={(e) => { e.stopPropagation(); handleEditQuote(q.id, q.title ?? q.quoteNumber ?? `견적 #${q.id}`, q.status); }}
                           disabled={editLoading === q.id}
                           style={{
                             fontSize: 12, fontWeight: 600, color: '#111827',
                             display: 'flex', alignItems: 'center', overflow: 'hidden',
-                            width: '24vw', minWidth: 220, maxWidth: 420,
+                            minWidth: 180, maxWidth: 340,   // 고정 24vw 제거 — 오른쪽 열(견적서) 잘림·과도한 여백 방지
                             background: 'none', border: 'none', padding: 0, cursor: 'pointer',
                             textAlign: 'left',
                           }}
@@ -859,23 +861,23 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                         </button>
                       </td>
                       {/* 고객사 — 좌측 정렬, 약간 확대(min 130 ~ max 200) */}
-                      <td style={{ padding: '6px 10px', minWidth: 130, maxWidth: 200, textAlign: 'left' }}>
+                      <td style={{ padding: '9px 12px', minWidth: 130, maxWidth: 200, textAlign: 'left' }}>
                         {q.companyName
                           ? <span style={{ fontSize: 12, color: '#374151', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>{q.companyName}</span>
                           : <span style={{ fontSize: 11, color: '#d1d5db' }}>—</span>}
                       </td>
                       {/* 고객명 — 가운데 정렬, 이름 표시 최소폭 확보 */}
-                      <td style={{ padding: '6px 10px', minWidth: 80, maxWidth: 120, textAlign: 'center' }}>
+                      <td style={{ padding: '9px 12px', minWidth: 80, maxWidth: 120, textAlign: 'center' }}>
                         {q.contactName
                           ? <span style={{ fontSize: 12, color: '#374151', whiteSpace: 'nowrap' }}>{q.contactName}</span>
                           : <span style={{ fontSize: 11, color: '#d1d5db' }}>—</span>}
                       </td>
                       {/* 금액 — 우측 정렬, 한 줄 표시 최소폭 확보 */}
-                      <td style={{ padding: '6px 10px', textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 700, color: '#1e3a5f', fontSize: 13, minWidth: 104 }}>
+                      <td style={{ padding: '9px 12px', textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 700, color: '#1e3a5f', fontSize: 13, minWidth: 104 }}>
                         {fmt(q.price)}원
                       </td>
                       {/* 견적유형 — 가운데 정렬 (누적 견적서는 누적상태 배지 추가) */}
-                      <td style={{ padding: '6px 10px', whiteSpace: 'nowrap', textAlign: 'center' }}>
+                      <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', textAlign: 'center' }}>
                         <span style={{ fontSize: 11, padding: '2px 6px', borderRadius: 4, background: q.relationType === 'derived' ? '#fffbeb' : (QUOTE_TYPE_COLOR[q.quoteType] ?? QUOTE_TYPE_COLOR_DEFAULT).bg, color: q.relationType === 'derived' ? '#92400e' : (QUOTE_TYPE_COLOR[q.quoteType] ?? QUOTE_TYPE_COLOR_DEFAULT).color, fontWeight: 600 }}>
                           {/* 분할견적(derived): quote_type(내부)은 유지, 표시만 '분할 견적서'로 override */}
                           {q.relationType === 'derived' ? '분할 견적서' : (QUOTE_TYPE_LABEL[q.quoteType] ?? q.quoteType)}
@@ -887,13 +889,13 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                         )}
                       </td>
                       {/* 담당PM — 가운데 정렬 */}
-                      <td style={{ padding: '6px 10px', minWidth: 72, maxWidth: 110, textAlign: 'center' }}>
+                      <td style={{ padding: '9px 12px', minWidth: 72, maxWidth: 110, textAlign: 'center' }}>
                         {q.adminName
                           ? <span style={{ fontSize: 12, color: '#374151', whiteSpace: 'nowrap' }}>{q.adminName}</span>
                           : <span style={{ fontSize: 11, color: '#d1d5db' }}>—</span>}
                       </td>
                       {/* 상태 — 가운데 정렬. 분할견적(derived)이 승인되면 '판매'가 아니라 '분할확정'으로 표시(표시만, DB status 불변). */}
-                      <td style={{ padding: '6px 10px', textAlign: 'center' }}>
+                      <td style={{ padding: '9px 12px', textAlign: 'center' }}>
                         {chainStatusById.has(q.id) ? (() => {
                           const cs = chainStatusById.get(q.id)!;
                           const cc = QUOTE_CHAIN_STATUS_COLOR[cs];
@@ -918,7 +920,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                         )}
                       </td>
                       {/* PDF 미리보기 — 가운데 정렬 */}
-                      <td style={{ padding: '6px 10px', whiteSpace: 'nowrap', textAlign: 'center' }}>
+                      <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', textAlign: 'center' }}>
                         <button
                           onClick={(e) => { e.stopPropagation(); handlePdfPreview(q.id, q.title ?? q.quoteNumber ?? `견적 #${q.id}`); }}
                           disabled={pdfLoading === q.id}

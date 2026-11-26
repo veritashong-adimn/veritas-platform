@@ -1290,7 +1290,7 @@ router.get("/admin/products", ...adminGuard, async (req, res) => {
     if (req.query.page !== undefined) {
       const total = result.length;
       const sizeRaw = Number(req.query.pageSize ?? 20);
-      const pageSize = [20, 50, 100].includes(sizeRaw) ? sizeRaw : 20;
+      const pageSize = [10, 20, 50, 100, 200].includes(sizeRaw) ? sizeRaw : 20;   // 목록 공통 페이지당 선택(10/20/50/100/200)
       const totalPages = Math.max(1, Math.ceil(total / pageSize));
       let page = Number(req.query.page ?? 1);
       if (!Number.isFinite(page) || page < 1) page = 1;
