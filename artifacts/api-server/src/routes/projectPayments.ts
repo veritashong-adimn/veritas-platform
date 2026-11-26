@@ -297,7 +297,10 @@ router.put("/admin/projects/:id/payment-records", ...adminGuard, requireRolePerm
     const d = r.firstDeposit;
     if (d.txnType === "refund" || d.txnType === "offset" || d.depositStatus === "scheduled") { res.status(400).json({ error: `${i + 1}회차: 첫 입금은 실제 입금만 저장할 수 있습니다.` }); return; }
     if (d.id != null) {
-      if (own.length !== 1 || own[0].id !== d.id || !isPlainDeposit(own[0])) { res.status(409).json({ error: multi }); return; }
+      // 수정 대상: 일반 입금 1건, 또는 입금예정 내역 1건(원화 — 실제 입금으로 전환, 새 기록 생성 없음)
+      const convertSched = own.length === 1 && !isPlainDeposit(own[0]) && own[0].txnType !== "refund" && own[0].txnType !== "offset"
+        && !normCur(r.billingCurrency !== undefined ? r.billingCurrency : beforeById.get(r.id!)?.billingCurrency);
+      if (own.length !== 1 || own[0].id !== d.id || !(isPlainDeposit(own[0]) || convertSched)) { res.status(409).json({ error: multi }); return; }
     } else if (own.length > 0) {
       res.status(409).json({ error: `${i + 1}회차: 이미 입금내역이 있습니다(중복 생성 방지). 화면을 새로고침한 뒤 다시 시도하세요.` }); return;
     }
