@@ -14,6 +14,7 @@ import { formatDisplayDate } from '../../lib/dateFormat';
 import { bulkBtnStyle } from './product/productShared';
 import { stickyBulkBarStyle } from './bulkListShared';
 import { DateField } from './DatePickerShared';
+import { Pagination } from '../ui/Paginator';
 import './readTableView.css';
 
 // ─── 타입 ──────────────────────────────────────────────────────────────────────
@@ -118,6 +119,9 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
   const [statusFilter, setStatusFilter] = useState('all');
   const [typeFilter, setTypeFilter]     = useState('all');
   const [search, setSearch]             = useState('');
+  // 페이지네이션(판매목록과 같은 공통 Pagination) — 기본 50건. 전체 견적에 검색·필터를 적용한 뒤 화면에서 나눈다.
+  const [page, setPage]                 = useState(1);
+  const [pageSize, setPageSize]         = useState(50);
   const [dateFrom, setDateFrom]         = useState('');
   const [dateTo, setDateTo]             = useState('');
   // 진입 모드에 따라 초기 화면 결정 — 신규작성/휴지통은 바로 해당 화면으로.
@@ -154,13 +158,22 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
     try {
       // 상태/유형/검색은 클라이언트에서 family 단위로 적용한다(관계견적 부모가 필터에서 빠져 자식이 고아가 되지 않도록).
       //  서버에는 발행일 범위만 전달(같은 family는 발행일을 공유하므로 family를 쪼개지 않음).
-      const params = new URLSearchParams({ limit: '200' });
-      if (dateFrom)               params.set('dateFrom', dateFrom);
-      if (dateTo)                 params.set('dateTo', dateTo);
-      const res = await fetch(api(`/api/admin/quotes?${params}`), { headers: authH });
-      if (!res.ok) { onToast('견적 목록 조회 실패'); return; }
-      const data = await res.json();
-      setQuotes(Array.isArray(data.quotes) ? data.quotes : []);
+      //  전체 유효 견적 조회 — 서버 페이지(200건)를 끝까지 이어 받는다(최신 200건만 받아 오래된 견적이 목록·검색에서 빠지던 문제).
+      //  받은 건수가 페이지 크기보다 적으면 마지막 페이지. 조회 중 새 견적이 생겨 페이지 경계가 밀려도 id 기준으로 중복 제거.
+      const PAGE = 200;
+      const byId = new Map<number, QuoteRow>();
+      for (let page = 1; page <= 500; page++) {
+        const params = new URLSearchParams({ limit: String(PAGE), page: String(page) });
+        if (dateFrom)               params.set('dateFrom', dateFrom);
+        if (dateTo)                 params.set('dateTo', dateTo);
+        const res = await fetch(api(`/api/admin/quotes?${params}`), { headers: authH });
+        if (!res.ok) { onToast('견적 목록 조회 실패'); return; }
+        const data = await res.json();
+        const batch: QuoteRow[] = Array.isArray(data.quotes) ? data.quotes : [];
+        for (const q of batch) if (!byId.has(q.id)) byId.set(q.id, q);
+        if (batch.length < PAGE) break;
+      }
+      setQuotes([...byId.values()].sort((a, b) => b.id - a.id));   // 서버와 같은 최신순(id desc)
     } finally { setLoading(false); }
   }, [token, dateFrom, dateTo]);
 
@@ -346,7 +359,19 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
     visibleRows.push({ q: root, depth: 0, isParent: true, childCount: kids.length, expanded });
     if (expanded) for (const k of kids) visibleRows.push({ q: k, depth: 1, isParent: false, childCount: 0, expanded: false });
   }
-  const visibleQuotes = visibleRows.map(r => r.q);
+  // 페이지 단위 = 묶음 — 원견적 + 하위(변경·분할) 견적, 복수견적 그룹(A/B안)은 한 묶음으로 같은 페이지에 둔다(기존 묶음 표시 유지).
+  const unitStarts: number[] = [];
+  let prevRootGroup: number | null = null;
+  visibleRows.forEach((r, i) => {
+    if (r.depth !== 0) return;
+    const g = altInfo.has(r.q.id) ? (r.q.quoteGroupId ?? null) : null;
+    if (g == null || g !== prevRootGroup) unitStarts.push(i);
+    prevRootGroup = g;
+  });
+  const unitTotal = unitStarts.length;
+  const curPage = Math.min(page, Math.max(1, Math.ceil(unitTotal / pageSize)));
+  const pagedRows = visibleRows.slice(unitStarts[(curPage - 1) * pageSize] ?? visibleRows.length, unitStarts[curPage * pageSize] ?? visibleRows.length);
+  const visibleQuotes = pagedRows.map(r => r.q);   // 일괄 선택·작업은 현재 페이지에 표시된 것만(기존 '현재 표시된 것만' 규칙)
 
   const toggleExpand = (rootId: number) => setExpandedRoots(prev => {
     const next = new Set(prev);
@@ -368,6 +393,8 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
   // ── 선택 기반 일괄 관리 ─────────────────────────────────────────────────────
   // 검색(클라이언트) 변경 시 선택 초기화 (필터/재조회는 fetchQuotes 에서 초기화)
   useEffect(() => { setSelectedIds(new Set()); }, [search, statusFilter, typeFilter]);
+  // 검색·필터(상태·유형·발행일) 변경 시 첫 페이지로
+  useEffect(() => { setPage(1); }, [search, statusFilter, typeFilter, dateFrom, dateTo]);
 
   const selectedQuotes = visibleQuotes.filter(q => selectedIds.has(q.id)); // 현재 표시된 것만
   const selectedCount = selectedQuotes.length;
@@ -749,7 +776,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                 </tr>
               </thead>
               <tbody>
-                {visibleRows.map(({ q, depth, isParent, childCount, expanded }) => {
+                {pagedRows.map(({ q, depth, isParent, childCount, expanded }) => {
                   const sColor = QUOTE_STATUS_COLOR[q.status] ?? { bg: '#f3f4f6', color: '#6b7280' };
                   const selected = selectedIds.has(q.id);
                   const relBadge = relationBadge(q);
@@ -913,6 +940,18 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
               </tbody>
             </table>
           </div>
+        )}
+        {/* 판매목록과 같은 공통 Pagination — 좌: 범위/전체/페이지당, 우: 처음/이전/번호/다음/마지막. 전체 = 검색·필터 후 묶음(원견적) 수 */}
+        {!loading && unitTotal > 0 && (
+          <Pagination
+            idPrefix="quote-list"
+            page={curPage}
+            pageSize={pageSize}
+            total={unitTotal}
+            unit="건"
+            onPageChange={(pg) => { setPage(pg); setSelectedIds(new Set()); }}
+            onPageSizeChange={(sz) => { setPageSize(sz); setPage(1); setSelectedIds(new Set()); }}
+          />
         )}
       </div>
 

@@ -1589,6 +1589,8 @@ router.get("/admin/quotes", ...adminGuard, async (req, res) => {
     if (qtFilter && qtFilter !== "all") conditions.push(eq(quotesTable.quoteType, qtFilter));
     if (dateFrom) conditions.push(gte(quotesTable.issueDate, dateFrom) as any);
     if (dateTo)   conditions.push(lte(quotesTable.issueDate, dateTo) as any);
+    // companyId 필터(프로젝트 경유) — 페이지 제한(LIMIT/OFFSET) 전에 적용(기존: 잘라낸 페이지 안에서만 걸러 오래된 견적 누락)
+    if (companyIdQ && companyIdQ !== "all") conditions.push(eq(projectsTable.companyId, Number(companyIdQ)) as any);
 
     const rows = await db
       .select({
@@ -1626,10 +1628,7 @@ router.get("/admin/quotes", ...adminGuard, async (req, res) => {
       .limit(pageSize)
       .offset(offset);
 
-    // companyId 필터 (프로젝트 경유)
-    const filtered = companyIdQ && companyIdQ !== "all"
-      ? rows.filter(r => r.projectCompanyId === Number(companyIdQ))
-      : rows;
+    const filtered = rows;   // companyId 필터는 위 조건에서 페이지 제한 전에 적용
 
     // 각 견적의 quote_items 첫 번째 상품명 조회 (표시용)
     const quoteIds = filtered.map(r => r.id);
