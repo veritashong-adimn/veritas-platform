@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { sanitizeCustomerDisplay, resolveCustomerDisplay } from "../services/quoteCustomerDisplay";
 import { findReusableProjectForInquiry } from "../services/quoteDeletion";
-import { legacyVerifiedSaleSupply } from "../services/legacyActivationLineage";
+import { computeProjectProfit } from "../services/projectProfit";
 import {
   db, projectsTable, paymentsTable, tasksTable, usersTable,
   logsTable, quotesTable, settlementsTable, notesTable,
@@ -924,47 +924,8 @@ router.get("/admin/projects/:id/performance-summary", ...adminGuard, async (req,
   const projectId = Number(req.params.id);
   if (isNaN(projectId) || projectId <= 0) { res.status(400).json({ error: "유효하지 않은 project id." }); return; }
   try {
-    // 현재 견적의 공급가액 합계(총 판매 공급가액)
-    const [currentQuote] = await db.select().from(quotesTable)
-      .where(and(eq(quotesTable.projectId, projectId), eq(quotesTable.isCurrent, true), isNull(quotesTable.deletedAt)));
-    let saleSupplyAmount = 0;
-    // 공급가액 기준: items(현재 견적 품목) | legacy_crm(과거 CRM 원본 공급가액, 검증됨) | legacy_unverified(과거 CRM 전환·공급가/부가세 미확인)
-    let saleSupplyBasis: "items" | "legacy_crm" | "legacy_unverified" = "items";
-    if (currentQuote) {
-      const items = await db.select().from(quoteItemsTable).where(eq(quoteItemsTable.quoteId, currentQuote.id));
-      saleSupplyAmount = items.reduce((s, i) => s + Number(i.supplyAmount ?? 0), 0);
-      // 과거 CRM 전환 판매: 전환 시 부가세 포함 총액이 공급가로 들어간 건(품목 부가세 0)은 검증된 원본 공급가액으로 손익 계산(조회 전용, DB 미변경)
-      const itemsTotal = items.reduce((s, i) => s + Number(i.totalAmount ?? 0), 0);
-      const itemsTax = items.reduce((s, i) => s + Number(i.taxAmount ?? 0), 0);
-      const lg = await legacyVerifiedSaleSupply(db, projectId, itemsTotal, itemsTax).catch(() => ({ supply: null, isLegacy: false }));
-      if (lg.supply != null) { saleSupplyAmount = lg.supply; saleSupplyBasis = "legacy_crm"; }
-      else if (lg.isLegacy && Math.abs(itemsTax) <= 0.5) saleSupplyBasis = "legacy_unverified";
-    }
-
-    // 수행/원가 행 (soft-delete 제외)
-    const rows = await db.select().from(performanceAssignmentsTable)
-      .where(and(eq(performanceAssignmentsTable.projectId, projectId), isNull(performanceAssignmentsTable.deletedAt)));
-
-    const num = (v: unknown) => Number(v ?? 0);
-    const totalCost               = rows.reduce((s, r) => s + num(r.costTotal), 0);
-    const basePerformanceFeeTotal = rows.reduce((s, r) => s + num(r.basePerformanceFee), 0);
-    const expenseTotal            = rows.reduce((s, r) => s + num(r.expenseTotal), 0);
-    const deductionTotal          = rows.reduce((s, r) => s + num(r.deductionTotal), 0);
-    // 실제원가: 지급완료(paid) 행의 원가합계 기준(정산상태 제거 → 지급상태로 단일화 §4·§5)
-    const paidCost = rows.filter(r => r.paymentStatus === "paid")
-      .reduce((s, r) => s + num(r.costTotal), 0);
-    const actualCostBasis = paidCost;
-
-    // 판매취소 건 — 유효 매출 0원, 실제 발생 원가는 그대로 → 손익 = 0 − 원가, 수익률은 계산하지 않음(null → 화면 '—').
-    //   견적·품목·원가 데이터는 변경하지 않는다(조회 계산만). 최초 판매 공급가액은 originalSaleSupplyAmount 로 함께 제공.
-    const [projRow] = await db.select({ status: projectsTable.status }).from(projectsTable).where(eq(projectsTable.id, projectId));
-    const saleCancelled = projRow?.status === "cancelled";
-    const originalSaleSupplyAmount = saleSupplyAmount;
-    if (saleCancelled) saleSupplyAmount = 0;
-
-    const estimatedProfit = saleSupplyAmount - totalCost;
-    const actualProfit    = saleSupplyAmount - actualCostBasis;
-    const rate = (profit: number): number | null => (saleCancelled ? null : saleSupplyAmount > 0 ? Math.round((profit / saleSupplyAmount) * 1000) / 10 : 0);
+    // 손익 계산은 services/projectProfit(지급준비점검 엑셀 수익금액·수익률과 공용) — 응답 형태·값 동일
+    const { rows, totalCost, profit } = await computeProjectProfit(projectId);
     const r0 = (n: number) => Math.round(n);
 
     res.json({
@@ -981,21 +942,7 @@ router.get("/admin/projects/:id/performance-summary", ...adminGuard, async (req,
         holdCount: rows.filter(r => r.paymentStatus === "payment_hold").length,
       },
       // §15 프로젝트 손익 요약 (부가세 제외, 공급가액 기준)
-      profit: {
-        saleSupplyAmount: r0(saleSupplyAmount),
-        saleSupplyBasis,
-        saleCancelled,
-        originalSaleSupplyAmount: r0(originalSaleSupplyAmount),
-        totalCost: r0(totalCost),
-        basePerformanceFeeTotal: r0(basePerformanceFeeTotal),
-        expenseTotal: r0(expenseTotal),
-        deductionTotal: r0(deductionTotal),
-        estimatedProfit: r0(estimatedProfit),
-        estimatedMarginRate: rate(estimatedProfit),
-        paidCost: r0(paidCost),
-        actualProfit: r0(actualProfit),
-        actualMarginRate: rate(actualProfit),
-      },
+      profit,
     });
   } catch (err) {
     req.log.error({ err }, "Admin: performance-summary fetch failed");

@@ -3,7 +3,7 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { requireAuth, requireRole, requireStaffPermission } from "../middlewares/auth";
-import { computePayoutReadiness, loadResidentNumbers } from "../services/payoutReadiness";
+import { computePayoutReadiness, loadResidentNumbers, loadProjectProfits } from "../services/payoutReadiness";
 import { getPermissionsForRole } from "../lib/rbac";
 import { logEvent } from "../lib/logEvent";
 import { maskPhoneLast4 } from "../lib/phoneMask";
@@ -47,6 +47,15 @@ router.post("/admin/payout-unified/readiness/resident-numbers", ...guard, async 
     await logEvent("translator", 0, "resident_number.bulk_reveal", req.log, req.user, JSON.stringify({ via: "payout_readiness_excel", requested: new Set(ids).size, revealed: m.size }));
     res.json({ residentNumbers: Object.fromEntries(m) });
   } catch (err) { req.log.error({ err: (err as Error)?.message }, "지급준비점검 주민번호 조회 실패"); res.status(500).json({ error: "주민등록번호 조회 실패." }); }
+});
+
+// ─── 지급준비점검 엑셀 수익금액·수익률 전용 — POST body { projectIds } → { profits: { [projectId]: { amount, rate, supply, cost, cancelled } | null } } ─────
+//   엑셀 다운로드 시에만 호출(화면 조회에서는 손익 계산 안 함). 프로젝트 손익 요약과 같은 공용 계산. 조회 전용.
+router.post("/admin/payout-unified/readiness/project-profits", ...guard, async (req, res) => {
+  const ids = Array.isArray(req.body?.projectIds) ? (req.body.projectIds as unknown[]).map(Number).filter(n => Number.isInteger(n) && n > 0) : [];
+  if (ids.length > 5000) { res.status(400).json({ error: "projectIds는 5000건 이하여야 합니다." }); return; }
+  try { res.json({ profits: Object.fromEntries(await loadProjectProfits(ids)) }); }
+  catch (err) { req.log.error({ err: (err as Error)?.message }, "지급준비점검 프로젝트 손익 조회 실패"); res.status(500).json({ error: "프로젝트 손익 조회 실패." }); }
 });
 
 export default router;

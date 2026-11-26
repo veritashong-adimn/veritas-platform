@@ -72,7 +72,7 @@ function resolveValue<Row>(col: ExcelColumn<Row>, row: Row): unknown {
 
 /** columns+rows → 스타일 적용된 워크시트 객체(공통 규칙). */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function buildStyledSheet<Row>(columns: ExcelColumn<Row>[], rows: Row[]): Record<string, any> {
+function buildStyledSheet<Row>(columns: ExcelColumn<Row>[], rows: Row[], footerRows?: unknown[][]): Record<string, any> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ws: Record<string, any> = {};
   // 헤더 행
@@ -106,7 +106,21 @@ function buildStyledSheet<Row>(columns: ExcelColumn<Row>[], rows: Row[]): Record
   });
   const lastRow = rows.length;                 // 0 = 헤더만
   const lastCol = Math.max(columns.length - 1, 0);
-  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: lastRow, c: lastCol } });
+  // 하단 합계행(선택) — 데이터 아래 한 줄 띄우고 굵게. 컬럼 순서대로 값 배열(공란 = null). 자동필터 범위에는 넣지 않는다.
+  let refRow = lastRow;
+  (footerRows ?? []).forEach((vals, fi) => {
+    const r = lastRow + 2 + fi;
+    columns.forEach((col, c) => {
+      const raw = vals[c];
+      const addr = XLSX.utils.encode_cell({ r, c });
+      if (raw == null || raw === '') { ws[addr] = { v: '', t: 's', s: TEXT_STYLE }; return; }
+      if (col.type === 'number' && typeof raw === 'number' && Number.isFinite(raw)) {
+        ws[addr] = { v: raw, t: 'n', s: { ...NUM_STYLE, numFmt: col.numFmt ?? NUM_STYLE.numFmt, font: { sz: 10, bold: true } } };
+      } else ws[addr] = { v: String(raw), t: 's', s: { ...TEXT_STYLE, font: { sz: 10, bold: true } } };
+    });
+    refRow = r;
+  });
+  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: refRow, c: lastCol } });
   ws['!cols'] = columns.map((col) => {
     if (col.width) return { wch: col.width };
     let max = displayWidth(col.header);
@@ -133,9 +147,11 @@ export function exportDataset<Row>(opts: {
   sheetName: string;
   columns: ExcelColumn<Row>[];
   rows: Row[];
+  /** 하단 합계행(선택) — 컬럼 순서대로 값 배열. 생략 시 기존과 동일. */
+  footerRows?: unknown[][];
 }): void {
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, buildStyledSheet(opts.columns, opts.rows), opts.sheetName);
+  XLSX.utils.book_append_sheet(wb, buildStyledSheet(opts.columns, opts.rows, opts.footerRows), opts.sheetName);
   XLSX.writeFile(wb, opts.filename);
 }
 

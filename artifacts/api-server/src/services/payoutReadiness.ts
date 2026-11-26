@@ -18,6 +18,7 @@ import { PROG, CUR } from "../routes/payoutUnified";
 import { checkEligibility } from "./legacyPayoutConversion";
 import { LEGACY_PAID_DELIVERY_CUTOFF, todayKst } from "../lib/legacyPayoutRule";
 import { loadSaleIdentities } from "./saleIdentity";
+import { computeProjectProfit } from "./projectProfit";
 import { DATE_DECISIONS } from "../lib/payoutDateDecisions";
 import { payStatusOf, isAmountMissing, PAY_STATUS_LABEL, emptyStatusCounts, type PayStatusKey } from "../lib/payDisplayStatus";
 import { decrypt } from "../lib/encrypt";
@@ -95,6 +96,25 @@ export function foreignTotalsOf(items: any[]): { currency: string; count: number
     m.set(x.payCurrency, g);
   }
   return [...m.values()].sort((a, b) => a.currency.localeCompare(b.currency));
+}
+
+// 프로젝트 손익(엑셀 수익금액·수익률 전용) — 판매 상세 '프로젝트 손익 요약'과 같은 공용 계산(services/projectProfit)의 예상이익·예상이익률.
+//   화면 조회(computePayoutReadiness)에서는 계산하지 않고, 엑셀 다운로드 시에만 별도 API로 호출한다(조회 속도 영향 없음).
+//   프로젝트 전체 원가 기준(이번 지급액만으로 계산하지 않음) → 같은 프로젝트는 같은 값. 계산 실패는 null(공란).
+//   supply(손익 기준 공급가액)는 합계 수익률(Σ예상이익 ÷ Σ공급가액) 계산용. 조회 전용, DB 미변경.
+export type ReadinessProfit = { amount: number; rate: number | null; supply: number; cost: number; cancelled: boolean };
+export async function loadProjectProfits(projectIds: number[]): Promise<Map<number, ReadinessProfit | null>> {
+  const ids = [...new Set(projectIds)];
+  const out = new Map<number, ReadinessProfit | null>();
+  for (let i = 0; i < ids.length; i += 8) {
+    await Promise.all(ids.slice(i, i + 8).map(async (pid) => {
+      try {
+        const { profit: pf } = await computeProjectProfit(pid);
+        out.set(pid, { amount: pf.estimatedProfit, rate: pf.estimatedMarginRate, supply: pf.saleSupplyAmount, cost: pf.totalCost, cancelled: pf.saleCancelled });
+      } catch { out.set(pid, null); }
+    }));
+  }
+  return out;
 }
 
 export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "all"; date?: string }) {

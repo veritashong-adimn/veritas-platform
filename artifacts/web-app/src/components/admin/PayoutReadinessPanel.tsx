@@ -6,11 +6,13 @@
 //   한 건의 모든 사유·필요한 조치 표시. 지급상태·금액·날짜·회차를 바꾸지 않는다(처리는 기존 화면).
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../../lib/constants';
-import { exportDataset } from '../../lib/excelExport';
+import { exportDataset, type ExcelColumn } from '../../lib/excelExport';
 import { DateField } from './DatePickerShared';
 import { orderBySale } from '../../lib/payoutReadinessExcelOrder';
 import { PAY_STATUS_META, type PayStatusKey, payStatusChips, fxSummaryText, SaleLink } from './payoutDisplayShared';
 
+// 프로젝트 손익(판매 상세 '프로젝트 손익 요약'의 예상이익·예상이익률, 서버 공용 계산) — 엑셀 다운로드 시에만 조회
+type Profit = { amount: number; rate: number | null; supply: number; cost: number; cancelled: boolean };
 type Blocker = { cat: 'B' | 'C' | 'D' | 'I'; code: string; text: string; action: string };
 type Item = {
   source: string; kind: 'platform' | 'crm_converted' | 'crm_only'; sourceKey: string; crmRowId: number | null; assignmentId: number | null;
@@ -136,7 +138,8 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast, def
 
   const [fullBusy, setFullBusy] = useState(false);
   // full: 관리자 전용 전체번호 엑셀 — 수행자 ID → 전체 주민번호(별도 API, 메모리에서만 사용·저장 안 함)
-  const exportExcel = (full?: Map<number, string>) => {
+  const exportExcel = (profits: Map<number, Profit | null>, full?: Map<number, string>) => {
+    const pf = (r: Item) => (r.projectId != null ? (profits.get(r.projectId) ?? null) : null);
     const rrn = (r: Item) => {
       if (r.vendorId != null || r.masterId == null) return '';
       return full ? (full.get(r.masterId) ?? '') : (r.residentNumberMasked ?? '');
@@ -144,9 +147,14 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast, def
     // 판매금액(고객)은 판매건 단위 값 — 같은 판매건의 모든 수행 행에 같은 값을 표시한다(행별 확인용).
     //   판매금액 합계를 낼 때는 판매건(판매ID)당 한 번만 집계해야 한다(행 단위 합산 시 중복). 지급금액 열·합계는 변경 없음.
     const amt = (r: Item, k: 'supply' | 'vat' | 'total') => (r.saleAmount ? r.saleAmount[k] : '');
-    exportDataset<Item>({
-      filename: (scope === 'date' ? `지급준비점검_${date}` : `지급누락점검_전체기간`) + (full ? '_주민번호전체' : '') + '.xlsx', sheetName: scope === 'date' ? '지급준비점검' : '지급누락점검',
-      columns: [
+    // 수익금액·수익률 — 프로젝트 손익 요약 값 그대로(프로젝트 단위, 같은 프로젝트 행은 같은 값). 판매취소 수익률 = '—'.
+    //   합계: 프로젝트 ID당 1회 — Σ예상이익 ÷ Σ손익 기준 공급가액 × 100(개별 수익률 평균 아님). 공급가액 합 0 → '—'. 손익 계산 불가 행 제외.
+    const projProfit = new Map<number, Profit>();
+    for (const r of rows) { const p = pf(r); if (r.projectId != null && p) projProfit.set(r.projectId, p); }
+    const pSum = [...projProfit.values()].reduce((a, p) => ({ amount: a.amount + p.amount, supply: a.supply + p.supply }), { amount: 0, supply: 0 });
+    const pRate = pSum.supply > 0 ? Math.round((pSum.amount / pSum.supply) * 1000) / 10 : '—';
+    const noProfit = rows.filter(r => !pf(r)).length;
+    const columns: ExcelColumn<Item>[] = [
         { header: '출처', value: (r) => KIND_LABEL[r.kind] ?? r.kind, width: 9 },
         { header: '거래처', value: (r) => r.client ?? '', width: 22 },
         { header: '판매번호', value: (r) => r.saleNo ?? r.quoteNumber ?? '', width: 16 },
@@ -155,6 +163,8 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast, def
         { header: '공급가', value: (r) => amt(r, 'supply'), type: 'number', width: 14 },
         { header: '부가세', value: (r) => amt(r, 'vat'), type: 'number', width: 13 },
         { header: '총액', value: (r) => amt(r, 'total'), type: 'number', width: 14 },
+        { header: '수익금액', value: (r) => pf(r)?.amount ?? '', type: 'number', width: 14 },
+        { header: '수익률', value: (r) => { const p = pf(r); return p ? (p.rate ?? '—') : ''; }, type: 'number', numFmt: '0.0"%"', width: 9 },
         { header: '지급대상', value: (r) => r.payee ?? '', width: 16 },
         { header: '지급대상 구분', value: (r) => (isVendor(r) ? '외주업체' : '개인'), width: 10 },
         { header: '상품·업무', value: (r) => r.productWork ?? '', width: 40 },   // 원문 그대로(요약·생략 없음)
@@ -176,21 +186,49 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast, def
         { header: '지급상태', value: (r) => payLabel(r), width: 13 },
         { header: '계좌', value: (r) => (r.hasAccount ? '등록' : '미등록'), width: 7 },
         { header: '누락·확인필요 사유', value: (r) => reasonText(r), width: 40 },
-      ],
+    ];
+    const footer: unknown[] = columns.map(() => null);
+    footer[0] = `합계(프로젝트 ${projProfit.size}건${noProfit ? ` · 손익 계산 불가 ${noProfit}행 제외` : ''})`;
+    footer[columns.findIndex(c => c.header === '수익금액')] = pSum.amount;
+    footer[columns.findIndex(c => c.header === '수익률')] = pRate;
+    exportDataset<Item>({
+      filename: (scope === 'date' ? `지급준비점검_${date}` : `지급누락점검_전체기간`) + (full ? '_주민번호전체' : '') + '.xlsx', sheetName: scope === 'date' ? '지급준비점검' : '지급누락점검',
+      columns,
       rows: orderBySale(rows),   // 같은 판매건 연속 표시(개인 → 외주업체) — 출력 순서만, 화면 목록 순서 불변
+      footerRows: [footer],
     });
     onToast(`${rows.length}건을 Excel로 내보냈습니다.${full ? ' (주민번호 전체 — 외부 유출 주의)' : ''}`);
   };
+  // 엑셀 다운로드 시에만 프로젝트 손익 조회(화면 조회에서는 계산 안 함) — 계산 중 버튼 비활성(중복 클릭 방지)
+  const [excelBusy, setExcelBusy] = useState(false);
+  const loadProfits = async (): Promise<Map<number, Profit | null>> => {
+    const ids = [...new Set(rows.map(r => r.projectId).filter((v): v is number => v != null))];
+    if (!ids.length) return new Map();
+    const r = await fetch(api('/api/admin/payout-unified/readiness/project-profits'), {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ projectIds: ids }) });
+    const d = await r.json().catch(() => null);
+    if (!r.ok) throw new Error(d?.error || `HTTP ${r.status}`);
+    return new Map(Object.entries(d?.profits ?? {}).map(([k, v]) => [Number(k), (v as Profit | null) ?? null]));
+  };
+  const exportPlainExcel = async () => {
+    if (excelBusy || fullBusy) return;
+    setExcelBusy(true);
+    try { exportExcel(await loadProfits()); }
+    catch (e) { onToast((e as Error).message || '엑셀 출력 실패'); }
+    finally { setExcelBusy(false); }
+  };
   const exportFullExcel = async () => {
+    if (excelBusy || fullBusy) return;
     const ids = [...new Set(rows.filter(r => r.vendorId == null && r.masterId != null).map(r => r.masterId as number))];
-    if (!ids.length) { exportExcel(new Map()); return; }
     setFullBusy(true);
     try {
+      const profits = await loadProfits();
+      if (!ids.length) { exportExcel(profits, new Map()); return; }
       const r = await fetch(api('/api/admin/payout-unified/readiness/resident-numbers'), {
         method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ translatorIds: ids }) });
       const d = await r.json().catch(() => null);
       if (!r.ok) throw new Error(d?.error || `HTTP ${r.status}`);
-      exportExcel(new Map(Object.entries(d?.residentNumbers ?? {}).map(([k, v]) => [Number(k), String(v)])));
+      exportExcel(profits, new Map(Object.entries(d?.residentNumbers ?? {}).map(([k, v]) => [Number(k), String(v)])));
     } catch (e) { onToast((e as Error).message || '주민번호 전체 엑셀 출력 실패'); }
     finally { setFullBusy(false); }
   };
@@ -220,9 +258,9 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast, def
           {open && tabBtn('date', '① 지급일 기준 후보')}
           {open && tabBtn('all', '② 전체 기간 누락·공란')}
           {open && scope === 'date' && !embedded && <DateField value={date} onChange={v => v && setDate(v)} style={{ fontSize: 12, padding: '4px 6px', width: 130, border: '1px solid #cbd5e1', borderRadius: 6 }} testid="ready-date" ariaLabel="지급일" allowClear={false} />}
-          {open && data && <button type="button" onClick={() => exportExcel()} data-testid="ready-excel" aria-label="지급 준비 점검 Excel"
-            style={{ border: 'none', borderRadius: 7, padding: '5px 10px', background: '#059669', color: '#fff', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>Excel</button>}
-          {open && data?.canRevealResidentNumber && <button type="button" onClick={exportFullExcel} disabled={fullBusy} data-testid="ready-excel-full-rrn" aria-label="주민번호 전체 Excel(관리자 전용)"
+          {open && data && <button type="button" onClick={exportPlainExcel} disabled={excelBusy || fullBusy} data-testid="ready-excel" aria-label="지급 준비 점검 Excel" aria-busy={excelBusy}
+            style={{ border: 'none', borderRadius: 7, padding: '5px 10px', background: '#059669', color: '#fff', fontWeight: 700, fontSize: 12, cursor: excelBusy || fullBusy ? 'wait' : 'pointer', opacity: fullBusy ? 0.6 : 1 }}>{excelBusy ? '출력 중…' : 'Excel'}</button>}
+          {open && data?.canRevealResidentNumber && <button type="button" onClick={exportFullExcel} disabled={fullBusy || excelBusy} data-testid="ready-excel-full-rrn" aria-label="주민번호 전체 Excel(관리자 전용)"
             title="관리자 전용 — 주민등록번호 전체가 포함됩니다. 외부 유출에 주의하세요."
             style={{ border: '1px solid #b91c1c', borderRadius: 7, padding: '5px 10px', background: '#fff', color: '#b91c1c', fontWeight: 700, fontSize: 12, cursor: fullBusy ? 'wait' : 'pointer' }}>{fullBusy ? '출력 중…' : '전체번호 Excel'}</button>}
           {!embedded && <button type="button" onClick={() => setOpen(o => !o)} data-testid="ready-toggle" aria-expanded={open} aria-label="지급 준비 점검 열기"
