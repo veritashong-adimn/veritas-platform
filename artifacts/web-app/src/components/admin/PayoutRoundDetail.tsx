@@ -58,6 +58,7 @@ export type PayeeGroup = {
   payStatusCounts?: Record<string, number>;
   // Excel 정렬 그룹(서버 lib/payeeRemitGroup) — 1 국내 · 2 해외·국내송금 · 3 해외·해외송금 · 4 외주업체. 화면 순서에는 쓰지 않음.
   remitGroup?: number; remitGroupReason?: string;
+  residentMasked?: string | null;   // 통번역사 명부 주민등록번호(마스킹) — 외주업체 null
 };
 // 지급상태 — 실제 '지급' 여부만(검증상태와 분리).
 export const STATUS_META: Record<string, { label: string; bg: string; fg: string }> = {
@@ -92,7 +93,9 @@ export const opStatusGroups = (rs: OpRound[]): [string, number][] => {
 };
 
 // 지급대상·언어·이메일·연락처·건수·세전금액·원천세공제·부가세·실지급금액·지급상태·출력
-const STMT_COLS = 'minmax(120px,1.2fr) minmax(60px,0.6fr) minmax(90px,0.7fr) 96px 44px 100px 96px 90px 108px 160px 128px';   // 지급상태 열 고정폭(행마다 열 위치가 달라지지 않게)
+// 지급대상 · 주민등록번호 · 언어 · 이메일 · 연락처 · 건수 · 세전금액 · 원천세공제 · 부가세 · 실지급금액 · 지급상태 · 명세서
+//   이름·언어·이메일 열이 남는 폭을 독차지하지 않도록 금액 열과 비율을 나눠 갖는다. 지급상태·명세서는 고정폭(행마다 열 위치 동일).
+const STMT_COLS = 'minmax(96px,0.9fr) 112px minmax(64px,0.6fr) minmax(110px,0.9fr) 104px 44px minmax(96px,0.8fr) minmax(90px,0.75fr) minmax(76px,0.6fr) minmax(136px,1fr) 160px 128px';
 const sumBy = <T,>(a: T[], f: (x: T) => unknown) => Math.round(a.reduce((s, x) => s + num(f(x)), 0) * 100) / 100;
 /** 행 목록의 외화 통화별 합계(원화 합계와 별도) */
 function fxTotalsOf(rows: DetailRow[]): ForeignTotal[] {
@@ -241,21 +244,23 @@ function PayeeTable({ payees, items, payoutDate, loading, onToast, onPick }: { p
           style={{ border: 'none', borderRadius: 7, padding: '6px 12px', background: '#059669', color: '#fff', fontWeight: 700, fontSize: 12, cursor: payees.length ? 'pointer' : 'default', opacity: payees.length ? 1 : 0.5 }}>전체 Excel</button>
       </div>
       <div data-testid="pu-payee-panel" style={{ border: '1px solid #e5e7eb', borderRadius: 10, background: '#fff', overflowX: 'auto' }}>
-        <div style={{ minWidth: 1120 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: STMT_COLS, gap: '0 10px', alignItems: 'center', fontSize: 12, padding: '7px 12px', background: '#f3f4f6', color: '#6b7280', fontWeight: 700 }}>
-            <H c="지급대상" /><H c="언어" /><H c="이메일" /><H c="연락처" /><H c="건수" r /><H c="세전금액" r /><H c="원천세공제" r /><H c="부가세" r /><H c="실지급금액" r /><H c="지급상태" r /><H c="명세서 Excel · PDF" r />
+        <div style={{ minWidth: 1318 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: STMT_COLS, gap: '0 8px', alignItems: 'center', fontSize: 12, padding: '7px 12px', background: '#f3f4f6', color: '#6b7280', fontWeight: 700 }}>
+            <H c="지급대상" /><H c="주민등록번호" /><H c="언어" /><H c="이메일" /><H c="연락처" /><H c="건수" r /><H c="세전금액" r /><H c="원천세공제" r /><H c="부가세" r /><H c="실지급금액" r /><H c="지급상태" r /><H c="명세서 Excel · PDF" r />
           </div>
           <div className="pu-payee-list">
             {payees.map((g) => {
               const opts = stmtFor(g);
               return (
                 <div className="pu-payee-row" key={g.masterKey} data-testid={`pu-payee-${g.name}`} onClick={() => onPick(g.masterKey)} title="클릭 → 이 지급대상의 건별 상세내역"
-                  style={{ display: 'grid', gridTemplateColumns: STMT_COLS, gap: '0 10px', alignItems: 'center', fontSize: 12.5, padding: '8px 12px', cursor: 'pointer' }}>
+                  style={{ display: 'grid', gridTemplateColumns: STMT_COLS, gap: '0 8px', alignItems: 'center', fontSize: 12.5, padding: '8px 12px', cursor: 'pointer' }}>
                   <div style={{ color: '#111827', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={g.name}>
                     {g.name}
                     {g.payeeType === 'vendor' && <span style={{ marginLeft: 5 }}>{badge('외주업체', '#7c3aed', '#f5f3ff')}</span>}
                     {!g.confirmed && g.matchStatus !== 'internal' && g.matchStatus !== 'vendor' && g.matchStatus !== 'client' && <span style={{ marginLeft: 5 }}>{badge('명부 연결 확인', '#1d4ed8', '#eff6ff', '통번역사 명부 연결 미확정(지급상태와 무관)')}</span>}
                   </div>
+                  <div data-testid={`pu-payee-rrn-${g.masterKey}`} style={{ whiteSpace: 'nowrap', fontSize: 11.5, fontVariantNumeric: 'tabular-nums', color: g.payeeType === 'vendor' || g.residentMasked ? '#374151' : '#9ca3af' }}>
+                    {g.payeeType === 'vendor' ? '—' : (g.residentMasked || '미등록')}</div>
                   <div style={{ color: '#374151', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11.5 }} title={g.languages.join(', ')}>{g.languages.join(', ')}</div>
                   <div style={{ color: '#9ca3af', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11 }} title={g.email ?? undefined}>{g.email || ''}</div>
                   <div style={{ color: '#9ca3af', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11 }} title={g.phone ?? undefined}>{g.phone || ''}</div>
@@ -264,7 +269,7 @@ function PayeeTable({ payees, items, payoutDate, loading, onToast, onPick }: { p
                   <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#dc2626' }}>{won(g.withholdingImplied)}</div>
                   <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#7c3aed' }} data-testid={`pu-vendor-vat-${g.masterKey}`}>{won(num(g.vatTotal))}</div>
                   <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 800, color: '#111827' }}>{won(g.posttaxTotal)}
-                    {(g.foreignTotals ?? []).map(f => <div key={f.currency} data-testid={`pu-payee-fx-${g.masterKey}-${f.currency}`} style={{ fontSize: 10, color: '#1d4ed8', fontWeight: 700 }} title="외화 지급 — 원화 합계 제외(별도 해외송금)">{fxSummaryText([f])}</div>)}</div>
+                    {(g.foreignTotals ?? []).map(f => <div key={f.currency} data-testid={`pu-payee-fx-${g.masterKey}-${f.currency}`} style={{ fontSize: 10, color: '#1d4ed8', fontWeight: 700, whiteSpace: 'normal', wordBreak: 'keep-all', overflowWrap: 'anywhere' }} title="외화 지급 — 원화 합계 제외(별도 해외송금)">{fxSummaryText([f])}</div>)}</div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', rowGap: 2 }}>{payStatusChips(g.payStatusCounts, true)}</div>
                   <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                     <button type="button" style={stmtBtn} data-testid={`pu-excel-${g.name}`} aria-label={`${g.name} 지급명세서 Excel`} onClick={(e) => { e.stopPropagation(); exportReproStatementExcel(opts); onToast(`${g.name} 지급명세서 Excel을 다운로드했습니다.`); }}>Excel</button>
@@ -276,13 +281,13 @@ function PayeeTable({ payees, items, payoutDate, loading, onToast, onPick }: { p
             {payees.length === 0 && <div style={{ padding: 24, textAlign: 'center', color: '#9ca3af', fontSize: 13 }}>{loading ? '불러오는 중…' : '지급대상이 없습니다.'}</div>}
           </div>
           {payees.length > 0 && (
-            <div data-testid="pu-payee-total" style={{ display: 'grid', gridTemplateColumns: STMT_COLS, gap: '0 10px', alignItems: 'center', fontSize: 12.5, padding: '9px 12px', background: '#f8fafc', borderTop: '2px solid #e5e7eb', fontWeight: 800, color: '#111827' }}>
-              <div>합계 ({payees.length}명)</div><div /><div /><div />
+            <div data-testid="pu-payee-total" style={{ display: 'grid', gridTemplateColumns: STMT_COLS, gap: '0 8px', alignItems: 'center', fontSize: 12.5, padding: '9px 12px', background: '#f8fafc', borderTop: '2px solid #e5e7eb', fontWeight: 800, color: '#111827' }}>
+              <div>합계 ({payees.length}명)</div><div /><div /><div /><div />
               <div style={{ textAlign: 'right' }}>{tot.count}</div>
               <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{won(tot.pre)}</div>
               <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#dc2626' }}>{won(tot.wh)}</div>
               <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#7c3aed' }}>{won(tot.vat)}</div>
-              <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{won(tot.pay)}{fxAll.length > 0 && <div style={{ fontSize: 10, color: '#1d4ed8' }}>{fxSummaryText(fxAll)}</div>}</div>
+              <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{won(tot.pay)}{fxAll.length > 0 && <div data-testid="pu-payee-total-fx" style={{ fontSize: 10, color: '#1d4ed8', whiteSpace: 'normal', wordBreak: 'keep-all', overflowWrap: 'anywhere' }}>{fxSummaryText(fxAll)}</div>}</div>
               <div /><div />
             </div>
           )}

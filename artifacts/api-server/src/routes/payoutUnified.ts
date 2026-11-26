@@ -31,6 +31,7 @@ import { payStatusOf, isAmountMissing, PAY_STATUS_LABEL, emptyStatusCounts, type
 import { isConfirmedFreeService } from "../lib/payoutDateDecisions";
 import { loadSaleIdentities } from "../services/saleIdentity";
 import { remitGroupOf, type RemitRegistry } from "../lib/payeeRemitGroup";
+import { loadResidentNumbers } from "../services/payoutReadiness";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -716,6 +717,11 @@ router.get("/admin/payout-unified/payees", ...adminGuard, requireStaffPermission
       resBy.set(Number(r.id), r.rt ?? null);
     const rowsByKey = new Map<string, any[]>();
     for (const it of items as any[]) { const a = rowsByKey.get(it.masterKey) ?? []; a.push({ payCurrency: it.payCurrency, withholdingTreatment: it.withholdingTreatment, residencyType: it.source === "current" ? resBy.get(it.id) ?? null : null }); rowsByKey.set(it.masterKey, a); }
+    // 주민등록번호(지급대상별 요약 화면) — 통번역사 명부 기준 마스킹값('900101-*******', 지급준비점검과 같은 함수·같은 마스킹).
+    //   명부 번호가 없으면 과거 CRM 원본 마스킹값(행 단위 residentMasked). 외주업체는 null. 전체번호는 이 응답에 넣지 않는다.
+    const rrnBy = await loadResidentNumbers(db, regUids, false);
+    const crmRrnByKey = new Map<string, string>();
+    for (const it of items as any[]) if (it.residentMasked && !crmRrnByKey.has(it.masterKey)) crmRrnByKey.set(it.masterKey, it.residentMasked);
     const payees = [...groups.values()].map(g => ({
       masterKey: g.masterKey, name: g.name, confirmed: g.confirmed, matchStatus: g.matchStatus, matchedUserId: g.matchedUserId,
       email: g.email, phone: g.phone, count: g.count,
@@ -728,6 +734,7 @@ router.get("/admin/payout-unified/payees", ...adminGuard, requireStaffPermission
       foreignTotals: [...g.foreign.values()].sort((a: any, b: any) => a.currency.localeCompare(b.currency)),
       payStatusCounts: g.payStatusCounts,   // 화면 공통 지급상태별 건수(표시 전용)
       // 지급대상별 요약 Excel 정렬 그룹(1 국내 · 2 해외·국내송금 · 3 해외·해외송금 · 4 외주업체) + 판정 근거 — 추가 필드(화면 순서 불변)
+      residentMasked: g.payeeType === "vendor" ? null : ((g.matchedUserId != null ? rrnBy.get(Number(g.matchedUserId)) : undefined) ?? crmRrnByKey.get(g.masterKey) ?? null),
       ...(() => { const r = remitGroupOf(g.payeeType, rowsByKey.get(g.masterKey) ?? [], g.matchedUserId != null ? regBy.get(Number(g.matchedUserId)) ?? null : null); return { remitGroup: r.group, remitGroupReason: r.reason }; })(),
     })).sort((a, b) => a.name.localeCompare(b.name, "ko"));
 
