@@ -92,176 +92,6 @@ function fxBillingError(r: { billingCurrency?: string | null; foreignAmount?: un
   return null;
 }
 
-const PAYMENT_TYPE = ["advance", "interim", "balance", "lump_sum", "other"] as const;
-const DEPOSIT_STATUS = ["scheduled", "partial", "completed", "unpaid"] as const;
-
-const rowSchema = z.object({
-  id: z.number().int().optional(),
-  issueDate: z.string().nullable().optional(),      // 발행일 — 세금계산서 발행일(세금계산서일 때만)
-  expectedDate: z.string().nullable().optional(),   // 입금예정일
-  paidDate: z.string().nullable().optional(),       // 입금일
-  paymentType: z.enum(PAYMENT_TYPE).nullable().optional(),
-  paymentMethod: z.string().max(100).nullable().optional(),   // 결제방법 — 자유 입력(text). 기본 4개 라벨 또는 사용자 직접입력.
-  supplyAmount: z.coerce.number().min(0).nullable().optional(),
-  vatAmount: z.coerce.number().min(0).nullable().optional(),
-  amount: z.coerce.number().min(0).nullable().optional(),
-  depositStatus: z.enum(DEPOSIT_STATUS).nullable().optional(),
-  depositConfirmed: z.boolean().nullable().optional(),         // 입금확인 — 체크 시 입금일=입금예정일·상태 입금완료
-  paymentCategory: z.string().max(50).nullable().optional(),   // 결제유형: 일반결제 · 수출바우처(자유 확장)
-  payer: z.string().max(100).nullable().optional(),            // 입금주체: 고객사 · 수출바우처 운영기관
-  depositItem: z.string().max(50).nullable().optional(),       // 입금항목: 공급가액 · 부가세 · 전체금액
-  billingCompanyId: z.number().int().nullable().optional(),    // 청구업체(거래처 Master 연결, 선택)
-  // 청구업체 표시명(회차별) — 화면에서 입력·선택한 이름. 거래처 Master 에 없는 업체는 id 없이 이름만 저장(Master 생성·수정 없음).
-  //  생략(undefined) 시 기존 동작(Master 이름) 유지 — 구버전 호출 호환.
-  billingCompanyName: z.string().max(200).nullable().optional(),
-  billingContactId: z.number().int().nullable().optional(),    // 담당자
-  note: z.string().nullable().optional(),
-  // 입금은행(청구 회차 단위)·은행 확인 — 생략(undefined) 시 기존 값 유지(구버전 화면 호환).
-  depositBank: z.string().max(100).nullable().optional(),
-  depositBankConfirmed: z.boolean().nullable().optional(),
-  // 외화 청구(선택) — 생략 시 기존 값 유지. NULL/'KRW' = 원화 청구. 금액·환율은 문자열로 받아 정밀도 보존.
-  billingCurrency: z.string().max(3).nullable().optional(),
-  foreignAmount: z.union([z.string(), z.number()]).nullable().optional(),
-  invoiceFxRate: z.union([z.string(), z.number()]).nullable().optional(),
-  invoiceFxDate: z.string().nullable().optional(),
-});
-const batchSchema = z.object({
-  rows: z.array(rowSchema),
-  deletedIds: z.array(z.number().int()).default([]),
-});
-
-// 배치 저장 — 삭제 후 upsert. 회차는 전송된 순서대로 1..N 재부여(자동번호).
-router.put("/admin/projects/:id/payment-records", ...adminGuard, requireRolePermission("payment.update"), async (req, res) => {
-  const projectId = Number(req.params.id);
-  if (!Number.isInteger(projectId) || projectId <= 0) { res.status(400).json({ error: "잘못된 프로젝트 ID" }); return; }
-  const parsed = batchSchema.safeParse(req.body);
-  if (!parsed.success) { res.status(400).json({ error: "유효성 검증 실패", detail: parsed.error.flatten() }); return; }
-  const { rows, deletedIds } = parsed.data;
-  const userId = req.user?.id ?? null;
-
-  // 입금확인(확정) 수금기록 보호 — 삭제·금액·입금일·확인해제는 일반 저장으로 불가(비고·청구정보 등은 수정 가능).
-  const before = await db.select().from(projectPaymentsTable).where(eq(projectPaymentsTable.projectId, projectId));
-  // 전액 환불된 회차(입금거래가 있고 순입금액 ≤ 0) — 입금확인 보호에서 제외: 청구금액·결제유형 수정 가능(입금·환불 거래 이력은 그대로 보존)
-  const txAgg = before.length ? (await db.select({ pid: paymentTransactionsTable.projectPaymentId,
-      net: sql<string>`coalesce(sum(${paymentTransactionsTable.customerPaidAmount}), 0)`,
-      refunds: sql<number>`count(*) filter (where ${paymentTransactionsTable.txnType} = 'refund')::int` })
-    .from(paymentTransactionsTable).where(inArray(paymentTransactionsTable.projectPaymentId, before.map(b => b.id)))
-    .groupBy(paymentTransactionsTable.projectPaymentId)) : [];
-  const fullyRefunded = new Set(txAgg.filter(a => Number(a.refunds) > 0 && Number(a.net) <= 0.005).map(a => a.pid));
-  const hasRefundHistory = new Set(txAgg.filter(a => Number(a.refunds) > 0).map(a => a.pid));
-  const confirmedById = new Map(before.filter(b => b.depositConfirmed && !fullyRefunded.has(b.id)).map(b => [b.id, b]));
-  const beforeById = new Map(before.map(b => [b.id, b]));
-  const delLocked = deletedIds.filter(id => confirmedById.has(id));
-  if (delLocked.length) { res.status(409).json({ error: `입금확인된 수금기록은 삭제할 수 없습니다 (id: ${delLocked.join(", ")}).` }); return; }
-  // 환불 이력이 있는 회차는 삭제 금지(삭제 시 입금·환불 거래가 함께 지워짐) — 금액·결제유형 수정으로 정리
-  const refundDel = deletedIds.filter(id => hasRefundHistory.has(id));
-  if (refundDel.length) { res.status(409).json({ error: `입금·환불 이력이 있는 청구회차는 삭제할 수 없습니다 (id: ${refundDel.join(", ")}). 청구금액·결제유형을 수정하세요.` }); return; }
-  const n2 = (v: unknown) => Number(v ?? 0).toFixed(2);
-  for (const r of rows) {
-    const b = r.id ? confirmedById.get(r.id) : undefined;
-    if (!b) continue;
-    const confirmedNow = r.depositConfirmed === true && r.depositStatus === "completed" && !!r.paidDate;
-    if (!confirmedNow || (r.paidDate || null) !== (b.paidDate ? String(b.paidDate).slice(0, 10) : null)
-        || n2(r.amount) !== n2(b.amount) || n2(r.supplyAmount) !== n2(b.supplyAmount) || n2(r.vatAmount) !== n2(b.vatAmount)) {
-      res.status(409).json({ error: `입금확인된 수금기록(id ${b.id})의 금액·입금일·확인상태는 변경할 수 없습니다.` }); return;
-    }
-  }
-
-  for (const [i, r] of rows.entries()) {
-    const e = fxBillingError(r);
-    if (e) { res.status(400).json({ error: `${i + 1}회차: ${e}` }); return; }
-  }
-  // 입금·상계 거래가 있는 회차의 청구통화 변경 금지(기존 입금기록의 통화 의미 보호)
-  const txOwners = before.length ? new Set((await db.select({ pid: paymentTransactionsTable.projectPaymentId }).from(paymentTransactionsTable)
-    .where(inArray(paymentTransactionsTable.projectPaymentId, before.map(b => b.id)))).map(t => t.pid)) : new Set<number>();
-  for (const [i, r] of rows.entries()) {
-    const b = r.id ? beforeById.get(r.id) : undefined;
-    if (!b || r.billingCurrency === undefined || !txOwners.has(b.id)) continue;
-    const norm = (c?: string | null) => { const v = (c ?? "").trim().toUpperCase(); return v && v !== "KRW" ? v : null; };
-    if (norm(r.billingCurrency) !== norm(b.billingCurrency)) {
-      res.status(409).json({ error: `${i + 1}회차: 입금기록이 있는 청구회차의 청구통화는 변경할 수 없습니다(${norm(b.billingCurrency) ?? "KRW"} → ${norm(r.billingCurrency) ?? "KRW"}).` }); return;
-    }
-  }
-  // 다른 회차의 상계 원천으로 사용된 청구회차는 삭제 금지(상계 근거 보존)
-  if (deletedIds.length) {
-    const used = await db.select({ id: paymentTransactionsTable.id, src: paymentTransactionsTable.offsetSourcePaymentId }).from(paymentTransactionsTable)
-      .where(inArray(paymentTransactionsTable.offsetSourcePaymentId, deletedIds));
-    if (used.length) { res.status(409).json({ error: `상계 원천으로 사용된 청구회차는 삭제할 수 없습니다 (id: ${[...new Set(used.map(u => u.src))].join(", ")}).` }); return; }
-  }
-
-  try {
-    await db.transaction(async (tx) => {
-      if (deletedIds.length) {
-        await tx.delete(projectPaymentsTable)
-          .where(and(eq(projectPaymentsTable.projectId, projectId), inArray(projectPaymentsTable.id, deletedIds)));
-      }
-      let seq = 1;
-      for (const r of rows) {
-        // ── 입금완료 상태 정합화(§TOP3) — project_payments 를 입금상태의 Source of Truth 로 유지 ──
-        //  · "입금완료"는 세 신호가 모두 있을 때만 성립: depositStatus=completed · depositConfirmed=true · paidDate 존재.
-        //  · 하나라도 없으면 미입금으로 정규화하여, 모순 조합(예: completed+confirmed=false, completed+paidDate=null,
-        //    confirmed=true+status≠completed, paidDate만 존재+미입금)이 DB에 저장되지 않도록 한다.
-        //  · 미입금으로 정규화 시 completed 는 scheduled 로 강등하고, 그 외 상태(scheduled/partial/unpaid)는 유지한다.
-        const paidDateVal = r.paidDate || null;
-        const isPaid = r.depositConfirmed === true && r.depositStatus === "completed" && paidDateVal !== null;
-        const reconciledStatus: (typeof DEPOSIT_STATUS)[number] = isPaid
-          ? "completed"
-          : (r.depositStatus === "completed" ? "scheduled" : (r.depositStatus ?? "scheduled"));
-        // 청구업체·담당자 표시명 Snapshot — 회차별 저장값 우선(§청구업체 독립 저장).
-        const prev = r.id ? beforeById.get(r.id) : undefined;
-        const billingCompanyNameSnapshot = await resolveBillingCompanyName(tx, r, prev);
-        //  담당자: 같은 담당자면 기존 Snapshot 유지(과거 CRM 원본명 보존), 바뀌면 Master 이름으로 고정(§Phase2).
-        const billingContactNameSnapshot = prev && (prev.billingContactId ?? null) === (r.billingContactId ?? null) && prev.billingContactNameSnapshot != null
-          ? prev.billingContactNameSnapshot
-          : await fetchContactName(tx, r.billingContactId ?? null);
-        const values = {
-          sequence: seq++,                         // 회차 자동번호(프로젝트별, 순서 기준)
-          issueDate: r.issueDate || null,
-          expectedDate: r.expectedDate || null,
-          paidDate: isPaid ? paidDateVal : null,
-          paymentType: r.paymentType ?? null,
-          paymentMethod: r.paymentMethod ?? null,
-          supplyAmount: String(r.supplyAmount ?? 0),
-          vatAmount: String(r.vatAmount ?? 0),
-          amount: String(r.amount ?? 0),
-          depositStatus: reconciledStatus,
-          depositConfirmed: isPaid,
-          paymentCategory: r.paymentCategory ?? "일반결제",
-          payer: r.payer ?? null,
-          depositItem: r.depositItem ?? null,
-          billingCompanyId: r.billingCompanyId ?? null,
-          billingContactId: r.billingContactId ?? null,
-          billingCompanyNameSnapshot,
-          billingContactNameSnapshot,
-          ...fxBillingValues(r, prev),
-          note: r.note ?? null,
-          // 입금은행·확인 — 전달된 경우만 반영(생략 시 기존 값 유지). 은행이 비면 확인도 해제.
-          ...(r.depositBank !== undefined ? { depositBank: (r.depositBank ?? "").trim() || null } : {}),
-          ...(r.depositBankConfirmed !== undefined || r.depositBank !== undefined
-            ? { depositBankConfirmed: !!r.depositBankConfirmed && !!((r.depositBank !== undefined ? r.depositBank : prev?.depositBank) ?? "").trim() }
-            : {}),
-          updatedBy: userId,
-          updatedAt: new Date(),
-        };
-        if (r.id) {
-          await tx.update(projectPaymentsTable).set(values)
-            .where(and(eq(projectPaymentsTable.id, r.id), eq(projectPaymentsTable.projectId, projectId)));
-        } else {
-          await tx.insert(projectPaymentsTable).values({ projectId, createdBy: userId, ...values });
-        }
-      }
-    });
-    const saved = await loadPaymentRecords(projectId);
-    const pick = (r: any) => ({ id: r.id, expectedDate: r.expectedDate ?? null, paidDate: r.paidDate ?? null, amount: n2(r.amount), supplyAmount: n2(r.supplyAmount), vatAmount: n2(r.vatAmount), depositStatus: r.depositStatus, depositConfirmed: !!r.depositConfirmed });
-    await logEvent("project", projectId, "payment_records_saved", req.log, req.user ? { id: req.user.id, email: req.user.email } : undefined,
-      JSON.stringify({ before: before.map(pick), after: saved.map(pick), deletedIds }));
-    res.json({ rows: saved });
-  } catch (err) {
-    req.log.error({ err }, "결제정보 저장 실패");
-    res.status(500).json({ error: "결제정보 저장 중 오류가 발생했습니다." });
-  }
-});
-
 // ── 수금거래(payment_transactions) 배치 저장 — 청구행 1건에 대한 입금/결제 내역 N건 ──
 //  · 청구행(project_payments) 1 : 수금거래 N. 청구행 복제 없이 부분입금(1차/2차…)을 거래 row 로 관리.
 //  · 금액 3개념 분리(§E): customer_paid_amount(고객결제) 만 미수금 계산에 사용, settled/fee 는 회계용.
@@ -327,6 +157,269 @@ const txnRowSchema = z.object({
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['customerPaidAmount'], message: '고객결제금액은 0보다 커야 합니다.' });
   }
 });
+
+type TxnRow = z.infer<typeof txnRowSchema>;
+type FxCalc = { krw: number | null; paid: number };
+// 외화 청구회차 입금 검증·원화 환산(상계 원천 검증 제외) — 수금거래 배치 저장과 청구정보 첫 입금 저장이 같은 규칙을 쓴다.
+function fxDepositCalc(billCur: string, r: TxnRow, label: string): { error: string } | FxCalc {
+  const cur = String(r.currency ?? "").toUpperCase();
+  if (cur !== billCur) return { error: `${label}: 입금통화(${cur || "없음"})가 청구통화(${billCur})와 다릅니다.` };
+  if (!(typeof r.foreignAmount === "number" && r.foreignAmount > 0)) return { error: `${label}: 외화 금액(${billCur})이 필요합니다.` };
+  const rate = r.fxRate != null ? String(r.fxRate) : null;
+  if (rate != null && (toScaled(rate, 6) ?? 0n) <= 0n) return { error: `${label}: 적용환율 형식 오류` };
+  // 원화 환산액: 은행 확인 원화액(krwAmount) 직접 입력이 있으면 우선, 없으면 외화 × 환율(원 단위 반올림). 환율 없으면 미확정(null).
+  const krw = rate == null ? null : (r.krwAmount != null ? Math.round(r.krwAmount) : krwOf(String(r.foreignAmount), rate));
+  return { krw, paid: krw ?? 0 };   // 확정 환산액만 원화 집계에 반영(미확정 0 — 외화 기준 판정은 fx 요약)
+}
+// 수금거래 저장값(insert/update 공통) — 기존 배치 저장 규칙 그대로.
+function txnValues(r: TxnRow, fx: FxCalc | undefined, userId: number | null) {
+  const num = (v: number | null | undefined) => (v == null ? null : String(v));
+  const scheduled = r.depositStatus === "scheduled";   // 입금예정 — 실제 입금액 0·입금일 없음(예정액·예정일만)
+  return {
+    paidDate: scheduled ? null : (r.paidDate || null),
+    method: fx ? (r.txnType === "offset" ? "상계" : (r.method || "외화송금")) : (r.method ?? null),
+    // 카드결제(실제 입금액 + 카드사 수수료가 함께 입력된 거래): 고객결제액 = 실제 입금액 + 수수료(원 단위).
+    //  → 미수금 = 청구금액 − 실제 입금액 − 수수료. 수수료는 fee_amount 로 별도 보관(매출·할인 아님). 그 외 결제방법은 기존 그대로.
+    customerPaidAmount: fx ? String(fx.paid)
+      : scheduled ? "0"
+      : r.txnType === "refund" ? String(-Math.abs(Number(r.customerPaidAmount ?? 0)))   // 환불 = 음수 거래
+      : (isCardMethod(r.method) && r.settledAmount != null && r.feeAmount != null
+          ? String(Math.round(Number(r.settledAmount)) + Math.round(Number(r.feeAmount)))
+          : String(r.customerPaidAmount ?? 0)),
+    settledAmount: scheduled ? null : num(r.settledAmount),
+    feeAmount: scheduled ? null : num(r.feeAmount),
+    currency: r.currency || "KRW",
+    fxRate: num(r.fxRate),
+    foreignAmount: num(r.foreignAmount),
+    krwAmount: fx ? (fx.krw != null ? String(fx.krw) : null) : num(r.krwAmount),
+    bankAccount: r.bankAccount ?? null,
+    payerName: r.payerName ?? null,
+    approvalNo: r.approvalNo ?? null,
+    cardPgType: r.cardPgType ?? null,
+    note: r.note ?? null,
+    txnType: r.txnType === "offset" ? "offset" : r.txnType === "refund" ? "refund" : (fx ? "deposit" : null),
+    offsetSourcePaymentId: r.txnType === "offset" ? (r.offsetSourcePaymentId ?? null) : null,
+    // 결제구분·입금예정일·입금예정액 — 전달된 경우만 반영(생략 시 기존 값 유지)
+    ...(r.paymentType !== undefined ? { paymentType: r.paymentType ?? null } : {}),
+    ...(r.expectedDate !== undefined ? { expectedDate: r.expectedDate || null } : {}),
+    ...(r.expectedAmount !== undefined ? { expectedAmount: num(r.expectedAmount) } : {}),
+    updatedBy: userId,
+    updatedAt: new Date(),
+  };
+}
+// 일반 입금 거래(환불·상계·입금예정 아님) — 청구정보 화면의 '첫 입금'(입금확인 체크) 정정 대상
+const isPlainDeposit = (t: typeof paymentTransactionsTable.$inferSelect) => t.txnType !== "refund" && t.txnType !== "offset"
+  && !(!t.paidDate && Number(t.customerPaidAmount ?? 0) === 0 && Number(t.foreignAmount ?? 0) === 0);
+
+const PAYMENT_TYPE = ["advance", "interim", "balance", "lump_sum", "other"] as const;
+const DEPOSIT_STATUS = ["scheduled", "partial", "completed", "unpaid"] as const;
+
+const rowSchema = z.object({
+  id: z.number().int().optional(),
+  issueDate: z.string().nullable().optional(),      // 발행일 — 세금계산서 발행일(세금계산서일 때만)
+  expectedDate: z.string().nullable().optional(),   // 입금예정일
+  paidDate: z.string().nullable().optional(),       // 입금일
+  paymentType: z.enum(PAYMENT_TYPE).nullable().optional(),
+  paymentMethod: z.string().max(100).nullable().optional(),   // 결제방법 — 자유 입력(text). 기본 4개 라벨 또는 사용자 직접입력.
+  supplyAmount: z.coerce.number().min(0).nullable().optional(),
+  vatAmount: z.coerce.number().min(0).nullable().optional(),
+  amount: z.coerce.number().min(0).nullable().optional(),
+  depositStatus: z.enum(DEPOSIT_STATUS).nullable().optional(),
+  depositConfirmed: z.boolean().nullable().optional(),         // 입금확인 — 체크 시 입금일=입금예정일·상태 입금완료
+  paymentCategory: z.string().max(50).nullable().optional(),   // 결제유형: 일반결제 · 수출바우처(자유 확장)
+  payer: z.string().max(100).nullable().optional(),            // 입금주체: 고객사 · 수출바우처 운영기관
+  depositItem: z.string().max(50).nullable().optional(),       // 입금항목: 공급가액 · 부가세 · 전체금액
+  billingCompanyId: z.number().int().nullable().optional(),    // 청구업체(거래처 Master 연결, 선택)
+  // 청구업체 표시명(회차별) — 화면에서 입력·선택한 이름. 거래처 Master 에 없는 업체는 id 없이 이름만 저장(Master 생성·수정 없음).
+  //  생략(undefined) 시 기존 동작(Master 이름) 유지 — 구버전 호출 호환.
+  billingCompanyName: z.string().max(200).nullable().optional(),
+  billingContactId: z.number().int().nullable().optional(),    // 담당자
+  note: z.string().nullable().optional(),
+  // 입금은행(청구 회차 단위)·은행 확인 — 생략(undefined) 시 기존 값 유지(구버전 화면 호환).
+  depositBank: z.string().max(100).nullable().optional(),
+  depositBankConfirmed: z.boolean().nullable().optional(),
+  // 외화 청구(선택) — 생략 시 기존 값 유지. NULL/'KRW' = 원화 청구. 금액·환율은 문자열로 받아 정밀도 보존.
+  billingCurrency: z.string().max(3).nullable().optional(),
+  foreignAmount: z.union([z.string(), z.number()]).nullable().optional(),
+  invoiceFxRate: z.union([z.string(), z.number()]).nullable().optional(),
+  invoiceFxDate: z.string().nullable().optional(),
+  // 첫 입금(청구정보 화면 입금액·입금확인 체크) — 청구회차와 같은 트랜잭션에서 저장(일부만 저장되는 일 없음).
+  //  · 생략(undefined): 입금내역 변경 없음(구버전 호환). · 객체: 입금내역 0건이면 신규, 1건(id 일치)이면 그 거래 수정.
+  //  · null: 입금확인 해제 — 일반 입금 1건만 있는 회차의 그 입금을 삭제하고 회차를 미입금으로 정리.
+  firstDeposit: txnRowSchema.nullable().optional(),
+});
+const batchSchema = z.object({
+  rows: z.array(rowSchema),
+  deletedIds: z.array(z.number().int()).default([]),
+});
+
+// 배치 저장 — 삭제 후 upsert. 회차는 전송된 순서대로 1..N 재부여(자동번호).
+router.put("/admin/projects/:id/payment-records", ...adminGuard, requireRolePermission("payment.update"), async (req, res) => {
+  const projectId = Number(req.params.id);
+  if (!Number.isInteger(projectId) || projectId <= 0) { res.status(400).json({ error: "잘못된 프로젝트 ID" }); return; }
+  const parsed = batchSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: "유효성 검증 실패", detail: parsed.error.flatten() }); return; }
+  const { rows, deletedIds } = parsed.data;
+  const userId = req.user?.id ?? null;
+
+  // ── 수정·삭제 허용 조건(화면 PaymentInfoSection 과 동일) ──
+  //  · 정정: 입금확정 회차도 청구금액·발행일·입금일·입금확인(체크)을 정정할 수 있다. 입금액은 첫 입금(firstDeposit) 또는 입금내역에서 정정.
+  //  · 삭제: 입금내역(입금·환불·입금예정·상계)이 하나도 없는 회차만 — 입금기록이 회차와 함께 지워지지 않게 한다(FK cascade 보호).
+  //    입금거래 없이 입금확정된 기존 방식 회차는 화면에서 입금확인 해제 후 삭제(입금 정보는 저장 로그 before 에 남는다).
+  const before = await db.select().from(projectPaymentsTable).where(eq(projectPaymentsTable.projectId, projectId));
+  const beforeById = new Map(before.map(b => [b.id, b]));
+  const txBeforeAll = before.length ? await db.select().from(paymentTransactionsTable)
+    .where(inArray(paymentTransactionsTable.projectPaymentId, before.map(b => b.id))) : [];
+  const txByPay = new Map<number, typeof txBeforeAll>();
+  for (const t of txBeforeAll) { const a = txByPay.get(t.projectPaymentId) ?? []; a.push(t); txByPay.set(t.projectPaymentId, a); }
+  const n2 = (v: unknown) => Number(v ?? 0).toFixed(2);
+  const refundDel = deletedIds.filter(id => (txByPay.get(id) ?? []).some(t => t.txnType === "refund"));
+  if (refundDel.length) { res.status(409).json({ error: `입금·환불 이력이 있는 청구회차는 삭제할 수 없습니다 (id: ${refundDel.join(", ")}). 청구금액·결제유형을 수정하세요.` }); return; }
+  const txnDel = deletedIds.filter(id => (txByPay.get(id)?.length ?? 0) > 0);
+  if (txnDel.length) { res.status(409).json({ error: `입금내역이 있는 청구회차는 삭제할 수 없습니다 (id: ${txnDel.join(", ")}). 입금확인을 해제(또는 입금내역 삭제)해 저장한 뒤 삭제하세요.` }); return; }
+
+  for (const [i, r] of rows.entries()) {
+    const e = fxBillingError(r);
+    if (e) { res.status(400).json({ error: `${i + 1}회차: ${e}` }); return; }
+  }
+  // 첫 입금(firstDeposit) 검증 — 중복 생성·다건/환불 회차 덮어쓰기 금지. 외화 청구회차는 수금거래 저장과 같은 환산 규칙.
+  const normCur = (c?: string | null) => { const v = (c ?? "").trim().toUpperCase(); return v && v !== "KRW" ? v : null; };
+  const depFx = new Map<number, FxCalc>();   // rows index → 외화 입금 환산
+  for (const [i, r] of rows.entries()) {
+    if (r.firstDeposit === undefined) continue;
+    if (r.id != null && (!beforeById.has(r.id) || deletedIds.includes(r.id))) { res.status(400).json({ error: `${i + 1}회차: 잘못된 청구회차입니다.` }); return; }
+    const own = r.id != null ? (txByPay.get(r.id) ?? []) : [];
+    const multi = `${i + 1}회차: 입금내역이 여러 건이거나 환불·상계·입금예정 내역이 있는 회차는 입금내역에서 정정하세요.`;
+    if (r.firstDeposit === null) {
+      if (own.length > 1 || (own.length === 1 && !isPlainDeposit(own[0]))) { res.status(409).json({ error: multi }); return; }
+      continue;
+    }
+    const d = r.firstDeposit;
+    if (d.txnType === "refund" || d.txnType === "offset" || d.depositStatus === "scheduled") { res.status(400).json({ error: `${i + 1}회차: 첫 입금은 실제 입금만 저장할 수 있습니다.` }); return; }
+    if (d.id != null) {
+      if (own.length !== 1 || own[0].id !== d.id || !isPlainDeposit(own[0])) { res.status(409).json({ error: multi }); return; }
+    } else if (own.length > 0) {
+      res.status(409).json({ error: `${i + 1}회차: 이미 입금내역이 있습니다(중복 생성 방지). 화면을 새로고침한 뒤 다시 시도하세요.` }); return;
+    }
+    const billCur = r.billingCurrency !== undefined ? normCur(r.billingCurrency) : normCur(r.id != null ? beforeById.get(r.id)?.billingCurrency : null);
+    if (billCur) {
+      const c = fxDepositCalc(billCur, d, `${i + 1}회차 입금`);
+      if ("error" in c) { res.status(400).json({ error: c.error }); return; }
+      depFx.set(i, c);
+    }
+  }
+  // 입금·상계 거래가 있는 회차의 청구통화 변경 금지(기존 입금기록의 통화 의미 보호)
+  for (const [i, r] of rows.entries()) {
+    const b = r.id ? beforeById.get(r.id) : undefined;
+    if (!b || r.billingCurrency === undefined || !txByPay.has(b.id)) continue;
+    const norm = normCur;
+    if (norm(r.billingCurrency) !== norm(b.billingCurrency)) {
+      res.status(409).json({ error: `${i + 1}회차: 입금기록이 있는 청구회차의 청구통화는 변경할 수 없습니다(${norm(b.billingCurrency) ?? "KRW"} → ${norm(r.billingCurrency) ?? "KRW"}).` }); return;
+    }
+  }
+  // 다른 회차의 상계 원천으로 사용된 청구회차는 삭제 금지(상계 근거 보존)
+  if (deletedIds.length) {
+    const used = await db.select({ id: paymentTransactionsTable.id, src: paymentTransactionsTable.offsetSourcePaymentId }).from(paymentTransactionsTable)
+      .where(inArray(paymentTransactionsTable.offsetSourcePaymentId, deletedIds));
+    if (used.length) { res.status(409).json({ error: `상계 원천으로 사용된 청구회차는 삭제할 수 없습니다 (id: ${[...new Set(used.map(u => u.src))].join(", ")}).` }); return; }
+  }
+
+  const depositOps: { seq: number; op: string; txnId: number | null; amount: unknown; paidDate: unknown }[] = [];
+  try {
+    await db.transaction(async (tx) => {
+      if (deletedIds.length) {
+        await tx.delete(projectPaymentsTable)
+          .where(and(eq(projectPaymentsTable.projectId, projectId), inArray(projectPaymentsTable.id, deletedIds)));
+      }
+      let seq = 1;
+      for (const [i, r] of rows.entries()) {
+        // ── 입금완료 상태 정합화(§TOP3) — project_payments 를 입금상태의 Source of Truth 로 유지 ──
+        //  · "입금완료"는 세 신호가 모두 있을 때만 성립: depositStatus=completed · depositConfirmed=true · paidDate 존재.
+        //  · 하나라도 없으면 미입금으로 정규화하여, 모순 조합(예: completed+confirmed=false, completed+paidDate=null,
+        //    confirmed=true+status≠completed, paidDate만 존재+미입금)이 DB에 저장되지 않도록 한다.
+        //  · 미입금으로 정규화 시 completed 는 scheduled 로 강등하고, 그 외 상태(scheduled/partial/unpaid)는 유지한다.
+        const paidDateVal = r.paidDate || null;
+        //  · 입금확인 해제(firstDeposit=null) — 회차의 입금을 지우므로 회차도 미입금(입금거래 없는 '기존 확정' 상태로 남지 않게).
+        const isPaid = r.firstDeposit !== null && r.depositConfirmed === true && r.depositStatus === "completed" && paidDateVal !== null;
+        const reconciledStatus: (typeof DEPOSIT_STATUS)[number] = isPaid
+          ? "completed"
+          : (r.depositStatus === "completed" ? "scheduled" : (r.depositStatus ?? "scheduled"));
+        // 청구업체·담당자 표시명 Snapshot — 회차별 저장값 우선(§청구업체 독립 저장).
+        const prev = r.id ? beforeById.get(r.id) : undefined;
+        const billingCompanyNameSnapshot = await resolveBillingCompanyName(tx, r, prev);
+        //  담당자: 같은 담당자면 기존 Snapshot 유지(과거 CRM 원본명 보존), 바뀌면 Master 이름으로 고정(§Phase2).
+        const billingContactNameSnapshot = prev && (prev.billingContactId ?? null) === (r.billingContactId ?? null) && prev.billingContactNameSnapshot != null
+          ? prev.billingContactNameSnapshot
+          : await fetchContactName(tx, r.billingContactId ?? null);
+        const values = {
+          sequence: seq++,                         // 회차 자동번호(프로젝트별, 순서 기준)
+          issueDate: r.issueDate || null,
+          expectedDate: r.expectedDate || null,
+          paidDate: isPaid ? paidDateVal : null,
+          paymentType: r.paymentType ?? null,
+          paymentMethod: r.paymentMethod ?? null,
+          supplyAmount: String(r.supplyAmount ?? 0),
+          vatAmount: String(r.vatAmount ?? 0),
+          amount: String(r.amount ?? 0),
+          depositStatus: reconciledStatus,
+          depositConfirmed: isPaid,
+          paymentCategory: r.paymentCategory ?? "일반결제",
+          payer: r.payer ?? null,
+          depositItem: r.depositItem ?? null,
+          billingCompanyId: r.billingCompanyId ?? null,
+          billingContactId: r.billingContactId ?? null,
+          billingCompanyNameSnapshot,
+          billingContactNameSnapshot,
+          ...fxBillingValues(r, prev),
+          note: r.note ?? null,
+          // 입금은행·확인 — 전달된 경우만 반영(생략 시 기존 값 유지). 은행이 비면 확인도 해제.
+          ...(r.depositBank !== undefined ? { depositBank: (r.depositBank ?? "").trim() || null } : {}),
+          ...(r.depositBankConfirmed !== undefined || r.depositBank !== undefined
+            ? { depositBankConfirmed: !!r.depositBankConfirmed && !!((r.depositBank !== undefined ? r.depositBank : prev?.depositBank) ?? "").trim() }
+            : {}),
+          updatedBy: userId,
+          updatedAt: new Date(),
+        };
+        let rowId = r.id ?? null;
+        if (r.id) {
+          await tx.update(projectPaymentsTable).set(values)
+            .where(and(eq(projectPaymentsTable.id, r.id), eq(projectPaymentsTable.projectId, projectId)));
+        } else {
+          const [ins] = await tx.insert(projectPaymentsTable).values({ projectId, createdBy: userId, ...values }).returning({ id: projectPaymentsTable.id });
+          rowId = ins.id;
+        }
+        // 첫 입금 — 같은 트랜잭션(실패 시 청구회차 변경까지 모두 롤백). 검증은 트랜잭션 전에 완료.
+        if (r.firstDeposit === null) {
+          const own = r.id != null ? (txByPay.get(r.id) ?? []) : [];
+          if (own.length === 1) {
+            await tx.delete(paymentTransactionsTable).where(and(eq(paymentTransactionsTable.id, own[0].id), eq(paymentTransactionsTable.projectPaymentId, rowId!)));
+            depositOps.push({ seq: i + 1, op: "delete", txnId: own[0].id, amount: own[0].customerPaidAmount, paidDate: own[0].paidDate });
+          }
+        } else if (r.firstDeposit) {
+          const d = r.firstDeposit;
+          const tv = txnValues(d, depFx.get(i), userId);
+          if (d.id != null) {
+            await tx.update(paymentTransactionsTable).set(tv)
+              .where(and(eq(paymentTransactionsTable.id, d.id), eq(paymentTransactionsTable.projectPaymentId, rowId!)));
+          } else {
+            await tx.insert(paymentTransactionsTable).values({ projectPaymentId: rowId!, projectId, createdBy: userId, ...tv });
+          }
+          depositOps.push({ seq: i + 1, op: d.id != null ? "update" : "insert", txnId: d.id ?? null, amount: tv.customerPaidAmount, paidDate: tv.paidDate });
+        }
+      }
+    });
+    const saved = await loadPaymentRecords(projectId);
+    const pick = (r: any) => ({ id: r.id, expectedDate: r.expectedDate ?? null, paidDate: r.paidDate ?? null, amount: n2(r.amount), supplyAmount: n2(r.supplyAmount), vatAmount: n2(r.vatAmount), depositStatus: r.depositStatus, depositConfirmed: !!r.depositConfirmed });
+    await logEvent("project", projectId, "payment_records_saved", req.log, req.user ? { id: req.user.id, email: req.user.email } : undefined,
+      JSON.stringify({ before: before.map(pick), after: saved.map(pick), deletedIds, depositOps,
+        beforeTx: txBeforeAll.map(t => ({ id: t.id, pid: t.projectPaymentId, paidDate: t.paidDate, customerPaidAmount: t.customerPaidAmount, txnType: t.txnType })) }));
+    res.json({ rows: saved });
+  } catch (err) {
+    req.log.error({ err }, "결제정보 저장 실패");
+    res.status(500).json({ error: "결제정보 저장 중 오류가 발생했습니다." });
+  }
+});
+
 // carryLegacyDeposit — 입금거래 없이 기존 방식으로 입금완료 확정된 회차에 '+ 입금 추가'로 내역을 더할 때, 기존 입금(입금일·청구금액)을
 //  입금거래 1건으로 먼저 이관한다(서버가 조건 재검증). 이관 없이 거래를 추가하면 수금 집계가 거래 합계 기준으로 바뀌어 기존 입금이 누락된다.
 const txnBatchSchema = z.object({ rows: z.array(txnRowSchema), deletedIds: z.array(z.number().int()).default([]), carryLegacyDeposit: z.boolean().optional() });
@@ -390,14 +483,9 @@ router.put("/admin/project-payments/:paymentId/transactions", ...adminGuard, req
       if (r.txnType === "offset") { res.status(400).json({ error: `${label}: 원화 청구회차의 상계는 선입금 관리에서 처리합니다.` }); return; }
       continue;
     }
-    const cur = String(r.currency ?? "").toUpperCase();
-    if (cur !== billCur) { res.status(400).json({ error: `${label}: 입금통화(${cur || "없음"})가 청구통화(${billCur})와 다릅니다.` }); return; }
-    if (!(typeof r.foreignAmount === "number" && r.foreignAmount > 0)) { res.status(400).json({ error: `${label}: 외화 금액(${billCur})이 필요합니다.` }); return; }
+    const base = fxDepositCalc(billCur, r, label);
+    if ("error" in base) { res.status(400).json({ error: base.error }); return; }
     const fa = String(r.foreignAmount);
-    const rate = r.fxRate != null ? String(r.fxRate) : null;
-    if (rate != null && (toScaled(rate, 6) ?? 0n) <= 0n) { res.status(400).json({ error: `${label}: 적용환율 형식 오류` }); return; }
-    // 원화 환산액: 은행 확인 원화액(krwAmount) 직접 입력이 있으면 우선, 없으면 외화 × 환율(원 단위 반올림). 환율 없으면 미확정(null).
-    const krw = rate == null ? null : (r.krwAmount != null ? Math.round(r.krwAmount) : krwOf(fa, rate));
     if (r.txnType === "offset") {
       const src = r.offsetSourcePaymentId!;
       if (src === paymentId) { res.status(400).json({ error: `${label}: 같은 회차를 상계 원천으로 지정할 수 없습니다.` }); return; }
@@ -407,9 +495,9 @@ router.put("/admin/project-payments/:paymentId/transactions", ...adminGuard, req
       const sOut = (await db.select().from(paymentTransactionsTable).where(eq(paymentTransactionsTable.offsetSourcePaymentId, src))).filter((t) => t.id !== r.id);
       const avail = toScaled(summarizeFxRow(fxBill(sp), sIn.map(fxTxn), sOut.map(fxTxn)).overpaidForeign, 2) ?? 0n;
       if ((toScaled(fa, 2) ?? 0n) > avail) { res.status(400).json({ error: `${label}: 상계금액이 원천 회차의 남은 초과입금(${billCur} ${fromScaled(avail, 2)})보다 큽니다.` }); return; }
-      fxCalc.set(i, { krw, paid: 0 });   // 상계는 실제 은행 입금이 아니므로 원화 고객결제액 0(원화 집계 중복 방지)
+      fxCalc.set(i, { krw: base.krw, paid: 0 });   // 상계는 실제 은행 입금이 아니므로 원화 고객결제액 0(원화 집계 중복 방지)
     } else {
-      fxCalc.set(i, { krw, paid: krw ?? 0 });   // 확정 환산액만 원화 집계에 반영(미확정 0 — 외화 기준 판정은 fx 요약)
+      fxCalc.set(i, base);
     }
   }
 
@@ -421,45 +509,21 @@ router.put("/admin/project-payments/:paymentId/transactions", ...adminGuard, req
       }
       if (legacyDeposit) await tx.insert(paymentTransactionsTable).values(legacyDeposit);   // 기존 확정 입금 → 입금거래 이관(환불 전 입금 이력 보존)
       for (const [i, r] of rows.entries()) {
-        const num = (v: number | null | undefined) => (v == null ? null : String(v));
-        const fx = fxCalc.get(i);
-        const scheduled = r.depositStatus === "scheduled";   // 입금예정 — 실제 입금액 0·입금일 없음(예정액·예정일만)
-        const values = {
-          paidDate: scheduled ? null : (r.paidDate || null),
-          method: fx ? (r.txnType === "offset" ? "상계" : (r.method || "외화송금")) : (r.method ?? null),
-          // 카드결제(실제 입금액 + 카드사 수수료가 함께 입력된 거래): 고객결제액 = 실제 입금액 + 수수료(원 단위).
-          //  → 미수금 = 청구금액 − 실제 입금액 − 수수료. 수수료는 fee_amount 로 별도 보관(매출·할인 아님). 그 외 결제방법은 기존 그대로.
-          customerPaidAmount: fx ? String(fx.paid)
-            : scheduled ? "0"
-            : r.txnType === "refund" ? String(-Math.abs(Number(r.customerPaidAmount ?? 0)))   // 환불 = 음수 거래
-            : (isCardMethod(r.method) && r.settledAmount != null && r.feeAmount != null
-                ? String(Math.round(Number(r.settledAmount)) + Math.round(Number(r.feeAmount)))
-                : String(r.customerPaidAmount ?? 0)),
-          settledAmount: scheduled ? null : num(r.settledAmount),
-          feeAmount: scheduled ? null : num(r.feeAmount),
-          currency: r.currency || "KRW",
-          fxRate: num(r.fxRate),
-          foreignAmount: num(r.foreignAmount),
-          krwAmount: fx ? (fx.krw != null ? String(fx.krw) : null) : num(r.krwAmount),
-          bankAccount: r.bankAccount ?? null,
-          payerName: r.payerName ?? null,
-          approvalNo: r.approvalNo ?? null,
-          cardPgType: r.cardPgType ?? null,
-          note: r.note ?? null,
-          txnType: r.txnType === "offset" ? "offset" : r.txnType === "refund" ? "refund" : (fx ? "deposit" : null),
-          offsetSourcePaymentId: r.txnType === "offset" ? (r.offsetSourcePaymentId ?? null) : null,
-          // 결제구분·입금예정일·입금예정액 — 전달된 경우만 반영(생략 시 기존 값 유지)
-          ...(r.paymentType !== undefined ? { paymentType: r.paymentType ?? null } : {}),
-          ...(r.expectedDate !== undefined ? { expectedDate: r.expectedDate || null } : {}),
-          ...(r.expectedAmount !== undefined ? { expectedAmount: num(r.expectedAmount) } : {}),
-          updatedBy: userId,
-          updatedAt: new Date(),
-        };
+        const values = txnValues(r, fxCalc.get(i), userId);
         if (r.id) {
           await tx.update(paymentTransactionsTable).set(values)
             .where(and(eq(paymentTransactionsTable.id, r.id), eq(paymentTransactionsTable.projectPaymentId, paymentId)));
         } else {
           await tx.insert(paymentTransactionsTable).values({ projectPaymentId: paymentId, projectId: pay.projectId, createdBy: userId, ...values });
+        }
+      }
+      // 입금내역을 모두 삭제한 회차 — 회차에 남은 입금확정(completed·confirmed·paidDate)을 해제한다.
+      //  (그대로 두면 '입금거래 없는 기존 확정 회차'로 바뀌어 청구금액 전액이 입금된 것으로 다시 집계된다.)
+      if (deletedIds.length && txBefore.length) {
+        const [{ cnt }] = await tx.select({ cnt: sql<number>`count(*)::int` }).from(paymentTransactionsTable).where(eq(paymentTransactionsTable.projectPaymentId, paymentId));
+        if (Number(cnt) === 0 && (pay.depositConfirmed || pay.depositStatus === "completed" || pay.paidDate)) {
+          await tx.update(projectPaymentsTable).set({ depositStatus: "scheduled", depositConfirmed: false, paidDate: null, updatedBy: userId, updatedAt: new Date() })
+            .where(eq(projectPaymentsTable.id, paymentId));
         }
       }
     });

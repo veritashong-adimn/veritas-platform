@@ -90,7 +90,7 @@ interface PayRow {
   // 입금확인(2026-11) — 입금액 옆 체크. 체크 전 입금액은 붉은색(미확인·수금 미반영), 체크 후 검정색(저장 시 실제 입금기록 생성).
   _paidOk?: boolean;      // 입금확인 체크(실제 입금)
   _paidAuto?: boolean;    // 세금계산서 발행일 입력으로 청구금액이 자동 입력된 상태(미확인)
-  _legacyPaid?: boolean;  // 입금기록 없이 기존 방식으로 입금완료 확정된 회차(보호 — 입금기록 신규 생성 안 함)
+  _legacyPaid?: boolean;  // 입금기록 없이 기존 방식으로 입금완료 확정된 회차 — 입금액=청구금액이면 그대로 유지, 정정하면 저장 시 입금기록 1건 생성
   _customType?: boolean;  // 결제구분 '직접입력' 선택(명칭 입력 중)
   _advRate?: string;      // 선금 비율(%) 입력값(일반결제 선금 행) — 저장 시 deposit_item '선금비율:N'
   _cardFee?: string; _cardRate?: string;   // 카드결제 첫 입금: 카드사 수수료·수수료율 입력(실제 입금액은 _paidAmt)   // 첫 외화 입금: 적용환율(입력 단위)·은행확인 원화액·수수료·실제 입금일
@@ -390,7 +390,9 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   const mapRow = (r: PayRow): PayRow => {
   // §8 수정모드 복원 — 이 청구행이 '첫 입금' 거래 1건만 가진 경우, 그 거래값을 기본행 임시필드로 되살린다.
   //  (거래 2건 이상은 첫입금 인라인 대상이 아니라 하위행에서 관리 → 시드하지 않음)
-  const only = (r.transactions && r.transactions.length === 1 && !isScheduledTxn(r.transactions[0])) ? r.transactions[0] : null;   // 입금예정 내역은 첫 입금 인라인 대상 아님
+  //  일반 입금 1건만 대상(입금예정·환불·상계 내역은 하위행에서 관리) — 서버 isPlainDeposit 과 같은 기준
+  const only = (r.transactions && r.transactions.length === 1 && !isScheduledTxn(r.transactions[0])
+    && r.transactions[0].txnType !== 'refund' && r.transactions[0].txnType !== 'offset') ? r.transactions[0] : null;
   const seedCurr = only?.currency && only.currency !== 'KRW' ? only.currency : '';
   return {
     id: r.id, transactions: r.transactions ?? [],   // 수금거래는 하위행/기본행에서 관리 — 편집 중에도 계산 일관성 위해 보존
@@ -417,7 +419,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     _krw: only && only.krwAmount != null && only.fxRate != null && krwOf(only.foreignAmount, only.fxRate) !== Math.round(num(only.krwAmount)) ? String(Math.round(num(only.krwAmount))) : '',
     _fee: only && num(only.feeAmount) > 0 ? String(only.feeAmount) : '',
     _paidDate: only?.paidDate ?? null,
-    // 입금확인 상태 — 입금기록이 있으면 확인(검정). 입금기록 없이 기존 방식으로 입금완료 확정된 회차는 보호(_legacyPaid, 청구금액=입금액으로 표시).
+    // 입금확인 상태 — 입금기록이 있으면 확인(검정). 입금기록 없이 기존 방식으로 입금완료 확정된 회차(_legacyPaid)는 청구금액=입금액으로 표시(체크 해제·입금액 정정 가능).
     _paidOk: !!only || (!(r.transactions?.length) && r.depositStatus === 'completed' && !!r.depositConfirmed && !!r.paidDate),
     _legacyPaid: !(r.transactions?.length) && r.depositStatus === 'completed' && !!r.depositConfirmed && !!r.paidDate,
     ...(!(r.transactions?.length) && r.depositStatus === 'completed' && !!r.depositConfirmed && !!r.paidDate ? { _paidAmt: String(num(r.amount)) } : {}),
@@ -544,11 +546,13 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     }
     return next;
   }));
-  // 입금확인 체크(입금액 옆) — 체크: 입금일(입력값 › 입금예정일 › 오늘) 확정·검정색, 저장 시 실제 입금기록 1건 생성(부분입금 가능).
-  //  해제: 아직 입금기록이 없을 때만(붉은색 복귀). 이미 입금기록이 있거나 기존 확정 회차는 입금내역의 정정 절차로만 변경.
+  // 입금확인 체크(입금액 옆) — 체크: 입금일(입력값 › 입금예정일 › 오늘) 확정·검정색, 저장 시 실제 입금기록 1건 생성/수정(부분입금 가능).
+  //  해제(정정): 입금기록이 없거나 일반 입금 1건뿐인 회차 — 저장 시 그 입금기록을 지우고 회차를 미입금으로 정리(기존 확정 회차 포함).
+  //  입금내역이 여러 건·환불·상계·입금예정이 있는 회차는 입금내역의 수정·삭제로 정정(서버도 같은 조건으로 검증).
+  const firstPayEditable = (r: PayRow) => { const n = r.transactions?.length ?? 0; return n === 0 || (n === 1 && r._txnId != null); };
   const togglePaidConfirm = (i: number) => {
     const r = rows[i];
-    if ((r.transactions?.length ?? 0) > 0 || r._legacyPaid) { onToast('이미 입금기록이 있습니다. 변경·취소는 입금내역에서 정정하세요.'); return; }
+    if (!firstPayEditable(r)) { onToast('입금내역이 여러 건이거나 환불·입금예정 내역이 있는 회차입니다. 입금내역에서 수정·삭제하세요.'); return; }
     if (!r._paidOk) {
       if (num(r._paidAmt) <= 0 && num(r._foreign) <= 0) { onToast('입금액을 입력한 뒤 확인하세요.'); return; }
       markPaid(i, r.paidDate || r.expectedDate || todayStr());
@@ -573,23 +577,70 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   };
   // 새 청구 기본값 — 청구업체=판매 거래처, 결제방법 세금계산서, 결제구분 일괄결제, 입금주체 고객사, 입금항목 전체금액.
   const addRow = () => setRows(prev => [...prev, { _bank: BANK_DEFAULT, _bankOk: false, depositStatus: 'scheduled', supplyAmount: '', vatAmount: '', amount: '', paymentMethod: category === CAT_GENERAL ? defaultMethod : '세금계산서', paymentType: 'lump_sum', paymentCategory: category, payer: PAYER_CUSTOMER, depositItem: ITEM_TOTAL, billingCompanyId: defaultCompany?.id ?? null, billingCompanyName: defaultCompany?.name ?? null }]);
+  // 청구회차 삭제 — 서버와 같은 조건: 저장된 입금내역(입금·환불·입금예정)이 없는 회차만. 입금확인된 회차는 체크 해제 후 삭제.
+  const askRemoveRow = (i: number) => {
+    const r = rows[i];
+    const txns = r.transactions ?? [];
+    if (r.id != null && txns.some(t => t.txnType === 'refund')) { onToast('입금·환불 이력이 있는 회차는 삭제할 수 없습니다. 청구금액·결제유형을 수정하세요.'); return; }
+    if (r.id != null && txns.length > 0) {
+      onToast(firstPayEditable(r) ? '입금기록이 있는 회차입니다. 입금확인 체크를 해제해 저장한 뒤 삭제하세요.' : '입금내역이 있는 회차입니다. 입금내역을 먼저 삭제한 뒤 회차를 삭제하세요.'); return;
+    }
+    if (r.id != null && r._paidOk) { onToast('입금확인된 회차입니다. 입금확인 체크를 해제한 뒤 삭제하세요.'); return; }
+    removeRow(i);
+  };
   const removeRow = (i: number) => setRows(prev => {
     const target = prev[i];
     if (target?.id != null) setDeletedIds(d => [...d, target.id!]);
     return prev.filter((_, idx) => idx !== i);
   });
 
+  // 첫 입금(입금액·입금확인 체크) → 청구회차와 같은 요청으로 저장(서버 1 트랜잭션 — 일부만 저장되지 않음).
+  //  undefined = 입금기록 변경 없음 · null = 입금확인 해제(일반 입금 1건 삭제) · 객체 = 입금기록 생성(0건) 또는 수정(1건, id)
+  const firstDepositOf = (r: PayRow): PayTxn | null | undefined => {
+    if (!firstPayEditable(r)) return undefined;   // 입금내역 여러 건·환불·입금예정 회차 — 입금내역에서 관리
+    const m = normMethod(r.paymentMethod) || '기타';
+    const overseas = isOverseas(r.paymentMethod);
+    // 외화 청구회차 — 기존 외화 입금 입력 방식 유지(입금확인 체크 없음, 외화 입금액 입력 시 생성/수정)
+    if (isFxRow(r)) {
+      if (r._legacyPaid || !(num(r._paidAmt) > 0 || num(r._foreign) > 0)) return undefined;
+      const cur = String(r.billingCurrency ?? '').toUpperCase();
+      return { ...(r._txnId ? { id: r._txnId } : {}), txnType: 'deposit', method: '외화송금',
+        paidDate: r._paidDate || r.paidDate || null, bankAccount: r._bank || null, currency: cur, foreignAmount: r._foreign || null,
+        fxRate: ratePer1FromInput(r._rateInput, cur), krwAmount: r._krw ? Number(r._krw) : null, feeAmount: r._fee || null };
+    }
+    const hasAmt = num(r._paidAmt) > 0 || (overseas && num(r._foreign) > 0);
+    if (!r._paidOk || !hasAmt) return r._txnId != null ? null : undefined;   // 미확인(붉은색)·자동입력 금액은 기록하지 않음
+    const cardFee = isCardMethod(m) ? num(r._cardFee) : 0;
+    // 입금기록 없이 확정된 기존 회차 — 입금액이 청구금액과 같으면 그대로 유지(입금기록 신규 생성 없음 · 회차 입금일·확정으로 집계)
+    if (r._legacyPaid && r._txnId == null && num(r._paidAmt) === num(r.amount) && cardFee <= 0 && !(overseas && num(r._foreign) > 0)) return undefined;
+    return {
+      ...(r._txnId ? { id: r._txnId } : {}),
+      paidDate: r.paidDate || null, method: m, customerPaidAmount: num(r._paidAmt) + cardFee, bankAccount: r._bank || null,
+      // 카드: 실제 입금액(정산액)·카드사 수수료 별도 저장. 수수료 미입력이면 기존과 같이 입금액만(임의 생성 없음).
+      ...(cardFee > 0 ? { settledAmount: num(r._paidAmt), feeAmount: cardFee } : (isCardMethod(m) && r._txnId ? { settledAmount: null, feeAmount: null } : {})),
+      ...(overseas ? { currency: r._curr || null, foreignAmount: num(r._foreign) || null } : {}),
+    };
+  };
+
   const save = async () => {
     if (busy) return;
+    // 입금확인 체크했는데 입금액이 비어 있으면 저장 차단(회차만 입금확정되어 청구금액 전액이 입금된 것으로 집계되는 것 방지)
+    const noPaidAmt = rows.findIndex(r => !isFxRow(r) && firstPayEditable(r) && r._paidOk && !(num(r._paidAmt) > 0 || (isOverseas(r.paymentMethod) && num(r._foreign) > 0)));
+    if (noPaidAmt >= 0) { onToast(`${noPaidAmt + 1}회차: 입금액을 입력하거나 입금확인 체크를 해제하세요.`); return; }
     const noLabel = rows.findIndex(r => payTypeKey(r) === 'custom' && !(r.depositItem ?? '').trim());
     if (noLabel >= 0) { onToast(`${noLabel + 1}회차: 직접입력 결제구분 명칭을 입력하세요.`); return; }
     const badRate = category === CAT_GENERAL ? rows.findIndex(r => payTypeKey(r) === 'advance' && (r._advRate ?? '').trim() !== '' && parseAdvRateInput(r._advRate) == null) : -1;
     if (badRate >= 0) { onToast(`${badRate + 1}회차: 선금 비율은 0 초과 100 이하로 입력하세요(소수점 2자리까지).`); return; }
+    // 입금확인 해제로 지워질 입금기록 — 저장 전 확인(실수로 실제 입금기록이 삭제되지 않게)
+    const deposits = rows.map(firstDepositOf);
+    const removing = rows.map((r, idx) => ({ r, idx })).filter(({ idx }) => deposits[idx] === null);
+    if (removing.length && !(await confirmDialog({ title: '입금기록 삭제', variant: 'danger', confirmLabel: '삭제 후 저장',
+      message: `입금확인을 해제한 회차의 입금기록이 삭제됩니다.\n${removing.map(({ r, idx }) => `· ${idx + 1}회차 ${won(num(r.transactions?.[0]?.customerPaidAmount))}원 (${formatDisplayDate(r.transactions?.[0]?.paidDate) || '입금일 없음'})`).join('\n')}` }))) return;
     setBusy(true);
     try {
       const isVoucherSave = category === CAT_VOUCHER;
       const payload = {
-        rows: rows.map(r => {
+        rows: rows.map((r, idx) => {
           const a = effAmounts(r, isVoucherSave);   // 수출바우처는 자동 금액 저장
           return {
             id: r.id,
@@ -614,6 +665,8 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
             // 입금은행·확인(청구 회차 단위) — 입금 전에도 저장. 은행이 없으면 확인도 해제.
             depositBank: (r._bank ?? '').trim() || null,
             depositBankConfirmed: !!r._bankOk && !!(r._bank ?? '').trim(),
+            // 첫 입금 — 청구회차와 같은 트랜잭션(생략 시 입금기록 변경 없음)
+            ...(deposits[idx] !== undefined ? { firstDeposit: deposits[idx] } : {}),
           };
         }),
         deletedIds,
@@ -622,43 +675,12 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { onToast(data.error ?? '청구정보 저장 실패'); return; }
 
-      // ── 첫 입금(§3/§4/§5/§6) — 기본 청구행에 입력한 입금값을 payment_transaction 1건으로 생성/갱신 ──
-      //  · 청구금액 필드를 바꾸지 않고 실제 수금거래를 만든다. 저장된 행 id 는 반환 rows(회차 순)로 매칭.
-      //  · 트리거: 원화 입금액(>0) OR 외화송금 외화입금액(>0). 외화-only(원화 0/미확정)도 반드시 거래를 남긴다.
-      //  · 거래 0건이면 신규 insert, 이미 1건이면(§8 복원값) 그 거래를 update(_txnId)한다. 2건 이상 행은 하위행에서 관리(대상 제외).
+      // 청구회차·첫 입금은 서버가 한 트랜잭션으로 저장(실패 시 전체 롤백). 반환 rows 는 회차 순.
       const savedRows: any[] = Array.isArray(data.rows) ? data.rows : [];
       // 저장 결과 확인 — 서버가 실제 저장한 회차별 청구업체명이 요청과 다르면 성공 처리하지 않는다.
       const sent: any[] = payload.rows;
       const mismatch = sent.findIndex((s, idx) => s.billingCompanyName && (savedRows[idx]?.billingCompanyName ?? null) !== s.billingCompanyName);
       if (mismatch >= 0) { onToast(`청구업체 저장 확인 실패(${mismatch + 1}회차) — 다시 시도해 주세요.`); await onChanged(); return; }
-      const firstPays = rows.map((r, idx) => ({ r, idx })).filter(({ r }) => {
-        const cnt = r.transactions?.length ?? 0;
-        if (cnt > 1) return false;
-        const overseas = isOverseas(r.paymentMethod);
-        // 입금확인 체크된 회차만 실제 입금기록 생성(자동입력·미확인 금액은 기록하지 않음). 기존 확정 회차(_legacyPaid)는 중복 생성 금지.
-        if (r._legacyPaid || (!isFxRow(r) && !r._paidOk && !r._txnId)) return false;   // 외화 청구회차는 기존 외화 입금 입력 방식 유지
-        return num(r._paidAmt) > 0 || (overseas && num(r._foreign) > 0);
-      });
-      for (const { r, idx } of firstPays) {
-        const saved = savedRows[idx];
-        if (!saved?.id) continue;
-        const m = normMethod(r.paymentMethod) || '기타';
-        const cur = String(r.billingCurrency ?? '').toUpperCase();
-        // 외화 청구회차: 외화 입금액(통화 단위 그대로)·입금 적용환율·은행확인 원화액·수수료. 원화 환산·원화 결제액은 서버가 decimal 로 확정.
-        const txn: PayTxn & Record<string, unknown> = isFxRow(r) ? {
-          ...(r._txnId ? { id: r._txnId } : {}), txnType: 'deposit', method: '외화송금',
-          paidDate: r._paidDate || r.paidDate || null, bankAccount: r._bank || null, currency: cur, foreignAmount: r._foreign || null,
-          fxRate: ratePer1FromInput(r._rateInput, cur), krwAmount: r._krw ? Number(r._krw) : null, feeAmount: r._fee || null,
-        } : {
-          ...(r._txnId ? { id: r._txnId } : {}),
-          paidDate: r.paidDate || null, method: m, customerPaidAmount: num(r._paidAmt) + (isCardMethod(m) ? num(r._cardFee) : 0), bankAccount: r._bank || null,
-          // 카드: 실제 입금액(정산액)·카드사 수수료 별도 저장. 수수료 미입력이면 기존과 같이 입금액만(임의 생성 없음).
-          ...(isCardMethod(m) && num(r._cardFee) > 0 ? { settledAmount: num(r._paidAmt), feeAmount: num(r._cardFee) } : (isCardMethod(m) && r._txnId ? { settledAmount: null, feeAmount: null } : {})),
-          ...(isOverseas(m) ? { currency: r._curr || null, foreignAmount: num(r._foreign) || null } : {}),
-        };
-        const tr = await fetch(api(`/api/admin/project-payments/${saved.id}/transactions`), { method: 'PUT', headers: authH, body: JSON.stringify({ rows: [txn], deletedIds: [] }) });
-        if (!tr.ok) { const d = await tr.json().catch(() => ({})); onToast(`${idx + 1}회차 입금 저장 실패: ${d.error ?? tr.status}`); setEditMode(false); setRows([]); await onChanged(); return; }
-      }
 
       onToast('청구정보가 저장되었습니다.');
       setEditMode(false); setRows([]); setDeletedIds([]);
@@ -682,7 +704,11 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   //  거래가 없으면 기존 depositConfirmed/depositStatus/paidDate 로직을 fallback 으로 유지.
   const hasTxn = (r: PayRow) => (r.transactions?.length ?? 0) > 0;
   const txnPaid = (r: PayRow) => (r.transactions ?? []).reduce((s, t) => s + num(t.customerPaidAmount), 0);
-  const paidOf = (r: PayRow) => (isFxRow(r) ? (r.fx?.paidKrwForSale ?? 0) : hasTxn(r) ? txnPaid(r) : (isRowPaid(r) ? haap(r) : 0));
+  // 수정모드 미리보기 — 첫 입금 정정 대상(입금기록 0~1건·원화) 회차는 편집 중인 입금액·입금확인 체크 기준(저장 시 firstDeposit 과 같은 값).
+  //  다중입금·환불·입금예정·외화 회차와 조회 모드는 기존 계산(입금내역 합계 / 입금확정 3필드) 그대로. 취소하면 rows 를 비워 저장값 기준으로 복귀.
+  const previewPaid = (r: PayRow): number | null => (editMode && !isFxRow(r) && firstPayEditable(r))
+    ? (r._paidOk ? num(r._paidAmt) + (isCardMethod(normMethod(r.paymentMethod)) ? num(r._cardFee) : 0) : 0) : null;
+  const paidOf = (r: PayRow) => previewPaid(r) ?? (isFxRow(r) ? (r.fx?.paidKrwForSale ?? 0) : hasTxn(r) ? txnPaid(r) : (isRowPaid(r) ? haap(r) : 0));
   const lastTxn = (r: PayRow): PayTxn | null => { const ts = (r.transactions ?? []).filter(t => !isScheduledTxn(t)); return ts.length ? ts[ts.length - 1] : null; };  // 최근(마지막) 실제 입금거래(입금예정 제외)
   const dispPaidDate = (r: PayRow): string => { const t = lastTxn(r); return (t?.paidDate ? formatDisplayDate(t.paidDate) : (formatDisplayDate(r.paidDate) || '—')); };  // §11 입금일: 최종 입금일
   // 입금은행 — 청구 회차 저장값 우선, 없으면(기존 행) 최근 입금거래 은행
@@ -890,7 +916,8 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     const schedLabel = scheduledLabel(r.paymentMethod);              // 첫 예정/이벤트 날짜 컬럼명(행별)
     // 입금 미확인(붉은색) — 예정일이 입력됐지만 입금확인 체크 전(수행정보 미확인 납품일과 동일). 확인 시 검정색.
     // 입금예정일 색상 기준 — 회차 입금확인, 또는 입금내역 합계로 입금완료된 회차(입금내역 방식은 회차 확인 플래그를 쓰지 않음)
-    const confirmed = !!r.depositConfirmed || (hasTxn(r) && effStatus(r) === 'completed');
+    const previewRow = editable && !isFxRow(r) && firstPayEditable(r);   // 수정모드 미리보기 대상(편집 중인 입금확인 체크 기준)
+    const confirmed = previewRow ? !!r._paidOk : (!!r.depositConfirmed || (hasTxn(r) && effStatus(r) === 'completed'));
     const expUnconfirmed = !!r.expectedDate && !confirmed;
     const cols = 13;   // 하위행 colSpan — 최종 13컬럼(§1).
     const pid = r.id ?? null;
@@ -905,7 +932,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     const cardRow = isCardMethod(normMethod(r.paymentMethod));
     const firstCovered = num(r._paidAmt) + (cardRow ? num(r._cardFee) : 0);   // 카드: 실제 입금액 + 수수료
     //  미확인(체크 전) 입금액은 미수금에서 빼지 않는다 — 실제 확인된 금액만 반영.
-    const rowReceivable = firstPayMode && r._paidOk && !r._legacyPaid && num(r._paidAmt) > 0 ? Math.max(a.amount - firstCovered, 0) : receivable;
+    const rowReceivable = firstPayMode && r._paidOk && num(r._paidAmt) > 0 ? Math.max(a.amount - firstCovered, 0) : receivable;
     const unconfirmedAuto = !hasTxn(r) && !isRowPaid(r) && !!r.issueDate;   // 조회: 발행일만 있고 미확인 → 청구금액을 붉은색 예정 입금액으로 표시
     const firstStatus = num(r._paidAmt) <= 0 ? 'scheduled' : (firstCovered < a.amount ? 'partial' : 'completed');
     return (
@@ -915,7 +942,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
         <td style={{ ...tdBase, textAlign: 'center', width: 96 }}>
           {editable && !voucher ? (
             <div style={{ display: 'flex', gap: 2, alignItems: 'center', justifyContent: 'center' }}>
-              <button type="button" onClick={() => ((r.transactions ?? []).some(t => t.txnType === 'refund') ? onToast('입금·환불 이력이 있는 회차는 삭제할 수 없습니다. 청구금액·결제유형을 수정하세요.') : removeRow(i))} data-testid={`pay-del-${i}`} aria-label="청구 삭제"
+              <button type="button" onClick={() => askRemoveRow(i)} data-testid={`pay-del-${i}`} aria-label="청구 삭제"
                 style={{ border: `1px solid ${C.g300}`, borderRadius: 5, background: cellBg, color: C.danger, cursor: 'pointer', width: 22, height: 22, lineHeight: 1 }}>−</button>
               <span style={{ ...TYPO.helper, minWidth: 16, textAlign: 'center' }}>{i + 1}</span>
             </div>
@@ -986,7 +1013,10 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
         </td>
         {/* 입금일(§11) — 거래 있으면 최종 입금일(읽기전용). 없으면 기존 입력/표시(fallback) */}
         <td style={{ ...tdBase, width: 150 }}>
-          {hasTxn(r)
+          {/* 수정모드 + 첫 입금 정정 대상(입금기록 0~1건, 원화)은 입금일 입력·정정 가능. 그 외 입금내역 회차는 최종 입금일(읽기전용) */}
+          {editable && firstPayMode && !isFxRow(r)
+            ? dateCell(r.paidDate, v => patchPaid(i, v), `pay-paid-${i}`, '입금일')
+            : hasTxn(r)
             ? dispPaidDate(r)
             : (editable ? dateCell(r.paidDate, v => patchPaid(i, v), `pay-paid-${i}`, '입금일') : (formatDisplayDate(r.paidDate) || '—'))}
         </td>
@@ -1042,18 +1072,19 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
             ? <span style={{ fontSize: 11, color: C.textSecondary }}>아래 외화 입력</span>
             : firstPayMode
             ? (() => {
-                const lockedPaid = hasTxn(r) || !!r._legacyPaid;   // 실제 입금기록·기존 확정 회차 — 체크 해제·자동입력 덮어쓰기 금지(입금내역에서 정정)
+                // 정정 가능 — 입금기록 0건·일반 입금 1건(기존 확정 회차 포함). 그 외는 입금내역에서 정정(서버와 같은 조건)
+                const lockedPaid = !firstPayEditable(r);
                 const red = !r._paidOk && num(r._paidAmt) > 0;
                 return (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
-                    <input type="text" inputMode="numeric" data-testid={`pay-paidamt-${i}`} aria-label="입금액" placeholder="0" disabled={!!r._legacyPaid}
+                    <input type="text" inputMode="numeric" data-testid={`pay-paidamt-${i}`} aria-label="입금액" placeholder="0" disabled={lockedPaid}
                       data-unconfirmed={red ? 'true' : undefined}
                       title={red ? (r._paidAuto ? '세금계산서 발행일 기준 자동입력 — 입금 미확인(수금 미반영)' : '입금 미확인 — 체크 시 실제 입금으로 반영') : (r._paidOk ? '입금확인 완료' : undefined)}
                       style={{ ...inp, textAlign: 'right', ...(red ? { color: C.danger, borderColor: C.danger } : { color: C.textPrimary }) }}
                       value={commafy(r._paidAmt)} onChange={e => patchRow(i, { _paidAmt: e.target.value.replace(/[^\d]/g, ''), _paidAuto: false })} />
                     <input type="checkbox" checked={!!r._paidOk} disabled={lockedPaid || (!r._paidOk && num(r._paidAmt) <= 0 && num(r._foreign) <= 0)}
                       onChange={() => togglePaidConfirm(i)} data-testid={`pay-paid-confirm-${i}`} aria-label="입금확인"
-                      title={lockedPaid ? '입금기록 있음 — 정정은 입금내역에서' : (r._paidOk ? '입금확인 — 저장 시 실제 입금기록 반영' : '입금 미확인 — 체크하면 실제 입금 확인')}
+                      title={lockedPaid ? '입금내역 여러 건 — 정정은 입금내역에서' : (r._paidOk ? (hasTxn(r) || r._legacyPaid ? '입금확인 — 체크 해제 시 저장하면 입금기록 삭제(정정)' : '입금확인 — 저장 시 실제 입금기록 반영') : '입금 미확인 — 체크하면 실제 입금 확인')}
                       style={{ cursor: lockedPaid ? 'default' : 'pointer', flexShrink: 0 }} />
                   </div>
                 );
@@ -1081,9 +1112,9 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
         <td style={{ ...tdBase, width: 110 }}>
           {isFxRow(r) && r.fx && !editable
             ? <FxStatusBadge status={r.fx.status} title={r.fx.reviewReasons.join(', ') || undefined} />
-            : hasTxn(r)
+            : hasTxn(r) && !previewRow
             ? <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 5, fontWeight: 700, background: effStatus(r) === 'completed' ? '#dcfce7' : effStatus(r) === 'partial' ? '#fef9c3' : '#f3f4f6', color: effStatus(r) === 'completed' ? '#15803d' : effStatus(r) === 'partial' ? '#854d0e' : '#6b7280' }}>{labelOf(DEPOSIT_OPTS, effStatus(r))}</span>
-            : firstPayMode && r._paidOk && !r._legacyPaid && num(r._paidAmt) > 0
+            : firstPayMode && r._paidOk && num(r._paidAmt) > 0
               ? <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 5, fontWeight: 700, background: firstStatus === 'completed' ? '#dcfce7' : '#fef9c3', color: firstStatus === 'completed' ? '#15803d' : '#854d0e' }}>{labelOf(DEPOSIT_OPTS, firstStatus)}</span>
               : (editable
                   ? <ClickSelect value={r.depositStatus ?? 'scheduled'} onChange={(v: string) => (v === 'completed' ? markPaid(i, r.paidDate || r.expectedDate || todayStr()) : markUnpaid(i, v))} triggerStyle={inp} options={DEPOSIT_OPTS} />
