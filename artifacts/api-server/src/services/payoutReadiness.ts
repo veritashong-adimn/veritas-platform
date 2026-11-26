@@ -19,6 +19,7 @@ import { checkEligibility } from "./legacyPayoutConversion";
 import { LEGACY_PAID_DELIVERY_CUTOFF, todayKst } from "../lib/legacyPayoutRule";
 import { loadSaleIdentities } from "./saleIdentity";
 import { computeProjectProfit } from "./projectProfit";
+import { masterTreatmentOf } from "./legacyActivationLineage";
 import { DATE_DECISIONS } from "../lib/payoutDateDecisions";
 import { payStatusOf, isAmountMissing, PAY_STATUS_LABEL, emptyStatusCounts, type PayStatusKey } from "../lib/payDisplayStatus";
 import { decrypt } from "../lib/encrypt";
@@ -242,6 +243,13 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
   //   실제 지급회차(지급액 > 0 조건)·송금 대상이 아닌 것은 기존과 같다. 지급액이 있는 건·지급완료 기록은 일반 기준 그대로.
   const INTERNAL_PAYEE = "베리타스";
   const internalIds = new Set((await rows(dbx, sql`SELECT id FROM users WHERE btrim(name) = ${INTERNAL_PAYEE}`)).map(r => Number(r.id)));
+  // ⑧ 명부 원천징수(통번역사 상세 정산정보관리 지급방식) — 미지급 개인 수행정보 세금처리와 비교(표시만, 자동 변경 없음)
+  const regUserIds = [...new Set([...pa.values()].filter(x => x.cat === "individual" && x.individual_user_id != null).map(x => Number(x.individual_user_id)))];
+  const regPm = new Map((await rows(dbx, sql`SELECT translator_id, payment_method FROM translator_sensitive WHERE translator_id IN (${inList(regUserIds)})`))
+    .map(r => [Number(r.translator_id), (r.payment_method ?? null) as string | null]));
+  const TREAT_LABEL: Record<string, string> = { domestic_3_3: "3.3%", domestic_2_2: "2.2%", exempt: "원천징수 제외", tax_review_required: "세금계산서·세무 확인", nonresident_custom: "원천징수 제외", treaty_reduction_or_exemption: "원천징수 제외" };
+  // 수행정보 화면과 같은 정규화 — 미사용 레거시(비거주자·조세조약)는 '원천징수 제외'와 같은 것으로 본다
+  const normTreat = (t: unknown) => (t === "nonresident_custom" || t === "treaty_reduction_or_exemption" ? "exempt" : String(t ?? ""));
   const out: any[] = [];
   for (const b of base) {
     const bl: Blocker[] = [];
@@ -346,6 +354,20 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
       if (p.payout_round_id == null) add("I", "no_round", "지급회차 미배정", "지급회차 생성 시 자격 충족하면 자동 포함");
     }
     if (kind !== "platform" && masterId == null && vendorId == null && !paid) add("C", "no_payee", "수행자 미연결(과거 CRM 이름만)", "통번역사 Master 연결 확인");
+    // 명부 원천징수 불일치(2026-11) — 미지급 개인 수행정보만(지급완료·외주업체 제외). 세금처리·원천세·실지급액은 바꾸지 않는다.
+    //  · 명부 해외 송금방식(해외 은행·PayPal)은 원천징수 등록값이 아니므로 비교하지 않는다(해외송금이라는 이유만으로 불일치 판정 금지).
+    //  · 명부 미등록·미확정(세무 검토)은 참고(I)만. 수행정보 세금처리 미설정은 기존 no_tax 로 표시.
+    if (p && p.cat === "individual" && !paid && p.individual_user_id != null && p.treatment) {
+      const pm = regPm.get(Number(p.individual_user_id)) ?? null;
+      if (!(pm === "overseas_bank" || pm === "overseas_paypal")) {
+        const regT = masterTreatmentOf(pm);
+        if (regT == null) add("I", "tax_registry_missing", pm === "domestic_bank_transfer" ? "명부 원천징수 미확정(세무 검토)" : "명부 원천징수 미등록",
+          "통번역사 상세 정산정보관리에서 원천징수 등록");
+        else if (normTreat(p.treatment) !== regT) add("C", "tax_registry_mismatch",
+          `명부 원천징수(${TREAT_LABEL[regT] ?? regT}) ≠ 수행정보 세금처리(${TREAT_LABEL[p.treatment] ?? p.treatment})`,
+          "명부 확인 후 수행정보 세금처리 정정(자동 변경 없음)");
+      }
+    }
     // 세금 충돌(CRM 원천세 ↔ 현재 세금 설정, 외주업체인데 원천세 기록 등) — 확인 필요만 표시, 금액·지급상태 불변
     if (pay.taxConflict && !paid) add("C", "tax_conflict", pay.taxConflict, "실제 세금(원천세·부가세) 확인 후 수행정보·지급액 정정");
     if (kind === "crm_only" && !paid) {

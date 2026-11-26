@@ -86,8 +86,9 @@ const REASON_ORDER = ['지급보류', '과거 지급 여부 확인', '지급완�
 const reasonText = (r: Item): string => {
   const out = new Set<string>();
   for (const b of r.blockers) {
-    if (b.cat === 'I') continue;
-    const l = b.code in REASON_LABEL ? REASON_LABEL[b.code] : b.text;
+    // 참고(I) 항목은 표시하지 않음 — 단, 명부 원천징수 미등록·미확정은 '참고:'로 사유란에 표시(상태 분류 영향 없음)
+    if (b.cat === 'I' && b.code !== 'tax_registry_missing') continue;
+    const l = b.code === 'tax_registry_missing' ? `참고: ${b.text}` : b.code in REASON_LABEL ? REASON_LABEL[b.code] : b.text;
     if (l) out.add(l);
   }
   return [...out].sort((a, b) => (REASON_ORDER.indexOf(a) + 1 || 99) - (REASON_ORDER.indexOf(b) + 1 || 99)).join(', ');
