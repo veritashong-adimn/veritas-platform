@@ -2724,8 +2724,6 @@ export function QuoteEditorWorkspace({
   const myAltRootId = family.find(m => m.relationType == null)?.id ?? savedQuoteId;
   const otherSoldAlt = altGroup.members.find(m => m.sold && m.rootId !== myAltRootId) ?? null;
   const myAltMember = altGroup.members.find(m => m.rootId === myAltRootId) ?? null;
-  // 판매확정된 일반견적(현재유효)의 계약내용 잠금 — 변경견적으로만 변경(서버 CONTRACT_LOCKED 와 동일 기준, 과거 CRM 전환 판매 제외)
-  const contractLocked = quoteType === 'b2b_standard' && converted && meMember?.isCurrent === true && !legacySale;
   // 파생견적 생성 가능: b2b 일반견적 + 현재유효 견적(원견적/변경 현재본)에서만(§5/§37/§38). 파생 자신에서는 불가.
   const canCreateDerived = quoteType === 'b2b_standard' && savedQuoteId != null && !isDerived && (meMember?.isCurrent ?? true);
 
@@ -3131,13 +3129,8 @@ export function QuoteEditorWorkspace({
         )}
         {/* 상품정보 편집 그리드 — 판매관리 수정모드와 공용(QuoteItemsEditor).
             누적 마감 시 편집 차단(pointer-events 무효화 + 흐리게). API에서도 수정 차단됨. */}
-        {/* 판매확정 일반견적: 계약내용(상품·수량·단가·금액) 잠금 — 변경은 [변경견적 생성]으로(서버도 차단) */}
-        {contractLocked && !batchClosed && (
-          <div data-testid="contract-locked-notice" style={{ marginBottom: 10, padding: '9px 14px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, fontSize: 12, color: '#1e40af', fontWeight: 600 }}>
-            🔒 판매확정된 견적입니다. 상품·수량·단가·금액은 직접 수정할 수 없습니다. 계약 변경은 [변경견적 생성]으로 처리하세요. (제목·비고 등은 수정 가능)
-          </div>
-        )}
-        <div style={(batchClosed || contractLocked) ? { pointerEvents: 'none', opacity: 0.6 } : undefined} aria-disabled={batchClosed || contractLocked} data-testid="quote-items-editor-wrap">
+        {/* 판매확정 견적도 상품·수량·단가·금액 직접 수정 가능(2026-11) — 금액 변경 시 저장 단계에서 변경 사유 입력(REASON_REQUIRED) */}
+        <div style={batchClosed ? { pointerEvents: 'none', opacity: 0.6 } : undefined} aria-disabled={batchClosed} data-testid="quote-items-editor-wrap">
           <QuoteItemsEditor items={items} onItemsChange={setItems} vatType={vatType} products={products} allowNegativePrice={isPrepaidQuote}
             productCreate={{ canCreate: canCreateProduct, onCreate: openQuickCreate }} />
         </div>

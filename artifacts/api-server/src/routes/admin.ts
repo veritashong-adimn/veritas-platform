@@ -3643,23 +3643,9 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
   const [qBefore] = await db.select({ price: quotesTable.price, status: quotesTable.status, projectId: quotesTable.projectId, quoteType: quotesTable.quoteType, isCurrent: quotesTable.isCurrent }).from(quotesTable).where(eq(quotesTable.id, quoteId));
   const itemsBefore = await db.select({ id: quoteItemsTable.id, productName: quoteItemsTable.productName, supplyAmount: quoteItemsTable.supplyAmount, taxAmount: quoteItemsTable.taxAmount, totalAmount: quoteItemsTable.totalAmount, quantity: quoteItemsTable.quantity, unit: quoteItemsTable.unit, unitPrice: quoteItemsTable.unitPrice }).from(quoteItemsTable).where(eq(quoteItemsTable.quoteId, quoteId));
   const priceChanged = qBefore != null && Math.abs(Number(qBefore.price ?? 0) - totalPrice) >= 0.005;
-  // 판매확정된 일반견적의 계약내용(품목·수량·단위·단가·금액·견적유형) 직접 수정 차단 — 변경견적 이력 우회 방지.
-  //  계약 변경은 [변경견적 생성](또는 복수견적 재선택)으로 처리한다. 제목·비고·거래처 표시정보·품목 메모 등 금액 무관 정보는 그대로 저장 가능.
-  //  누적·차감 견적서(판매 후 저장 시 판매건 자동 반영 업무)와 과거 CRM 전환 판매(원본 총액 확인 흐름)는 기존 동작 유지.
-  if (qBefore?.status === "approved" && qBefore.isCurrent === true && qBefore.quoteType === "b2b_standard") {
-    const legacy = qBefore.projectId ? await legacyOriginOfProject(db, qBefore.projectId) : null;
-    if (!legacy) {
-      const sig = (arr: any[]) => arr.map(it => [String(it.productName ?? "").trim(), Number(it.quantity ?? 0), String(it.unit ?? "건"), Number(it.unitPrice ?? 0), Number(it.totalAmount ?? 0)].join("|")).sort().join("\n");
-      const typeChanged = quoteType != null && quoteType !== qBefore.quoteType;
-      if (priceChanged || typeChanged || sig(itemsBefore) !== sig(calcItems)) {
-        res.status(409).json({
-          error: "판매확정된 견적의 계약내용(상품·수량·단가·금액)은 직접 수정할 수 없습니다. [변경견적 생성]으로 변경견적을 만들어 승인해 주세요. (제목·비고 등 금액과 무관한 정보는 수정할 수 있습니다)",
-          code: "CONTRACT_LOCKED",
-        });
-        return;
-      }
-    }
-  }
+  // 판매확정 견적의 계약내용(상품·수량·단위·단가·금액) 직접 수정 허용(2026-11) — 통역시간 연장·인원/분량 변경·추가 비용을 판매정보에서 바로 반영.
+  //  금액이 바뀌면 변경사유 필수(아래 REASON_REQUIRED). 판매확정 후 최초 수정 시 기존 견적 전체를 감사로그에 1회 보존하고(quote_sale_original_snapshot),
+  //  매 수정마다 변경 전후 품목·수량·단위·단가·금액을 기록(quote_items_updated). 청구회차·입금기록·수행정보·지급/정산은 변경하지 않는다.
   // 과거 CRM 전환 견적 — 원본은 총액만 있고 공급가·부가세 구분이 확인되지 않은 금액이다.
   //   편집 화면의 부가세 재계산 등으로 원본 총액과 다른 금액이 저장되지 않도록, 금액이 바뀌는 저장은 명시적 확인을 요구한다(임의 VAT 가산 방지).
   if (priceChanged && qBefore?.projectId && (req.body as any)?.confirmLegacyVat !== true) {
@@ -3698,6 +3684,20 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
   let insertedItemIds: number[] = [];   // 감사로그: 저장 후 품목 id(수행정보 연결 추적 근거)
   try {
     await db.transaction(async tx => {
+      // 판매확정 견적의 최초 수정 — 수정 전 견적 전체(견적 정보 + 전체 품목)를 감사로그에 1회 보존(판매 원본). 이후 수정은 quote_items_updated 로 추적.
+      //  같은 트랜잭션 — 저장이 실패하면 원본 로그도 남지 않는다.
+      if (qBefore?.status === "approved") {
+        const [snap] = await tx.select({ id: logsTable.id }).from(logsTable)
+          .where(and(eq(logsTable.entityType, "quote"), eq(logsTable.entityId, quoteId), eq(logsTable.action, "quote_sale_original_snapshot"))).limit(1);
+        if (!snap) {
+          const [fullQuote] = await tx.select().from(quotesTable).where(eq(quotesTable.id, quoteId));
+          const fullItems = await tx.select().from(quoteItemsTable).where(eq(quoteItemsTable.quoteId, quoteId)).orderBy(quoteItemsTable.id);
+          const u = (req as any).user as { id?: number; email?: string } | undefined;
+          await tx.insert(logsTable).values({ entityType: "quote", entityId: quoteId, action: "quote_sale_original_snapshot",
+            performedBy: u?.id ?? null, performedByEmail: u?.email ?? null,
+            metadata: JSON.stringify({ projectId: qBefore.projectId ?? null, reason: versionReason?.trim() || null, quote: fullQuote ?? null, items: fullItems }) });
+        }
+      }
       // 거래처/브랜드/담당자/담당PM 연결 처리
       //  담당 PM(adminId)은 이 견적이 연결된 project(변경견적은 자신의 전용 project)에만 반영된다.
       //  → 변경견적에서 PM을 바꿔도 원견적 project 는 영향받지 않는다(family 독립성 유지).
@@ -3859,8 +3859,9 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
     await logEvent("quote", quoteId, "quote_items_updated", req.log, (req as any).user ?? undefined, JSON.stringify({
       projectId: qBefore?.projectId ?? null, reason: versionReason?.trim() || null,
       // 공급가액·부가세도 기록(총액이 같은 공급가/부가세 정정도 감사로그에서 확인 가능). 기존 키(productName·totalAmount) 유지.
-      before: { price: qBefore ? Number(qBefore.price) : null, items: itemsBefore.map(i => ({ id: i.id, productName: i.productName, supplyAmount: Number(i.supplyAmount), taxAmount: Number(i.taxAmount), totalAmount: Number(i.totalAmount) })) },
-      after: { price: totalPrice, items: calcItems.map((i, k) => ({ id: insertedItemIds[k] ?? null, productName: i.productName, supplyAmount: i.supplyAmount, taxAmount: i.taxAmount, totalAmount: i.totalAmount })) },
+      //  수량·단위·단가도 기록(판매확정 후 계약내용 직접 수정 추적).
+      before: { price: qBefore ? Number(qBefore.price) : null, items: itemsBefore.map(i => ({ id: i.id, productName: i.productName, quantity: Number(i.quantity), unit: i.unit, unitPrice: Number(i.unitPrice), supplyAmount: Number(i.supplyAmount), taxAmount: Number(i.taxAmount), totalAmount: Number(i.totalAmount) })) },
+      after: { price: totalPrice, items: calcItems.map((i, k) => ({ id: insertedItemIds[k] ?? null, productName: i.productName, quantity: Number(i.quantity ?? 1), unit: i.unit ?? null, unitPrice: Number(i.unitPrice), supplyAmount: i.supplyAmount, taxAmount: i.taxAmount, totalAmount: i.totalAmount })) },
     }));
     res.json({ id: quoteId, price: totalPrice });
   } catch (err) {
