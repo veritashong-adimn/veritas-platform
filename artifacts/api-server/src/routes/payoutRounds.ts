@@ -39,14 +39,19 @@ const adminOnlyGuard = [requireAuth, requireRole("admin")];
 const num = (v: unknown) => { const n = Number(v ?? 0); return Number.isFinite(n) ? n : 0; };
 
 // 수집기준 날짜 컬럼 — delivery_date(납품일) 기준, expected_payment_date(지급예정일) 기준 옵션.
+// 최종 지급예정일(2026-11) = 관리자가 정한 지급예정일 → 없으면 납품일로 자동 산정된 지급예정일.
+//   통합 조회(payoutUnified CUR.payout_date)·지급준비점검·지급대상별 요약·건별 상세내역과 같은 기준. 납품일은 자동 산정에만 쓰인다.
+const FINAL_PAY_DATE = sql`COALESCE(${performanceAssignmentsTable.expectedPaymentDate}, ${performanceAssignmentsTable.expectedPaymentDateAuto})`;
 const basisExpr = (basis: string) =>
   basis === "delivery_date"
     ? sql`${performanceAssignmentsTable.deliveryDate}`
-    : sql`COALESCE(${performanceAssignmentsTable.expectedPaymentDate}, ${performanceAssignmentsTable.deliveryDate})`;
+    : FINAL_PAY_DATE;
 
 // 기본 수집기준 — 대상기간 자동제안(suggestPeriod)이 '납품 기준 기간'(전월 16~말일 등)을 만들므로
 // 수집기준도 납품일(delivery_date)로 정합시킨다. (지급예정일 기준은 지급일이 납품창 밖이라 0건 수집되던 문제 해결)
-const DEFAULT_COLLECTION_BASIS = "delivery_date" as const;
+//   (2026-11 변경) 수집 기준을 최종 지급예정일로 통일 — 새 회차는 항상 '최종 지급예정일 = 회차 지급일' 건만 수집한다.
+//   기존 납품일 기준(delivery_date)으로 만들어진 회차는 저장된 기준을 그대로 따른다(재수집·경고 표시).
+const DEFAULT_COLLECTION_BASIS = "expected_payment_date" as const;
 
 // 지급대상 공통 자격조건 — 미삭제·미지급·납품확인·납품일·지급액>0·지급대상 지정(개인은 세금처리 포함).
 //  · 회차 자동수집(collectWhere)과 전체 지급대상 개요(overview)가 이 동일 조건을 공유한다(§2 중복로직 방지).
@@ -123,7 +128,7 @@ function selectItems(whereClause: any, dbx: any = db) {
       serviceType: performanceAssignmentsTable.serviceType,
       productName: performanceAssignmentsTable.productNameSnapshot,
       deliveryDate: performanceAssignmentsTable.deliveryDate,
-      expectedPaymentDate: performanceAssignmentsTable.expectedPaymentDate,
+      expectedPaymentDate: sql<string | null>`to_char(${FINAL_PAY_DATE}, 'YYYY-MM-DD')`,   // 최종 지급예정일(수동 지정 → 자동 산정)
       // 건별 상세 16컬럼 표시용(수행일·작업량·단가) — 원본 필드 조회만 추가(계산 로직 불변).
       performanceStartDate: performanceAssignmentsTable.performanceStartDate,
       performanceEndDate: performanceAssignmentsTable.performanceEndDate,
@@ -679,12 +684,12 @@ async function saveItemSnapshots(round: any, confirmedAt: Date) {
 export async function autoAssignByPaymentDate(projectId: number) {
   // 1) 미배정·자격충족·지급일 입력 건(회차 수집기준 eligibleConds 재사용 — 일관성)
   const candidates = await db
-    .select({ id: performanceAssignmentsTable.id, pay: performanceAssignmentsTable.expectedPaymentDate })
+    .select({ id: performanceAssignmentsTable.id, pay: sql<string>`to_char(${FINAL_PAY_DATE}, 'YYYY-MM-DD')` })
     .from(performanceAssignmentsTable)
     .where(and(
       eq(performanceAssignmentsTable.projectId, projectId),
       isNull(performanceAssignmentsTable.payoutRoundId),
-      isNotNull(performanceAssignmentsTable.expectedPaymentDate),
+      sql`${FINAL_PAY_DATE} IS NOT NULL`,
       ...eligibleConds(),
     ));
   if (!candidates.length) return { assigned: 0, rounds: [] as number[] };
@@ -734,7 +739,7 @@ async function assignUnassignedToRound(round: any) {
     .where(and(
       ...eligibleConds(),
       isNull(performanceAssignmentsTable.payoutRoundId),
-      eq(performanceAssignmentsTable.expectedPaymentDate, round.paymentDate),
+      sql`${FINAL_PAY_DATE} = ${round.paymentDate}`,
     ))
     .returning({ id: performanceAssignmentsTable.id });
   return { assigned: res.length };
@@ -759,7 +764,11 @@ const createSchema = z.object({
 router.post("/admin/payout-rounds", ...payoutManage, async (req, res) => {
   const parsed = createSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: "유효성 검증 실패", detail: parsed.error.flatten() }); return; }
-  const { paymentDate, periodStart, periodEnd, collectionBasis = DEFAULT_COLLECTION_BASIS, note } = parsed.data;
+  // 수집 기준 통일(2026-11): 최종 지급예정일 = 회차 지급일인 건만 수집. 요청의 수집기준·대상기간은 무시하고 지급일 하루로 고정한다
+  //   (지급준비점검·통합 조회의 '지급일' 기준과 동일). 요청 필드는 API 호환을 위해 받기만 한다.
+  const { paymentDate, note } = parsed.data;
+  const collectionBasis = DEFAULT_COLLECTION_BASIS;
+  const periodStart = paymentDate, periodEnd = paymentDate;
   const batchNumber = parsed.data.batchNumber || `${paymentDate} 지급회차`;
   const userId = req.user?.id ?? null;
   try {
@@ -1044,8 +1053,10 @@ function buildTransfersView(round: any, rows: (typeof payoutTransfersTable.$infe
   const transfers = rows.map(mapTransferRow);
   const notResolved = (t: any) => t.status !== "excluded" && t.status !== "cancelled" && t.status !== "paid" && t.status !== "failed";
   const excludedCount = transfers.filter((t) => t.status === "excluded").length;
-  // 송금파일 생성 가능 판단(§10): 모든 "비제외" 대상이 verified AND ready.
-  const active = transfers.filter((t) => t.status !== "excluded" && t.status !== "cancelled");
+  // 송금파일 생성 가능 판단(§10): 모든 "비제외·미지급" 대상이 verified AND ready.
+  //   지급완료(paid) 송금건은 판단에서 뺀다(2026-11) — 일부 지급완료 후 실패 건만 다시 송금파일로 재처리할 수 있도록.
+  //   (파일 포함 대상은 여전히 ready 만 → 이미 지급완료된 대상은 재송금되지 않음). 실패(failed)는 재검증·제외 전까지 생성 차단.
+  const active = transfers.filter((t) => t.status !== "excluded" && t.status !== "cancelled" && t.status !== "paid");
   const missingBlock = active.filter((t) => t.verificationStatus === "missing").length;
   const invalidBlock = active.filter((t) => t.verificationStatus === "invalid").length;
   const notReadyBlock = active.filter((t) => t.verificationStatus === "verified" && t.status !== "ready").length;
@@ -1179,6 +1190,46 @@ router.post("/admin/payout-rounds/:id/transfers/:transferId/unexclude", ...payou
   }
 });
 
+// ── POST 지급실패(2026-11) — 은행 이체가 실패한 송금건을 기존 상태값 failed 로 기록(사유 필수). ──
+//  · 대상: 지급확정 회차의 송금 대기(ready) + IBK 파일 생성된 송금건만. 지급완료(paid) 송금건은 대상 아님.
+//  · 수행정보는 미지급(unpaid) 유지 — 회차 [지급완료] 시 실패 대상은 지급완료로 바뀌지 않는다.
+//  · 재처리: [계좌 재검증] → 송금 대기(ready) → IBK 파일 재생성(ready 만 포함 — 이미 지급완료 대상은 미포함) → [지급완료].
+//  · 금액·계좌 snapshot 불변. 실패 이력은 감사로그(project 단위)에 남긴다(재검증 시 failureReason 이 지워져도 이력 보존).
+router.post("/admin/payout-rounds/:id/transfers/:transferId/fail", ...payoutTransfer, async (req, res) => {
+  const id = Number(req.params.id);
+  const transferId = Number(req.params.transferId);
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim().slice(0, 500) : "";
+  if (!reason) { res.status(400).json({ error: "지급실패 사유를 입력해야 합니다." }); return; }
+  const [round] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
+  if (!round) { res.status(404).json({ error: "지급회차를 찾을 수 없습니다." }); return; }
+  if (round.status !== "confirmed") { res.status(400).json({ error: "지급확정된 회차의 송금건만 지급실패 처리할 수 있습니다." }); return; }
+  const [t] = await db.select().from(payoutTransfersTable)
+    .where(and(eq(payoutTransfersTable.id, transferId), eq(payoutTransfersTable.payoutRoundId, id)));
+  if (!t) { res.status(404).json({ error: "송금건을 찾을 수 없습니다." }); return; }
+  if (t.status !== "ready") { res.status(400).json({ error: "송금 대기(ready) 상태의 송금건만 지급실패 처리할 수 있습니다." }); return; }
+  if (!t.ibkFileGenerated) { res.status(400).json({ error: "송금파일 생성 전 송금건은 지급실패 처리할 수 없습니다. 지급 대상에서 빼려면 [지급 제외]를 사용하세요." }); return; }
+  try {
+    // 상태 조건부 갱신 — 그 사이 지급완료된 송금건을 실패로 덮어쓰지 않는다.
+    const [updated] = await db.update(payoutTransfersTable)
+      .set({ status: "failed", failureReason: `지급실패: ${reason}`, updatedAt: new Date() })
+      .where(and(eq(payoutTransfersTable.id, transferId), eq(payoutTransfersTable.status, "ready")))
+      .returning({ id: payoutTransfersTable.id });
+    if (!updated) { res.status(409).json({ error: "송금건 상태가 변경되었습니다. 새로고침 후 다시 시도하세요." }); return; }
+    // 감사로그 — 이 지급대상의 확정 스냅샷 판매건별로 기록(계좌번호 미포함).
+    const items = await db.select({ projectId: payoutRoundItemsTable.projectId, assignmentId: payoutRoundItemsTable.performanceAssignmentId })
+      .from(payoutRoundItemsTable).where(eq(payoutRoundItemsTable.payoutRoundId, id));
+    const keyItems = (await assignmentIdsForPayees(db, id, new Set([t.payeeKey])));
+    const projects = new Set(items.filter((it) => keyItems.includes(it.assignmentId) && it.projectId != null).map((it) => it.projectId as number));
+    const performer = req.user ? { id: req.user.id, email: req.user.email } : undefined;
+    for (const pid of projects) await logEvent("project", pid, "payout_transfer_failed", req.log, performer,
+      JSON.stringify({ payoutRoundId: id, transferId, payeeKey: t.payeeKey, payeeName: t.payeeName, amount: num(t.amount), ibkBatchRef: t.ibkBatchRef, reason }));
+    res.json(await loadTransfersView(id));
+  } catch (err) {
+    req.log.error({ err, transferId }, "지급실패 처리 실패");
+    res.status(500).json({ error: "지급실패 처리 중 오류가 발생했습니다." });
+  }
+});
+
 // ── POST IBK 대량이체 Excel 생성·다운로드(Phase 3) ──────────────────────────────
 //  · 포함 대상(§3): status=ready · verificationStatus=verified · amount>0 (국내 계좌 검증완료건).
 //    제외/취소/지급완료/실패 및 정보누락(missing)/오류(invalid) 는 자동 제외되지 않고 "전체 차단"으로 이어진다.
@@ -1303,15 +1354,43 @@ router.post("/admin/payout-rounds/:id/transfers/ibk-file", ...payoutTransfer, as
 
 // ── 정정 차액 정산 완료(2026-11) — 회차 지급완료 시 이 회차에 편입된 차액(추가지급·상계)을 settled 로.
 //   실제 송금(payout_transfers paid)과 같은 시점에만 완료 처리 — 송금하지 않은 금액을 완료로 기록하지 않는다.
-async function settleRoundAdjustments(req: any, roundId: number, paidAt: Date) {
-  const done = await db.update(payoutAdjustmentsTable)
+//   · dbx: 지급완료 트랜잭션 안에서 함께 커밋(2026-11). payeeKeys 가 있으면 이번에 송금 완료된 지급대상의 차액만 완료 처리.
+//   · 감사로그는 커밋 후 logSettledAdjustments 로 남긴다(롤백된 정산이 로그에 남지 않도록).
+async function settleRoundAdjustments(req: any, roundId: number, paidAt: Date, dbx: any = db, payeeKeys: Set<string> | null = null) {
+  const scheduled = await dbx.select({ id: payoutAdjustmentsTable.id, payeeType: payoutAdjustmentsTable.payeeType, payeeId: payoutAdjustmentsTable.payeeId })
+    .from(payoutAdjustmentsTable)
+    .where(and(eq(payoutAdjustmentsTable.settlementRoundId, roundId), eq(payoutAdjustmentsTable.settlementStatus, "scheduled")));
+  const ids = scheduled.filter((a: any) => !payeeKeys || payeeKeys.has(payeeKeyOf(a.payeeType, a.payeeId))).map((a: any) => a.id);
+  if (!ids.length) return [];
+  return dbx.update(payoutAdjustmentsTable)
     .set({ settlementStatus: "settled", settledAt: paidAt, settledBy: req.user?.id ?? null, settlementRef: `payout_round:${roundId}`, updatedAt: paidAt })
-    .where(and(eq(payoutAdjustmentsTable.settlementRoundId, roundId), eq(payoutAdjustmentsTable.settlementStatus, "scheduled")))
+    .where(and(inArray(payoutAdjustmentsTable.id, ids), eq(payoutAdjustmentsTable.settlementStatus, "scheduled")))
     .returning();
+}
+async function logSettledAdjustments(req: any, roundId: number, done: any[]) {
   const performer = req.user ? { id: req.user.id, email: req.user.email } : undefined;
   for (const a of done) await logEvent("project", a.projectId, "payout_adjustment_settled", req.log, performer,
     JSON.stringify({ adjustmentId: a.id, assignmentId: a.assignmentId, settlementType: a.settlementType, payoutRoundId: roundId, deltaNet: num(a.deltaNet) }));
 }
+
+// ── 송금건 기준 지급완료 범위(2026-11) ───────────────────────────────────────────
+//   송금건(payout_transfers)이 있는 회차는 '실제 송금 성공' 지급대상의 수행건만 지급완료(paid)로 바꾼다.
+//   · 송금 성공 = 지급완료 처리 시점에 송금 대기(ready, IBK 파일 대상)인 송금건. 제외(excluded)·실패(failed)·
+//     정보누락(pending)·취소(cancelled) 지급대상의 수행건은 미지급(unpaid)으로 남아 재처리할 수 있다.
+//   · 수행건 → 지급대상 매핑은 확정 스냅샷(payout_round_items)의 payee 를 사용(송금건 집계와 같은 키 — payoutTransfers.aggregateByPayee).
+//   · 송금건이 없는 회차는 기존 흐름(회차 전체 지급완료) 그대로.
+function payeeKeyOf(payeeType: string | null | undefined, payeeId: number | null | undefined) {
+  const prefix = payeeType === "individual" ? "i" : payeeType === "vendor" ? "v" : "n";
+  return `${prefix}:${payeeId ?? "none"}`;
+}
+async function assignmentIdsForPayees(dbx: any, roundId: number, payeeKeys: Set<string>): Promise<number[]> {
+  if (!payeeKeys.size) return [];
+  const items = await dbx.select({
+    assignmentId: payoutRoundItemsTable.performanceAssignmentId, payeeType: payoutRoundItemsTable.payeeType, payeeId: payoutRoundItemsTable.payeeId,
+  }).from(payoutRoundItemsTable).where(and(eq(payoutRoundItemsTable.payoutRoundId, roundId), isNull(payoutRoundItemsTable.adjustmentId)));
+  return [...new Set<number>(items.filter((it: any) => payeeKeys.has(payeeKeyOf(it.payeeType, it.payeeId))).map((it: any) => it.assignmentId))];
+}
+class PayBlocked extends Error { constructor(public status: number, message: string, public code?: string) { super(message); } }
 
 // ── 승인된 수정 요청(confirmed_change) 반영 — 해당 수행건 1건의 확정 스냅샷만 재동결(건 단위 확정해제→재확정, 2026-11).
 //   · 같은 트랜잭션(dbx)에서 실행해 '수행정보 정정'과 '확정 스냅샷 갱신'이 함께 커밋되거나 함께 롤백된다.
@@ -1396,6 +1475,18 @@ router.patch("/admin/payout-rounds/:id/unconfirm", ...adminOnlyGuard, async (req
   if (!round) { res.status(404).json({ error: "지급회차를 찾을 수 없습니다." }); return; }
   if (round.status === "paid") { res.status(400).json({ error: "지급완료된 회차는 확정취소할 수 없습니다." }); return; }
   if (round.status !== "confirmed") { res.status(400).json({ error: "지급확정된 회차만 확정취소할 수 있습니다." }); return; }
+  // 일부라도 지급완료된 회차는 확정취소 불가(2026-11) — 지급완료 수행건 또는 지급완료 송금건이 하나라도 있으면 차단.
+  //   확정 스냅샷 해제·재편입으로 실제 지급 기록과 회차 금액이 어긋나는 것을 막는다. 미지급 건 정리는 [선택 확정취소]로.
+  {
+    const [{ paidItems }] = await db.select({ paidItems: sql<number>`count(*)::int` }).from(performanceAssignmentsTable)
+      .where(and(eq(performanceAssignmentsTable.payoutRoundId, id), eq(performanceAssignmentsTable.paymentStatus, "paid")));
+    const [{ paidTransfers }] = await db.select({ paidTransfers: sql<number>`count(*)::int` }).from(payoutTransfersTable)
+      .where(and(eq(payoutTransfersTable.payoutRoundId, id), or(eq(payoutTransfersTable.status, "paid"), isNotNull(payoutTransfersTable.paidAt))));
+    if (paidItems > 0 || paidTransfers > 0) {
+      res.status(409).json({ error: `일부 지급완료된 회차는 확정취소할 수 없습니다(지급완료 수행건 ${paidItems}건 · 송금건 ${paidTransfers}건). 미지급 건은 [선택 확정취소]로 회차에서 제외하세요.` });
+      return;
+    }
+  }
   const unconfirmReason = unconfirmReasonSchema.safeParse(req.body ?? {}).data?.reason?.trim() || null;
   try {
     // 0) 확정 스냅샷 감사 보존(2026-11) — 삭제 전 기존 확정값을 감사로그에 남긴다.
@@ -1445,38 +1536,76 @@ router.patch("/admin/payout-rounds/:id/pay", ...payoutTransfer, async (req, res)
   if (round.status !== "confirmed") { res.status(400).json({ error: "지급확정된 회차만 지급완료 처리할 수 있습니다." }); return; }
   const actualPaymentDate = roundActualPayDate(req.body, round.paymentDate);
   if (typeof actualPaymentDate !== "string") { res.status(400).json(actualPaymentDate); return; }
+  // 송금 성공 확인 송금건(2026-11) — 송금건이 있는 회차의 전체 지급완료에 필수. 없으면 null.
+  const rawSucc = req.body?.successTransferIds;
+  if (rawSucc != null && (!Array.isArray(rawSucc) || rawSucc.length === 0 || !rawSucc.every((x: unknown) => Number.isInteger(x) && (x as number) > 0))) {
+    res.status(400).json({ error: "송금 성공으로 확인한 지급대상을 1명 이상 선택하세요." }); return;
+  }
+  const successIds: number[] | null = rawSucc ? [...new Set(rawSucc as number[])] : null;
   try {
     const mismatch = await transferMismatchBeforePay(req, round);
     if (mismatch) { res.status(409).json({ error: mismatch }); return; }
     const paidAt = new Date();
-    // 이번에 지급완료로 바뀌는 건(미지급)에만 실제 지급일 기록 — 이미 지급완료된 건의 기존 실제 지급일은 바꾸지 않는다.
-    await db.update(performanceAssignmentsTable)
-      .set({ paymentStatus: "paid", actualPaymentDate, updatedAt: paidAt })
-      .where(and(
-        eq(performanceAssignmentsTable.payoutRoundId, id),
-        eq(performanceAssignmentsTable.paymentStatus, "unpaid"),
-      ));
-    await db.update(performanceAssignmentsTable)
-      .set({ paymentStatus: "paid", updatedAt: paidAt })
-      .where(and(
-        eq(performanceAssignmentsTable.payoutRoundId, id),
-        ne(performanceAssignmentsTable.paymentStatus, "payment_hold"),
-      ));
-    // 지급 실행(payout_transfers) 상태 동기화 — 실제 지급대상(ready)만 paid + paidAt 기록.
-    //   · excluded/cancelled/failed/pending 은 status 조건상 자연 제외(임의 paid 전환 금지). 금액·snapshot 불변.
-    await db.update(payoutTransfersTable)
-      .set({ status: "paid", paidAt, updatedAt: paidAt })
-      .where(and(
-        eq(payoutTransfersTable.payoutRoundId, id),
-        eq(payoutTransfersTable.status, "ready"),
-      ));
-    await db.update(payoutRoundsTable)
-      .set({ status: "paid", updatedAt: paidAt })
-      .where(eq(payoutRoundsTable.id, id));
-    await settleRoundAdjustments(req, id, paidAt);
+    // 지급완료 관련 갱신(수행정보·송금건·회차·정정 차액)을 하나의 트랜잭션으로 처리(2026-11) — 중간 실패 시 전부 롤백.
+    const outcome = await db.transaction(async (tx) => {
+      // 회차 행 잠금 + 상태 재확인 — 동시 클릭·중복 요청으로 두 번 처리되지 않도록.
+      const [locked] = await tx.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id)).for("update");
+      if (!locked || locked.status !== "confirmed") throw new PayBlocked(400, "지급확정된 회차만 지급완료 처리할 수 있습니다.");
+      const transfers = await tx.select({ id: payoutTransfersTable.id, payeeKey: payoutTransfersTable.payeeKey, status: payoutTransfersTable.status, ibkFileGenerated: payoutTransfersTable.ibkFileGenerated })
+        .from(payoutTransfersTable).where(eq(payoutTransfersTable.payoutRoundId, id)).for("update");
+
+      let paidKeys: Set<string> | null = null;   // null = 송금건 없는 회차(기존 흐름: 회차 전체)
+      let paidAssignments = 0;
+      if (transfers.length === 0) {
+        // 이번에 지급완료로 바뀌는 건(미지급)에만 실제 지급일 기록 — 이미 지급완료된 건의 기존 실제 지급일은 바꾸지 않는다.
+        const done = await tx.update(performanceAssignmentsTable)
+          .set({ paymentStatus: "paid", actualPaymentDate, updatedAt: paidAt })
+          .where(and(eq(performanceAssignmentsTable.payoutRoundId, id), eq(performanceAssignmentsTable.paymentStatus, "unpaid")))
+          .returning({ id: performanceAssignmentsTable.id });
+        paidAssignments = done.length;
+      } else {
+        // 송금 성공 대상 = 담당자가 은행 이체 결과로 '송금 성공'을 확인해 지정한 송금건(successTransferIds)만(2026-11).
+        //   송금 대기(ready) 상태 자체를 성공으로 보지 않는다. 지정되지 않은 송금 대기 건(결과 미확인)·제외·실패·정보누락·취소 대상은 미지급 유지.
+        //   지정 송금건은 이 회차 소속 · 송금 대기(ready) · 송금파일 생성 완료여야 한다(하나라도 아니면 전체 거부).
+        const succ = successIds;
+        if (!succ) throw new PayBlocked(400, "송금건이 있는 회차는 [지급 실행] 화면에서 송금 성공을 확인한 지급대상을 선택해 지급완료하세요.", "TRANSFER_RESULT_REQUIRED");
+        const byId = new Map(transfers.map((t) => [t.id, t]));
+        const bad = succ.filter((tid) => { const t = byId.get(tid); return !t || t.status !== "ready" || !t.ibkFileGenerated; });
+        if (bad.length) throw new PayBlocked(409, `송금 성공으로 지정할 수 없는 송금건이 있습니다(${bad.length}건 — 이 회차의 송금파일 생성 완료·송금 대기 건만 가능). 새로고침 후 다시 선택하세요.`);
+        paidKeys = new Set(succ.map((tid) => byId.get(tid)!.payeeKey));
+        const ids = await assignmentIdsForPayees(tx, id, paidKeys);
+        if (ids.length) {
+          const done = await tx.update(performanceAssignmentsTable)
+            .set({ paymentStatus: "paid", actualPaymentDate, updatedAt: paidAt })
+            .where(and(eq(performanceAssignmentsTable.payoutRoundId, id), inArray(performanceAssignmentsTable.id, ids), eq(performanceAssignmentsTable.paymentStatus, "unpaid")))
+            .returning({ id: performanceAssignmentsTable.id });
+          paidAssignments = done.length;
+        }
+        // 송금건 상태 동기화 — 송금 성공 확인된 송금건만 paid + paidAt. 나머지(결과 미확인 ready 포함)는 그대로. 금액·snapshot 불변.
+        await tx.update(payoutTransfersTable)
+          .set({ status: "paid", paidAt, updatedAt: paidAt })
+          .where(and(eq(payoutTransfersTable.payoutRoundId, id), inArray(payoutTransfersTable.id, succ), eq(payoutTransfersTable.status, "ready")));
+      }
+      // 회차 상태 — 미지급 수행건이 남지 않았을 때만 지급완료. 남아 있으면(실패·제외 대상) 지급확정 유지 → 재처리 가능.
+      const [{ remaining }] = await tx.select({ remaining: sql<number>`count(*)::int` }).from(performanceAssignmentsTable)
+        .where(and(eq(performanceAssignmentsTable.payoutRoundId, id), eq(performanceAssignmentsTable.paymentStatus, "unpaid")));
+      const roundPaid = remaining === 0;
+      // 회차 전체 완료 시 남은 송금 대기 건 = 수행건이 [선택 지급완료]로 이미 모두 지급완료된 지급대상 → 송금건도 지급완료로 정리
+      //   ([선택 지급완료]가 회차를 완료할 때와 같은 처리). 미지급 수행건이 남은 경우에는 실행되지 않는다.
+      if (roundPaid && transfers.length) {
+        await tx.update(payoutTransfersTable).set({ status: "paid", paidAt, updatedAt: paidAt })
+          .where(and(eq(payoutTransfersTable.payoutRoundId, id), eq(payoutTransfersTable.status, "ready")));
+      }
+      await tx.update(payoutRoundsTable).set({ ...(roundPaid ? { status: "paid" as const } : {}), updatedAt: paidAt }).where(eq(payoutRoundsTable.id, id));
+      const settled = await settleRoundAdjustments(req, id, paidAt, tx, roundPaid ? null : paidKeys);
+      return { settled, payResult: { paidPayees: paidKeys ? paidKeys.size : null, paidAssignments, remainingUnpaid: remaining, roundPaid } };
+    });
+    await logSettledAdjustments(req, id, outcome.settled);
+    req.log.info({ payoutRoundId: id, ...outcome.payResult }, "지급회차 지급완료 처리");
     const [refreshed] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
-    res.json(await loadRoundDetail(refreshed));
+    res.json({ ...(await loadRoundDetail(refreshed)), payResult: outcome.payResult });
   } catch (err) {
+    if (err instanceof PayBlocked) { res.status(err.status).json({ error: err.message, ...(err.code ? { code: err.code } : {}) }); return; }
     req.log.error({ err }, "지급완료 처리 실패");
     res.status(500).json({ error: "지급완료 처리 중 오류가 발생했습니다." });
   }
@@ -1506,30 +1635,48 @@ router.patch("/admin/payout-rounds/:id/pay-items", ...payoutTransfer, async (req
       const mismatch = await transferMismatchBeforePay(req, round);
       if (mismatch) { res.status(409).json({ error: mismatch }); return; }
     }
-    // 선택 건 중 이 회차 소속·미지급(unpaid)만 지급완료. 이미 지급완료·보류는 자동 제외(§5).
-    const done = await db.update(performanceAssignmentsTable)
-      .set({ paymentStatus: "paid", actualPaymentDate, updatedAt: new Date() })
-      .where(and(
-        eq(performanceAssignmentsTable.payoutRoundId, id),
-        inArray(performanceAssignmentsTable.id, parsed.data.assignmentIds),
-        eq(performanceAssignmentsTable.paymentStatus, "unpaid"),
-      ))
-      .returning({ id: performanceAssignmentsTable.id });
-    // 회차 내 미지급(unpaid)이 더 이상 없으면 회차 전체를 지급완료(paid)로 전환(§6 6/6).
-    const remainUnpaid = await db.select({ id: performanceAssignmentsTable.id }).from(performanceAssignmentsTable)
-      .where(and(eq(performanceAssignmentsTable.payoutRoundId, id), eq(performanceAssignmentsTable.paymentStatus, "unpaid")));
-    if (remainUnpaid.length === 0) {
-      const paidAt = new Date();
-      // 회차 전체 완료 시에만 지급 실행(payout_transfers) 동기화 — ready → paid + paidAt (excluded/cancelled/failed 제외).
-      await db.update(payoutTransfersTable)
-        .set({ status: "paid", paidAt, updatedAt: paidAt })
-        .where(and(eq(payoutTransfersTable.payoutRoundId, id), eq(payoutTransfersTable.status, "ready")));
-      await db.update(payoutRoundsTable).set({ status: "paid", updatedAt: paidAt }).where(eq(payoutRoundsTable.id, id));
-      await settleRoundAdjustments(req, id, paidAt);
-    }
+    // 선택 지급완료도 하나의 트랜잭션으로 처리(2026-11).
+    const outcome = await db.transaction(async (tx) => {
+      const [locked] = await tx.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id)).for("update");
+      if (!locked || locked.status !== "confirmed") throw new PayBlocked(400, "지급확정된 회차만 지급완료 처리할 수 있습니다.");
+      // 송금건이 있는 회차 — 송금 제외·실패·정보누락·취소 지급대상의 수행건은 선택해도 지급완료하지 않는다(미지급 유지).
+      const transfers = await tx.select({ payeeKey: payoutTransfersTable.payeeKey, status: payoutTransfersTable.status })
+        .from(payoutTransfersTable).where(eq(payoutTransfersTable.payoutRoundId, id)).for("update");
+      let targetIds = parsed.data.assignmentIds;
+      if (transfers.length) {
+        const okKeys = new Set(transfers.filter((t) => t.status === "ready" || t.status === "paid").map((t) => t.payeeKey));
+        const allowed = new Set(await assignmentIdsForPayees(tx, id, okKeys));
+        targetIds = targetIds.filter((x) => allowed.has(x));
+      }
+      // 선택 건 중 이 회차 소속·미지급(unpaid)만 지급완료. 이미 지급완료·보류는 자동 제외(§5).
+      const done = targetIds.length ? await tx.update(performanceAssignmentsTable)
+        .set({ paymentStatus: "paid", actualPaymentDate, updatedAt: new Date() })
+        .where(and(
+          eq(performanceAssignmentsTable.payoutRoundId, id),
+          inArray(performanceAssignmentsTable.id, targetIds),
+          eq(performanceAssignmentsTable.paymentStatus, "unpaid"),
+        ))
+        .returning({ id: performanceAssignmentsTable.id }) : [];
+      // 회차 내 미지급(unpaid)이 더 이상 없으면 회차 전체를 지급완료(paid)로 전환(§6 6/6).
+      const remainUnpaid = await tx.select({ id: performanceAssignmentsTable.id }).from(performanceAssignmentsTable)
+        .where(and(eq(performanceAssignmentsTable.payoutRoundId, id), eq(performanceAssignmentsTable.paymentStatus, "unpaid")));
+      let settled: any[] = [];
+      if (remainUnpaid.length === 0) {
+        const paidAt = new Date();
+        // 회차 전체 완료 시에만 지급 실행(payout_transfers) 동기화 — ready → paid + paidAt (excluded/cancelled/failed 제외).
+        await tx.update(payoutTransfersTable)
+          .set({ status: "paid", paidAt, updatedAt: paidAt })
+          .where(and(eq(payoutTransfersTable.payoutRoundId, id), eq(payoutTransfersTable.status, "ready")));
+        await tx.update(payoutRoundsTable).set({ status: "paid", updatedAt: paidAt }).where(eq(payoutRoundsTable.id, id));
+        settled = await settleRoundAdjustments(req, id, paidAt, tx);
+      }
+      return { paidNow: done.length, blocked: parsed.data.assignmentIds.length - targetIds.length, settled };
+    });
+    await logSettledAdjustments(req, id, outcome.settled);
     const [refreshed] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
-    res.json({ ...(await loadRoundDetail(refreshed)), paidNow: done.length });
+    res.json({ ...(await loadRoundDetail(refreshed)), paidNow: outcome.paidNow, blockedByTransfer: outcome.blocked });
   } catch (err) {
+    if (err instanceof PayBlocked) { res.status(err.status).json({ error: err.message }); return; }
     req.log.error({ err }, "선택 지급완료 실패");
     res.status(500).json({ error: "선택 지급완료 중 오류가 발생했습니다." });
   }

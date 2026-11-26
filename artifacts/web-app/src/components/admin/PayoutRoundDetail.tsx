@@ -429,8 +429,8 @@ function OperationalTab({ token, onToast, payoutDate, opRounds, reloadOpRounds, 
         } else setRoundDetail(null);
         if (!hasActive && payoutDate) {
           const r = await fetch(api('/api/admin/payout-rounds/overview?scope=unassigned'), { headers: authH }); const d = await r.json();
-          // 서버 수집 조건과 같은 기준: 지급예정일 기준 수집 = COALESCE(지급예정일, 납품일) 이 대상기간(지급일 하루) 안
-          const list = r.ok ? (d.summary ?? []).flatMap((g: any) => g.items ?? []).filter((it: any) => String(it.expectedPaymentDate ?? it.deliveryDate ?? '').slice(0, 10) === payoutDate) : [];
+          // 서버 수집 조건과 같은 기준: 최종 지급예정일(수동 지정 → 자동 산정, 서버 expectedPaymentDate) = 지급일. 납품일로 대체하지 않는다.
+          const list = r.ok ? (d.summary ?? []).flatMap((g: any) => g.items ?? []).filter((it: any) => String(it.expectedPaymentDate ?? '').slice(0, 10) === payoutDate) : [];
           if (alive) setPreview(list);
         } else if (alive) setPreview(null);
       } catch { if (alive) onToast('운영 지급회차 조회 실패'); }
