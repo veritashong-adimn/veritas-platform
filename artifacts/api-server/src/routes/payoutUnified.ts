@@ -26,7 +26,7 @@ import { getPermissionsForRole } from "../lib/rbac";
 import { isLegacyPlaceholderEmail } from "../lib/mailer";
 import { LEGACY_PAID_DELIVERY_CUTOFF, LEGACY_PAID_BASIS, LEGACY_PAID_BY_ROUND_BASIS } from "../lib/legacyPayoutRule";
 import { conversionsByRow } from "../services/legacyPayoutConversion";
-import { splitPayAmount, type PayeeType } from "../lib/payoutAmount";
+import { splitPayAmount, domesticPayeeKey, wonPayTotals, type PayeeType } from "../lib/payoutAmount";
 import { payStatusOf, isAmountMissing, PAY_STATUS_LABEL, emptyStatusCounts, type PayStatusKey } from "../lib/payDisplayStatus";
 import { isConfirmedFreeService } from "../lib/payoutDateDecisions";
 import { loadSaleIdentities } from "../services/saleIdentity";
@@ -350,20 +350,33 @@ router.get("/admin/payout-unified/rounds", ...adminGuard, requireStaffPermission
         count(*) FILTER (WHERE payment_status='unpaid' AND payout_date >= ${kstToday()})::int AS future_cnt
       FROM cur ${filters} GROUP BY payout_date`)).rows as any[];
 
+    // 신규 국내 실지급(송금 기준, 2026-11-26) — 지급일·지급대상별 원화 합계를 원 단위 반올림 후 합산. 외화 건은 기존 금액 그대로.
+    const curPayRows = source === "legacy" ? [] : (await db.execute(sql`WITH ${CUR},
+      pp AS (SELECT payout_date,
+          CASE WHEN pay_currency IS NULL AND performer_category = 'vendor' AND vendor_company_id IS NOT NULL THEN 'v:' || vendor_company_id
+               WHEN pay_currency IS NULL AND performer_category <> 'vendor' AND master_user_id IS NOT NULL THEN 'i:' || master_user_id
+               ELSE NULL END AS pk, posttax
+        FROM cur ${filters})
+      SELECT payout_date, coalesce(sum(s), 0) AS pay_total FROM (
+        SELECT payout_date, round(sum(posttax)) AS s FROM pp WHERE pk IS NOT NULL GROUP BY payout_date, pk
+        UNION ALL SELECT payout_date, sum(posttax) AS s FROM pp WHERE pk IS NULL GROUP BY payout_date) z
+      GROUP BY payout_date`)).rows as any[];
+    const curPayBy = new Map<string, number>(curPayRows.map(r => [String(r.payout_date ?? "__none__"), num(r.pay_total)]));
+
     // 지급일별 병합(과거+신규). 지급일 null → '지급일 미확인'.
     const map = new Map<string, any>();
     const key = (d: any) => d ?? "__none__";
     for (const r of legacyRows) {
-      const k = key(r.payout_date); const g = map.get(k) ?? { payoutDate: r.payout_date ?? null, cnt: 0, payees: new Set<string>(), pretax: 0, posttax: 0, withholding: 0, vat: 0, paid: 0, unpaid: 0, needReview: 0, excluded: 0, scheduled: 0, scheduledTotal: 0, legacyCnt: 0, currentCnt: 0, sc: { paid: 0, unpaid: 0, scheduled: 0, review: 0 } };
-      g.cnt += num(r.cnt); g.pretax += num(r.pretax_total); g.posttax += num(r.posttax_total); g.withholding += num(r.withholding_total); g.vat += num(r.vat_total);
+      const k = key(r.payout_date); const g = map.get(k) ?? { payoutDate: r.payout_date ?? null, cnt: 0, payees: new Set<string>(), pretax: 0, posttax: 0, pay: 0, withholding: 0, vat: 0, paid: 0, unpaid: 0, needReview: 0, excluded: 0, scheduled: 0, scheduledTotal: 0, legacyCnt: 0, currentCnt: 0, sc: { paid: 0, unpaid: 0, scheduled: 0, review: 0 } };
+      g.cnt += num(r.cnt); g.pretax += num(r.pretax_total); g.posttax += num(r.posttax_total); g.pay += num(r.posttax_total); g.withholding += num(r.withholding_total); g.vat += num(r.vat_total);
       g.paid += num(r.paid_total); g.needReview += num(r.need_review_cnt); g.legacyCnt += num(r.cnt);
       g.scheduled += num(r.scheduled_cnt); g.scheduledTotal += num(r.scheduled_total);
       g.sc.paid += num(r.paid_cnt); g.sc.scheduled += num(r.scheduled_cnt); g.sc.review += num(r.need_review_cnt);
       map.set(k, g);
     }
     for (const r of curRows) {
-      const k = key(r.payout_date); const g = map.get(k) ?? { payoutDate: r.payout_date ?? null, cnt: 0, payees: new Set<string>(), pretax: 0, posttax: 0, withholding: 0, vat: 0, paid: 0, unpaid: 0, needReview: 0, excluded: 0, scheduled: 0, scheduledTotal: 0, legacyCnt: 0, currentCnt: 0, sc: { paid: 0, unpaid: 0, scheduled: 0, review: 0 } };
-      g.cnt += num(r.cnt); g.pretax += num(r.pretax_total); g.posttax += num(r.posttax_total); g.withholding += num(r.withholding_total); g.vat += num(r.vat_total);
+      const k = key(r.payout_date); const g = map.get(k) ?? { payoutDate: r.payout_date ?? null, cnt: 0, payees: new Set<string>(), pretax: 0, posttax: 0, pay: 0, withholding: 0, vat: 0, paid: 0, unpaid: 0, needReview: 0, excluded: 0, scheduled: 0, scheduledTotal: 0, legacyCnt: 0, currentCnt: 0, sc: { paid: 0, unpaid: 0, scheduled: 0, review: 0 } };
+      g.cnt += num(r.cnt); g.pretax += num(r.pretax_total); g.posttax += num(r.posttax_total); g.pay += curPayBy.get(String(r.payout_date ?? "__none__")) ?? num(r.posttax_total); g.withholding += num(r.withholding_total); g.vat += num(r.vat_total);
       g.paid += num(r.paid_total); g.unpaid += num(r.unpaid_total); g.excluded += num(r.excluded_cnt); g.currentCnt += num(r.cnt);
       g.sc.paid += num(r.paid_cnt); g.sc.unpaid += num(r.overdue_cnt); g.sc.scheduled += num(r.future_cnt);
       g.sc.review += num(r.cnt) - num(r.paid_cnt) - num(r.overdue_cnt) - num(r.future_cnt);   // 지급보류·지급일 없음 등
@@ -383,6 +396,8 @@ router.get("/admin/payout-unified/rounds", ...adminGuard, requireStaffPermission
         assignmentCount: g.cnt,
         legacyCount: g.legacyCnt, currentCount: g.currentCnt,
         pretaxTotal: g.pretax, posttaxTotal: g.posttax,
+        // 실지급 합계(송금 기준) — 신규 국내 지급은 지급대상자별 원 단위 반올림 후 합산. posttaxTotal(건별 합계)과의 차이 = payRoundingAdjustment.
+        payTotal: Math.round(g.pay * 100) / 100, payRoundingAdjustment: Math.round((g.pay - g.posttax) * 100) / 100,
         withholdingImplied, vatTotal: Math.round(g.vat * 100) / 100,
         withholdingRecalc: recalcDeduction(g.pretax),
         paidTotal: g.paid, unpaidTotal: g.unpaid, needReviewCount: g.needReview, excludedCount: g.excluded,
@@ -722,7 +737,12 @@ router.get("/admin/payout-unified/payees", ...adminGuard, requireStaffPermission
     const rrnBy = await loadResidentNumbers(db, regUids, false);
     const crmRrnByKey = new Map<string, string>();
     for (const it of items as any[]) if (it.residentMasked && !crmRrnByKey.has(it.masterKey)) crmRrnByKey.set(it.masterKey, it.residentMasked);
+    // 국내 실지급(2026-11-26) — 지급대상자별 원 단위 반올림 후 합산(지급회차·IBK 송금파일과 같은 기준). 건별 금액은 그대로.
+    const domKey = (it: any) => domesticPayeeKey({ source: it.source, payeeType: it.payeeType, payCurrency: it.payCurrency, userId: it.matchedUserId, vendorId: it.vendorId });
+    const itemsByKey = new Map<string, any[]>();
+    for (const it of items as any[]) { const a = itemsByKey.get(it.masterKey) ?? []; a.push(it); itemsByKey.set(it.masterKey, a); }
     const payees = [...groups.values()].map(g => ({
+      ...(() => { const w = wonPayTotals(itemsByKey.get(g.masterKey) ?? [], (i: any) => num(i.posttax), domKey); return { payTotal: w.pay, payRoundingAdjustment: w.roundingAdjustment }; })(),
       masterKey: g.masterKey, name: g.name, confirmed: g.confirmed, matchStatus: g.matchStatus, matchedUserId: g.matchedUserId,
       email: g.email, phone: g.phone, count: g.count,
       pretaxTotal: g.pretax, posttaxTotal: g.posttax, withholdingImplied: Math.round(g.withholding * 100) / 100,
@@ -749,6 +769,10 @@ router.get("/admin/payout-unified/payees", ...adminGuard, requireStaffPermission
       return t;
     }, { assignmentCount: 0, pretaxTotal: 0, posttaxTotal: 0, withholdingImpliedTotal: 0, vatTotal: 0, paidTotal: 0, unpaidTotal: 0, needReviewCount: 0, dupSuspectCount: 0, excludedCount: 0, scheduledCount: 0, scheduledTotal: 0 });
     (totals as any).payeeCount = new Set(items.map(i => i.masterKey)).size;
+    {  // 실지급 합계(송금 기준) = 지급대상자별 원 단위 반올림 후 합산. posttaxTotal(건별 합계)은 그대로 두고 차이를 따로 준다.
+      const w = wonPayTotals(items as any[], (i: any) => num(i.posttax), domKey);
+      (totals as any).payTotal = w.pay; (totals as any).payTotalExact = w.exact; (totals as any).payRoundingAdjustment = w.roundingAdjustment;
+    }
     {  // 외화 지급 합계(통화별) — 원화 합계(pretaxTotal 등)에 섞지 않는다
       const fm = new Map<string, { currency: string; count: number; amount: number; missing: number }>();
       for (const i of items as any[]) { if (!i.payCurrency || i.payCurrency === "KRW") continue; const f = fm.get(i.payCurrency) ?? { currency: i.payCurrency, count: 0, amount: 0, missing: 0 };

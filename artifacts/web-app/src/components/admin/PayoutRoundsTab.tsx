@@ -9,6 +9,7 @@ import { api, formatLanguageLabel } from '../../lib/constants';
 import { Card, GhostBtn, PrimaryBtn, ClickSelect, confirmDialog, promptDialog } from '../ui';
 import { Pagination } from '../ui/Paginator';
 import { useClientPagination } from './bulkListShared';
+import { roundingNote } from './payoutDisplayShared';
 import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
 import './readTableView.css';
 import { downloadTableExcel, todayStamp, type ExcelColumn } from '../../lib/payoutExcel';
@@ -226,8 +227,11 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
           gross += numOf(it.gross); wh += numOf(it.withholdingTax); vat += numOf(it.vat); net += numOf(it.netPayment);
           if (!it.isVatIncluded) allVat = false;
         }
+        // 실지급(송금액) = 지급대상자별 원 단위 반올림 — 서버 회차 집계(withWonPayTotal)·송금건·IBK 파일과 같은 값. 건별 합계는 netTotalExact.
+        const netExact = Math.round(net * 100) / 100;
         return { ...g, items, count, translationCount: tC, interpretationCount: iC, equipmentEtcCount: eC,
-          baseTotal: base, expenseTotal: exp, deductionTotal: ded, grossTotal: gross, withholdingTotal: wh, vatTotal: vat, netTotal: net,
+          baseTotal: base, expenseTotal: exp, deductionTotal: ded, grossTotal: gross, withholdingTotal: wh, vatTotal: vat,
+          netTotal: Math.round(netExact), netTotalExact: netExact, roundingAdjustment: Math.round((Math.round(netExact) - netExact) * 100) / 100,
           isVatIncluded: g.payeeType === 'vendor' && items.length > 0 && allVat };
       })
       .filter((g: any) => g.items.length > 0);
@@ -239,18 +243,19 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
   );
   // 필터 결과 총계(조회 결과 라인·개요바용). 회차 총계/지급확정 영역은 회차 전체값 유지(운영 안전).
   const filteredTotals = useMemo(() => {
-    let base = 0, exp = 0, ded = 0, gross = 0, wh = 0, net = 0, ind = 0, ven = 0;
+    let base = 0, exp = 0, ded = 0, gross = 0, wh = 0, net = 0, netExact = 0, ind = 0, ven = 0;
     for (const g of filteredSummary) {
       base += numOf(g.baseTotal); exp += numOf(g.expenseTotal); ded += numOf(g.deductionTotal);
-      gross += numOf(g.grossTotal); wh += numOf(g.withholdingTotal); net += numOf(g.netTotal);
+      gross += numOf(g.grossTotal); wh += numOf(g.withholdingTotal); net += numOf(g.netTotal); netExact += numOf(g.netTotalExact ?? g.netTotal);
       if (g.payeeType === 'individual') ind++; else ven++;
     }
     return { assignments: itemRows.length, payees: filteredSummary.length, individualCount: ind, vendorCount: ven,
-      baseTotal: base, expenseTotal: exp, deductionTotal: ded, grossTotal: gross, withholdingTotal: wh, netTotal: net };
+      baseTotal: base, expenseTotal: exp, deductionTotal: ded, grossTotal: gross, withholdingTotal: wh, netTotal: net,
+      netTotalExact: Math.round(netExact * 100) / 100, roundingAdjustment: Math.round((net - netExact) * 100) / 100 };
   }, [filteredSummary, itemRows]);
   // 클라이언트 페이지네이션(기본 5 · 5/10/20/50/100) — 요약/건별 각각. 회차·필터 변경 시 1페이지로.
-  const sumPg = useClientPagination(filteredSummary, 5);
-  const itemPg = useClientPagination(itemRows, 5);
+  const sumPg = useClientPagination(filteredSummary, 50);
+  const itemPg = useClientPagination(itemRows, 50);
   const totals = detail?.totals ?? {};
   const warnings = detail?.warnings ?? { total: 0, holdAmount: 0, byReason: [] };
   const collectable: any[] = detail?.collectable ?? [];
@@ -407,7 +412,7 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
   const payItemsSelected = async () => {
     const actualPaymentDate = await askActualPayDate('선택 지급완료', `선택한 ${selectedItems.size}건을 지급완료 처리할까요?\n실제 지급일(이체일)을 확인하세요 — 해당 수행건의 실제 지급일로 기록됩니다.\n(지급완료된 건은 되돌릴 수 없습니다)`);
     if (!actualPaymentDate) return;
-    runItemAction('pay-items', (d) => `선택 ${d.paidNow ?? 0}건 지급완료 처리했습니다.${d.blockedByTransfer ? ` (송금 제외·실패·정보누락 대상 ${d.blockedByTransfer}건은 미지급 유지)` : ''} (실제 지급일 ${actualPaymentDate})`, '선택 지급완료 실패', { actualPaymentDate });
+    runItemAction('pay-items', (d) => `선택 ${d.paidNow ?? 0}건 지급완료 처리했습니다.${d.blockedByTransfer ? ` (송금 제외·실패·정보누락 대상 ${d.blockedByTransfer}건은 미지급 유지)` : ''} (실제 지급일 ${formatDisplayDate(actualPaymentDate)})`, '선택 지급완료 실패', { actualPaymentDate });
   };
   const unconfirmItemsSelected = async () => {
     if (!(await confirmDialog({ title: '선택 확정취소', message: `선택한 ${selectedItems.size}건을 확정취소(회차에서 제외)할까요?\n제외된 건은 미배정으로 돌아가 다시 처리됩니다.`, confirmLabel: '확정취소', variant: 'warning' }))) return;
@@ -433,8 +438,8 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
       setDetail(data); await loadRounds();
       const pr = data.payResult;
       onToast(pr && !pr.roundPaid
-        ? `송금 대기 ${pr.paidPayees ?? 0}명(${pr.paidAssignments}건) 지급완료 — 미지급 ${pr.remainingUnpaid}건 남음(지급실패·제외 대상, 회차는 지급확정 유지). (실제 지급일 ${actualPaymentDate})`
-        : `지급완료 처리되었습니다. (실제 지급일 ${actualPaymentDate})`);
+        ? `송금 대기 ${pr.paidPayees ?? 0}명(${pr.paidAssignments}건) 지급완료 — 미지급 ${pr.remainingUnpaid}건 남음(지급실패·제외 대상, 회차는 지급확정 유지). (실제 지급일 ${formatDisplayDate(actualPaymentDate)})`
+        : `지급완료 처리되었습니다. (실제 지급일 ${formatDisplayDate(actualPaymentDate)})`);
     } catch { onToast('지급완료 처리 중 오류'); } finally { setBusy(false); }
   };
 
@@ -475,6 +480,11 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
       excelTaxLabel(groupTaxTreatmentLabel(g)) ?? '⚠ 혼재',
       Math.round(numOf(g.withholdingTotal)), Math.round(numOf(g.netTotal)),
     ]);
+    // 합계행 — 실지급 = 지급대상자별 원 단위 금액의 합(송금 기준). 건별 합계와 차이가 있으면 원 단위 조정 행으로 구분.
+    rows.push([`합계 (${filteredSummary.length}명)`, '', '', filteredTotals.assignments, '', '', '', Math.round(filteredTotals.baseTotal), Math.round(filteredTotals.expenseTotal), Math.round(filteredTotals.deductionTotal),
+      Math.round(filteredTotals.grossTotal), '', Math.round(filteredTotals.withholdingTotal), filteredTotals.netTotal]);
+    const sNote = roundingNote(filteredTotals.netTotalExact, filteredTotals.roundingAdjustment);
+    if (sNote) rows.push([`※ ${sNote}`, '', '', '', '', '', '', '', '', '', '', '', '', filteredTotals.roundingAdjustment]);
     downloadTableExcel({ filename: `지급대상별요약_${todayStamp()}.xlsx`, sheetName: '지급대상별요약', columns, rows });
   };
 
@@ -542,6 +552,12 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
         it.remark || '-',
       ];
     });
+    // 합계행(세후지급액 열) — 건별 세후 합계 / 원 단위 조정 / 실지급 합계(지급대상자별 원 단위 반올림 후 합산 = 송금 기준).
+    const colN = columns.length, iNet = columns.findIndex(c => c.header === '세후지급액');
+    const footRow = (label: string, v: number) => { const r: (string | number)[] = Array(colN).fill(''); r[0] = label; r[iNet] = v; return r; };
+    rows.push(footRow(`건별 세후 합계 (${itemRows.length}건)`, filteredTotals.netTotalExact));
+    if (roundingNote(filteredTotals.netTotalExact, filteredTotals.roundingAdjustment)) rows.push(footRow('원 단위 조정(지급대상자별 원 단위 반올림)', filteredTotals.roundingAdjustment));
+    rows.push(footRow('실지급 합계(송금 기준)', filteredTotals.netTotal));
     downloadTableExcel({ filename: `정산상세내역_${todayStamp()}.xlsx`, sheetName: '정산상세내역', columns, rows });
   };
 
@@ -707,7 +723,8 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
             <span>건수 <b>{filteredTotals.assignments}건</b></span>
             <span>세전 <b>{won(filteredTotals.grossTotal)}원</b></span>
             <span>공제 <b style={{ color: C.danger }}>{won(filteredTotals.withholdingTotal)}원</b></span>
-            <span>실지급 <b style={{ color: C.primaryText }}>{won(filteredTotals.netTotal)}원</b></span>
+            <span>실지급 <b style={{ color: C.primaryText }} data-testid="payout-filtered-net">{won(filteredTotals.netTotal)}원</b></span>
+            {roundingNote(filteredTotals.netTotalExact, filteredTotals.roundingAdjustment) && <span data-testid="payout-filtered-rounding" style={{ ...TYPO.helper, color: C.textSecondary }}>({roundingNote(filteredTotals.netTotalExact, filteredTotals.roundingAdjustment)})</span>}
             {filterActive && <span style={{ ...TYPO.badge, color: C.primaryText, background: C.primaryBg, padding: '2px 8px', borderRadius: 6, fontWeight: 700 }}>필터 적용 중</span>}
           </div>
 
@@ -752,7 +769,7 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
               {sumPg.total > 0 && (
                 <Pagination page={sumPg.page} pageSize={sumPg.pageSize} total={sumPg.total}
                   onPageChange={sumPg.setPage} onPageSizeChange={sumPg.setPageSize}
-                  pageSizeOptions={[5, 10, 20, 50, 100]} unit="명" idPrefix="payout-summary" />
+                  unit="명" idPrefix="payout-summary" />
               )}
             </Card>
           )}
@@ -860,7 +877,7 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
               {itemPg.total > 0 && (
                 <Pagination page={itemPg.page} pageSize={itemPg.pageSize} total={itemPg.total}
                   onPageChange={itemPg.setPage} onPageSizeChange={itemPg.setPageSize}
-                  pageSizeOptions={[5, 10, 20, 50, 100]} unit="건" idPrefix="payout-items" />
+                  unit="건" idPrefix="payout-items" />
               )}
             </Card>
           )}
@@ -903,7 +920,8 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
               ].map(([k, v]) => (
                 <div key={k} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}><span style={TYPO.helper}>{k}</span><span style={{ ...TYPO.inputValue, fontWeight: 700 }}>{v}</span></div>
               ))}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}><span style={TYPO.helper}>실지급액 합계</span><span style={{ ...TYPO.inputValue, fontWeight: 800, fontSize: 17, color: C.primaryText }}>{won(totals.netTotal)}원</span></div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}><span style={TYPO.helper}>실지급액 합계</span><span style={{ ...TYPO.inputValue, fontWeight: 800, fontSize: 17, color: C.primaryText }} data-testid="payout-round-net">{won(totals.netTotal)}원</span>
+                {roundingNote(numOf(totals.netTotalExact ?? totals.netTotal), numOf(totals.roundingAdjustment)) && <span style={{ ...TYPO.helper, color: C.textSecondary }} data-testid="payout-round-rounding">{roundingNote(numOf(totals.netTotalExact ?? totals.netTotal), numOf(totals.roundingAdjustment))}</span>}</div>
             </div>
             {/* 지급완료(paid) 회차는 상태 안내를 제목 우측으로 이동했으므로 하단 액션 푸터를 렌더하지 않는다. */}
             {round.status !== 'paid' && (
@@ -1005,7 +1023,7 @@ export function CreateDialog({ token, onToast, onClose, onCreated, initial }: { 
     <Modal title="새 지급회차 생성" onClose={onClose}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 14px' }}>
         {field('지급예정일 *', <DateField style={inp} value={paymentDate} onChange={v => onPayDate(v)} testid="payout-new-paydate" ariaLabel="지급예정일" />)}
-        {field('회차명 (자동)', <input style={{ ...inp, background: C.g50, color: C.textSecondary }} value={batchNumber} readOnly data-testid="payout-new-name" aria-label="회차명(자동)" placeholder="지급예정일 선택 시 자동 생성" />)}
+        {field('회차명 (자동)', <input style={{ ...inp, background: C.g50, color: C.textSecondary }} value={formatLabelDates(batchNumber)} readOnly data-testid="payout-new-name" aria-label="회차명(자동)" placeholder="지급예정일 선택 시 자동 생성" />)}
         {field('수집 기준', <input style={{ ...inp, background: C.g50, color: C.textSecondary }} value="최종 지급예정일 = 회차 지급일" readOnly data-testid="payout-new-basis" aria-label="수집 기준(최종 지급예정일)" />)}
         {field('비고', <input style={inp} value={note} onChange={e => setNote(e.target.value)} placeholder="비고" data-testid="payout-new-note" aria-label="비고" />)}
       </div>

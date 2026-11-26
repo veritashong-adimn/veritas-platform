@@ -10,6 +10,7 @@ import { formatDisplayDate, formatLabelDates } from '../../lib/dateFormat';
 import { api } from '../../lib/constants';
 import { PrimaryBtn, GhostBtn, confirmDialog } from '../ui';
 import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
+import { DateField } from './DatePickerShared';
 
 const won = (n: unknown) => Math.round(Number(n ?? 0)).toLocaleString('ko-KR');
 const dateVal = (v?: string | null) => (v ? String(v).slice(0, 10) : '');
@@ -223,15 +224,15 @@ export default function PayoutExecutionModal({ token, round, onToast, onClose, c
     const names = succCandidates.filter(x => succSel.has(x.id)).map(x => x.payeeName ?? `#${x.id}`);
     const rest = succCandidates.length - succSel.size;
     if (!(await confirmDialog({ title: '송금 성공 → 지급완료', variant: 'danger', confirmLabel: '지급완료',
-      message: `은행 이체 결과 송금 성공으로 확인한 ${succSel.size}명을 지급완료 처리할까요?\n${names.slice(0, 8).join(', ')}${names.length > 8 ? ` 외 ${names.length - 8}명` : ''}\n실제 지급일 ${paidDate}이 해당 수행건에 기록됩니다.${rest > 0 ? `\n선택하지 않은 송금 대기 ${rest}명은 결과 미확인으로 미지급 유지됩니다.` : ''}\n(지급완료는 되돌릴 수 없습니다)` }))) return;
+      message: `은행 이체 결과 송금 성공으로 확인한 ${succSel.size}명을 지급완료 처리할까요?\n${names.slice(0, 8).join(', ')}${names.length > 8 ? ` 외 ${names.length - 8}명` : ''}\n실제 지급일 ${formatDisplayDate(paidDate)}이 해당 수행건에 기록됩니다.${rest > 0 ? `\n선택하지 않은 송금 대기 ${rest}명은 결과 미확인으로 미지급 유지됩니다.` : ''}\n(지급완료는 되돌릴 수 없습니다)` }))) return;
     setBusy(true);
     try {
       const res = await fetch(api(`/api/admin/payout-rounds/${round.id}/pay`), { method: 'PATCH', headers: authH, body: JSON.stringify({ actualPaymentDate: paidDate, successTransferIds: [...succSel] }) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { onToast(data.error ?? '지급완료 처리 실패'); load(); return; }
       const pr = data.payResult;
-      onToast(pr?.roundPaid ? `지급완료 처리되었습니다 — 회차 지급완료 (실제 지급일 ${paidDate})`
-        : `${pr?.paidPayees ?? succSel.size}명(${pr?.paidAssignments ?? 0}건) 지급완료 — 미지급 ${pr?.remainingUnpaid ?? 0}건 남음(결과 미확인·실패·제외 대상). (실제 지급일 ${paidDate})`);
+      onToast(pr?.roundPaid ? `지급완료 처리되었습니다 — 회차 지급완료 (실제 지급일 ${formatDisplayDate(paidDate)})`
+        : `${pr?.paidPayees ?? succSel.size}명(${pr?.paidAssignments ?? 0}건) 지급완료 — 미지급 ${pr?.remainingUnpaid ?? 0}건 남음(결과 미확인·실패·제외 대상). (실제 지급일 ${formatDisplayDate(paidDate)})`);
       setSuccSel(new Set());
       await onPaid?.(data);
       load();
@@ -313,9 +314,9 @@ export default function PayoutExecutionModal({ token, round, onToast, onClose, c
               <span style={{ ...TYPO.helper, color: '#1e40af', fontWeight: 600, flex: '1 1 320px' }}>
                 은행 이체 결과를 확인한 뒤 <b>송금 성공</b>한 지급대상만 체크하세요. 체크하지 않은 송금 대기 건은 결과 미확인으로 미지급 유지되며, 실패 건은 [지급실패]로 기록하세요.
               </span>
-              <label style={{ ...TYPO.helper, display: 'flex', alignItems: 'center', gap: 6 }}>실제 지급일
-                <input type="date" value={paidDate} max={kstToday()} onChange={e => setPaidDate(e.target.value)} style={{ ...dsInputStd(), minHeight: 30, padding: '3px 8px' }} data-testid="payout-success-date" aria-label="실제 지급일(이체일)" />
-              </label>
+              <span style={{ ...TYPO.helper, display: 'flex', alignItems: 'center', gap: 6 }}>실제 지급일
+                <DateField value={paidDate} max={kstToday()} onChange={v => setPaidDate(v)} allowClear={false} style={{ ...dsInputStd(), minHeight: 30, padding: '3px 8px', width: 140 }} testid="payout-success-date" ariaLabel="실제 지급일(이체일)" />
+              </span>
               <PrimaryBtn onClick={submitSuccess} disabled={busy || succSel.size === 0} style={{ fontSize: 12, padding: '7px 14px' }} data-testid="payout-success-submit" aria-label="송금 성공 지급완료">
                 송금 성공 {succSel.size}명 → 지급완료
               </PrimaryBtn>

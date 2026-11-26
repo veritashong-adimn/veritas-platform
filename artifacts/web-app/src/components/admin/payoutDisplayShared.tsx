@@ -43,3 +43,26 @@ export function SaleLink({ projectId, saleNo, testid }: { projectId?: number | n
   return <a href={`/sales/${projectId}`} target="_blank" rel="noopener noreferrer" data-testid={testid} aria-label={`판매상세 ${label} 열기`}
     title="판매상세 열기(새 탭)" onClick={(e) => e.stopPropagation()} style={{ color: '#0369a1', fontWeight: 600, textDecoration: 'underline' }}>{label}</a>;
 }
+
+// ─── 국내 실지급 합계(2026-11-26 대표 결정) — 서버 lib/payoutAmount.wonPayTotals 와 같은 규칙 ─────────────────────────
+//   플랫폼 수행정보(source='current')의 원화 지급 건은 지급대상(개인 i:{userId} / 외주 v:{companyId})별 합계를 원 단위 반올림 후 합산
+//   (지급회차·IBK 송금파일과 같은 송금 기준). 외화·과거 CRM 자료는 기존 금액 그대로. 건별 금액은 바꾸지 않고 차이를 adjustment 로 구분.
+export function domesticPayeeKeyOf(r: { source?: string | null; payeeType?: string | null; payCurrency?: string | null; userId?: number | null; vendorId?: number | null }): string | null {
+  if (r.source !== 'current') return null;
+  if (r.payCurrency && String(r.payCurrency).toUpperCase() !== 'KRW') return null;
+  if (r.payeeType === 'vendor') return r.vendorId != null ? `v:${r.vendorId}` : null;
+  return r.userId != null ? `i:${r.userId}` : null;
+}
+const r2c = (n: number) => Math.round(n * 100) / 100;
+export function wonPayTotalsOf<T>(rows: T[], net: (r: T) => number, key: (r: T) => string | null): { exact: number; pay: number; adjustment: number } {
+  const groups = new Map<string, number>(); let other = 0, exact = 0;
+  for (const r of rows) { const v = Number(net(r)) || 0; exact += v; const k = key(r); if (k) groups.set(k, (groups.get(k) ?? 0) + v); else other += v; }
+  let pay = r2c(other); for (const s of groups.values()) pay += Math.round(r2c(s));
+  return { exact: r2c(exact), pay: r2c(pay), adjustment: r2c(pay - exact) };
+}
+/** 원 단위 조정 표시 문구(차이가 없으면 null) — 화면·Excel 공통 */
+export function roundingNote(exact: number, adjustment: number): string | null {
+  if (Math.abs(adjustment) < 0.005) return null;
+  const sign = adjustment > 0 ? '+' : '−';
+  return `건별 합계 ${exact.toLocaleString('ko-KR', { maximumFractionDigits: 2 })}원 · 원 단위 조정 ${sign}${Math.abs(adjustment).toLocaleString('ko-KR', { maximumFractionDigits: 2 })}원(지급대상자별 원 단위 반올림)`;
+}

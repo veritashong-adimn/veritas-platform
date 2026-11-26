@@ -581,6 +581,11 @@ async function loadWarnings(round: any) {
       sql`(${performanceAssignmentsTable.payoutRoundId} IS NULL OR ${performanceAssignmentsTable.payoutRoundId} <> ${round.id})`,
       // 지급완료 건은 경고 대상 아님
       ne(performanceAssignmentsTable.paymentStatus, "paid"),
+      // 통합 조회(payoutUnified CUR)와 같은 유효 자료 기준(2026-11) — 판매취소 건, 과거 CRM 행으로 따로 관리되는 전환 수행정보
+      //   (과거 지급 확인 전·지급완료 확인 등 운영 지급 계보가 아닌 건)은 제외·확인 필요 목록과 지급보류 금액에서 뺀다.
+      sql`NOT EXISTS (SELECT 1 FROM projects wp WHERE wp.id = ${performanceAssignmentsTable.projectId} AND wp.status = 'cancelled')`,
+      sql`NOT EXISTS (SELECT 1 FROM import_row_sources ws WHERE ws.module = 'legacy_sale_activation' AND ws.entity_id = ${performanceAssignmentsTable.id}
+        AND ws.row_key LIKE 'progress:%' AND ws.status NOT IN ('payout_review_unpaid', 'unpaid'))`,
     ));
 
   const buckets: Record<string, any[]> = {};
@@ -867,6 +872,16 @@ router.patch("/admin/payout-rounds/:id", ...payoutManage, async (req, res) => {
       const meta: any = { updatedAt: new Date() };
       if (note !== undefined) meta.note = note;
       if (batchNumber !== undefined && batchNumber) meta.batchNumber = batchNumber;
+      // 판매취소 건의 지급보류 해제·재포함 차단(2026-11) — 취소된 판매의 수행정보는 지급 대상이 아니다.
+      {
+        const touch = changes.filter((c) => c.action === "unhold" || c.action === "include").map((c) => c.assignmentId);
+        if (touch.length) {
+          const bad = await db.select({ id: performanceAssignmentsTable.id }).from(performanceAssignmentsTable)
+            .innerJoin(projectsTable, eq(projectsTable.id, performanceAssignmentsTable.projectId))
+            .where(and(inArray(performanceAssignmentsTable.id, touch), eq(projectsTable.status, "cancelled")));
+          if (bad.length) throw Object.assign(new Error("CANCELLED_SALE"), { ids: bad.map((b) => b.id) });
+        }
+      }
       await db.update(payoutRoundsTable).set(meta).where(eq(payoutRoundsTable.id, id));
       for (const c of changes) {
         if (c.action === "exclude") {
@@ -923,6 +938,7 @@ router.patch("/admin/payout-rounds/:id", ...payoutManage, async (req, res) => {
     res.json(await loadRoundDetail(refreshed));
   } catch (err: any) {
     if (err?.message === "HOLD_REASON_REQUIRED") { res.status(400).json({ error: "지급보류 사유를 입력하세요." }); return; }
+    if (err?.message === "CANCELLED_SALE") { res.status(409).json({ error: "판매취소된 판매건의 수행정보는 지급보류 해제·재포함할 수 없습니다.", code: "CANCELLED_SALE_HOLD", assignmentIds: err.ids }); return; }
     req.log.error({ err }, "지급회차 저장 실패");
     res.status(500).json({ error: "지급회차 저장 중 오류가 발생했습니다." });
   }

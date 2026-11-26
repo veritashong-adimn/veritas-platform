@@ -15,8 +15,9 @@ import { PayoutReadinessPanel } from './PayoutReadinessPanel';
 import PayoutRoundsTab, { CreateDialog, type PayoutPerms } from './PayoutRoundsTab';
 import { BackToListButton } from './BackToListButton';
 import './readTableView.css';
+import { formatDisplayDate } from '../../lib/dateFormat';
 import { exportDataset } from '../../lib/excelExport';
-import { PAY_STATUS_META, PAY_STATUS_FILTER_OPTS, PayStatusBadge, payStatusChips, fxSummaryText, fxNum, SaleLink, type PayStatusKey, type ForeignTotal } from './payoutDisplayShared';
+import { PAY_STATUS_META, PAY_STATUS_FILTER_OPTS, PayStatusBadge, payStatusChips, fxSummaryText, fxNum, SaleLink, domesticPayeeKeyOf, wonPayTotalsOf, roundingNote, type PayStatusKey, type ForeignTotal } from './payoutDisplayShared';
 
 // ── 통합 조회 공용 타입·표시 헬퍼(목록 PayoutUnifiedTab 과 공유) ──
 export type StatusCounts = { paid: number; unpaid: number; scheduled: number; review: number };
@@ -45,13 +46,14 @@ export type DetailRow = {
   payCurrency?: string | null; foreignAmount?: number | null;   // 외화 지급(원화 합계와 별도)
   // 화면 공통 표시값(서버, 표시 전용): 지급상태 6종 · 판매번호·판매 id(판매상세 연결) · 실제 지급일 · 명부 기준으로 바뀌기 전 원래 이름
   payStatus?: PayStatusKey; payStatusLabel?: string; saleNo?: string | null; projectId?: number | null; actualPaymentDate?: string | null;
-  originalTranslator?: string | null; supply?: number | null; payTotal?: number | null;
+  originalTranslator?: string | null; supply?: number | null; payTotal?: number | null; vendorId?: number | null;
   withholdingTreatment?: string | null; withholdingRate?: number | null;   // 수행정보 세금처리 유형(명세서 표기용)
 };
 export type PayeeGroup = {
   masterKey: string; name: string; confirmed: boolean; matchStatus: string; matchedUserId: number | null;
   email: string | null; phone: string | null; count: number; languages: string[];
   pretaxTotal: number; posttaxTotal: number; withholdingImplied: number; payeeType?: 'individual' | 'vendor'; vatTotal?: number;
+  payTotal?: number; payRoundingAdjustment?: number;   // 실지급(송금 기준) = 지급대상자별 원 단위 반올림 — posttaxTotal(건별 합계)과의 차이
   paidPretax: number; unpaidPretax: number; paidCount: number; unpaidCount: number; needReviewCount: number; dupSuspectCount: number; sources: string[];
   scheduledCount?: number;
   foreignTotals?: ForeignTotal[];
@@ -150,14 +152,15 @@ export function PayoutRoundDetail({ token, onToast, payoutDate, opRounds, reload
   }, [token, payoutDate]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { void load(); }, [load]);
 
-  const label = payoutDate ? `${payoutDate} 지급` : '지급일 미확인';
+  const label = payoutDate ? `${formatDisplayDate(payoutDate)} 지급` : '지급일 미확인';
   // 상단 요약 — 화면 공통 명칭(세전금액·원천세공제·부가세·실지급금액) · 외화 통화별(금액 미입력 건수) · 지급상태 6종 건수
   const summary: [string, string, string?][] = totals ? [
     ['지급대상', `${num(totals.payeeCount)}명`], ['수행건수', `${num(totals.assignmentCount)}건`],
     ['세전금액', `${won(totals.pretaxTotal)}원`, '외주업체는 공급가'],
     ['원천세공제', `${won(totals.withholdingImpliedTotal)}원`, '개인 통번역사 원천세 공제 합계'],
     ['부가세', `${won(totals.vatTotal)}원`, '외주업체 부가세 합계'],
-    ['실지급금액', `${won(totals.posttaxTotal)}원`, '세전금액 − 원천세공제 + 부가세'],
+    ['실지급금액', `${won(totals.payTotal ?? totals.posttaxTotal)}원`, '세전금액 − 원천세공제 + 부가세 · 국내 지급은 지급대상자별 원 단위 반올림 후 합산(기업은행 송금 기준)'],
+    ...(roundingNote(num(totals.payTotalExact ?? totals.posttaxTotal), num(totals.payRoundingAdjustment)) ? [['원 단위 조정', `${num(totals.payRoundingAdjustment) > 0 ? '+' : '−'}${Math.abs(num(totals.payRoundingAdjustment)).toLocaleString('ko-KR', { maximumFractionDigits: 2 })}원`, roundingNote(num(totals.payTotalExact ?? totals.posttaxTotal), num(totals.payRoundingAdjustment))!]] as [string, string, string?][] : []),
     ...(((totals.foreignTotals ?? []) as ForeignTotal[]).length ? [['외화', fxSummaryText(totals.foreignTotals as ForeignTotal[]), '외화 지급 — 원화 합계 제외(별도 해외송금)']] as [string, string, string?][] : []),
   ] : [];
 
@@ -221,14 +224,19 @@ function PayeeTable({ payees, items, payoutDate, loading, onToast, onPick }: { p
   };
   const badge = (text: string, fg: string, bg: string, title?: string) => <span style={{ fontSize: 10, color: fg, background: bg, padding: '1px 5px', borderRadius: 7 }} title={title}>{text}</span>;
   const fxAll = fxTotalsOf(items);
-  const tot = { count: sumBy(payees, g => g.count), pre: sumBy(payees, g => g.pretaxTotal), wh: sumBy(payees, g => g.withholdingImplied), vat: sumBy(payees, g => g.vatTotal), pay: sumBy(payees, g => g.posttaxTotal) };
+  // 실지급 = 지급대상별 송금 기준(원 단위 반올림) 금액의 합. 건별 합계(posttaxTotal)와의 차이는 원 단위 조정으로 구분 표시.
+  const payOfG = (g: PayeeGroup) => num(g.payTotal ?? g.posttaxTotal);
+  const tot = { count: sumBy(payees, g => g.count), pre: sumBy(payees, g => g.pretaxTotal), wh: sumBy(payees, g => g.withholdingImplied), vat: sumBy(payees, g => g.vatTotal), pay: Math.round(sumBy(payees, payOfG) * 100) / 100 };
+  const payExact = Math.round(sumBy(payees, g => g.posttaxTotal) * 100) / 100;
+  const payNote = roundingNote(payExact, Math.round((tot.pay - payExact) * 100) / 100);
   const exportAll = () => {
     type R = { name: string; type: string; langs: string; email: string; phone: string; count: number; pre: number; wh: number; vat: number; pay: number; fx: string; st: string };
     // 행 순서(Excel만) — 지급 그룹(국내 → 해외·국내송금 → 해외·해외송금 → 외주업체) 후 그룹 안 가나다순. 항목·금액·합계 불변, 화면 목록 순서 불변.
     const ordered = [...payees].sort((a, b) => ((a.remitGroup ?? 1) - (b.remitGroup ?? 1)) || a.name.localeCompare(b.name, 'ko'));
     const rows: R[] = ordered.map(g => ({ name: g.name, type: g.payeeType === 'vendor' ? '외주업체' : '개인', langs: g.languages.join(', '), email: g.email ?? '', phone: g.phone ?? '', count: g.count,
-      pre: g.pretaxTotal, wh: g.withholdingImplied, vat: num(g.vatTotal), pay: g.posttaxTotal, fx: fxSummaryText(g.foreignTotals ?? []), st: statusText(g.payStatusCounts) }));
+      pre: g.pretaxTotal, wh: g.withholdingImplied, vat: num(g.vatTotal), pay: payOfG(g), fx: fxSummaryText(g.foreignTotals ?? []), st: statusText(g.payStatusCounts) }));
     rows.push({ name: `합계 (${payees.length}명)`, type: '', langs: '', email: '', phone: '', count: tot.count, pre: tot.pre, wh: tot.wh, vat: tot.vat, pay: tot.pay, fx: fxSummaryText(fxAll), st: '' });
+    if (payNote) rows.push({ name: '※ 실지급 합계 = 지급대상자별 원 단위 반올림 후 합산(기업은행 송금 기준)', type: '', langs: '', email: '', phone: '', count: '', pre: '', wh: '', vat: '', pay: Math.round((tot.pay - payExact) * 100) / 100, fx: payNote, st: '원 단위 조정' } as any);
     exportDataset<R>({ filename: `지급대상별요약_${payoutDate ?? '지급일미확인'}.xlsx`, sheetName: '지급대상별 요약', rows, columns: [
       { header: '지급대상', value: 'name', width: 22 }, { header: '구분', value: 'type', width: 9 }, { header: '언어', value: 'langs', width: 16 },
       { header: '이메일', value: 'email', width: 24 }, { header: '연락처', value: 'phone', width: 15 }, { header: '건수', value: 'count', type: 'number', width: 7 },
@@ -268,7 +276,7 @@ function PayeeTable({ payees, items, payoutDate, loading, onToast, onPick }: { p
                   <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{won(g.pretaxTotal)}</div>
                   <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#dc2626' }}>{won(g.withholdingImplied)}</div>
                   <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#7c3aed' }} data-testid={`pu-vendor-vat-${g.masterKey}`}>{won(num(g.vatTotal))}</div>
-                  <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 800, color: '#111827' }}>{won(g.posttaxTotal)}
+                  <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 800, color: '#111827' }} title={roundingNote(num(g.posttaxTotal), num(g.payRoundingAdjustment)) ?? undefined}>{won(payOfG(g))}
                     {(g.foreignTotals ?? []).map(f => <div key={f.currency} data-testid={`pu-payee-fx-${g.masterKey}-${f.currency}`} style={{ fontSize: 10, color: '#1d4ed8', fontWeight: 700, whiteSpace: 'normal', wordBreak: 'keep-all', overflowWrap: 'anywhere' }} title="외화 지급 — 원화 합계 제외(별도 해외송금)">{fxSummaryText([f])}</div>)}</div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', rowGap: 2 }}>{payStatusChips(g.payStatusCounts, true)}</div>
                   <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
@@ -287,7 +295,7 @@ function PayeeTable({ payees, items, payoutDate, loading, onToast, onPick }: { p
               <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{won(tot.pre)}</div>
               <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#dc2626' }}>{won(tot.wh)}</div>
               <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#7c3aed' }}>{won(tot.vat)}</div>
-              <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{won(tot.pay)}{fxAll.length > 0 && <div data-testid="pu-payee-total-fx" style={{ fontSize: 10, color: '#1d4ed8', whiteSpace: 'normal', wordBreak: 'keep-all', overflowWrap: 'anywhere' }}>{fxSummaryText(fxAll)}</div>}</div>
+              <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }} data-testid="pu-payee-total-pay">{won(tot.pay)}{payNote && <div data-testid="pu-payee-total-rounding" style={{ fontSize: 10, color: '#6b7280', fontWeight: 600, whiteSpace: 'normal' }}>{payNote}</div>}{fxAll.length > 0 && <div data-testid="pu-payee-total-fx" style={{ fontSize: 10, color: '#1d4ed8', whiteSpace: 'normal', wordBreak: 'keep-all', overflowWrap: 'anywhere' }}>{fxSummaryText(fxAll)}</div>}</div>
               <div /><div />
             </div>
           )}
@@ -310,23 +318,27 @@ function ItemTable({ token, onToast, items, payees, loading, selPayee, setSelPay
   }, [items, selPayee, status, q]);
   const clamp2 = { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', whiteSpace: 'normal', lineHeight: 1.35 } as React.CSSProperties;
   const inp: React.CSSProperties = { padding: '6px 10px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13 };
-  const tot = { pre: sumBy(rows, r => r.pretax), wh: sumBy(rows, r => r.withholdingImplied), vat: sumBy(rows, r => r.vat), pay: sumBy(rows, payTotalOf) };
+  // 실지급 합계 = 송금 기준(국내 플랫폼 건 지급대상자별 원 단위 반올림 후 합산). 건별 표시금액 합계와 차이는 원 단위 조정으로 구분.
+  const wp = wonPayTotalsOf(rows, payTotalOf, (r) => domesticPayeeKeyOf({ source: r.source, payeeType: r.payeeType, payCurrency: r.payCurrency, userId: r.matchedUserId, vendorId: r.vendorId }));
+  const tot = { pre: sumBy(rows, r => r.pretax), wh: sumBy(rows, r => r.withholdingImplied), vat: sumBy(rows, r => r.vat), pay: wp.pay };
+  const payNote = roundingNote(wp.exact, wp.adjustment);
   const fxT = fxTotalsOf(rows);
   const HEADS = ['거래처', '판매번호', '지급대상', '언어', '상품/업무', '상세내역', '납품일', '지급예정일', '실제 지급일', '세전금액', '원천세공제', '부가세', '실지급금액', '지급상태', '지급 전환'];
   const AMT = new Set(['세전금액', '원천세공제', '부가세', '실지급금액']);
   const exportAll = () => {
     type R = DetailRow & { _total?: boolean };
     const out: R[] = [...rows, { _total: true, client: `합계 (${rows.length}건)`, pretax: tot.pre, withholdingImplied: tot.wh, vat: tot.vat, payTotal: tot.pay, posttax: tot.pay } as R];
+    if (payNote) out.push({ _total: true, _adj: true, client: `※ ${payNote}` } as any);
     const v = (f: (r: R) => unknown) => (r: R) => (r._total ? '' : f(r));
     exportDataset<R>({ filename: `건별상세내역_${payoutDate ?? '지급일미확인'}.xlsx`, sheetName: '건별 상세내역', rows: out, columns: [
       { header: '거래처', value: (r) => r.client ?? '', width: 22 }, { header: '판매번호', value: v(r => r.saleNo ?? ''), width: 16 },
       { header: '지급대상', value: v(r => r.translator ?? ''), width: 16 }, { header: '구분', value: v(r => (r.payeeType === 'vendor' ? '외주업체' : '개인')), width: 9 },
       { header: '언어', value: v(r => r.language ?? ''), width: 12 }, { header: '상품/업무', value: v(r => r.content ?? ''), width: 28 }, { header: '상세내역', value: v(r => r.filename ?? ''), width: 30 },
       { header: '납품일', value: v(r => r.deliveryDate ?? ''), width: 11 }, { header: '지급예정일', value: v(r => r.payoutDate ?? ''), width: 11 }, { header: '실제 지급일', value: v(r => r.actualPaymentDate ?? ''), width: 11 },
-      { header: '세전금액', value: (r) => r.pretax, type: 'number', width: 13 }, { header: '원천세공제', value: (r) => r.withholdingImplied, type: 'number', width: 12 },
-      { header: '부가세', value: (r) => num(r.vat), type: 'number', width: 11 }, { header: '실지급금액', value: (r) => (r._total ? tot.pay : isFxRow(r) ? '' : payTotalOf(r)), type: 'number', width: 14 },
+      { header: '세전금액', value: (r) => ((r as any)._adj ? '' : r.pretax), type: 'number', width: 13 }, { header: '원천세공제', value: (r) => ((r as any)._adj ? '' : r.withholdingImplied), type: 'number', width: 12 },
+      { header: '부가세', value: (r) => ((r as any)._adj ? '' : num(r.vat)), type: 'number', width: 11 }, { header: '실지급금액', value: (r) => ((r as any)._adj ? wp.adjustment : r._total ? tot.pay : isFxRow(r) ? '' : payTotalOf(r)), type: 'number', width: 14 },
       { header: '지급통화', value: (r) => (r._total ? '' : r.payCurrency ?? 'KRW'), width: 8 },
-      { header: '외화 지급금액', value: (r) => (r._total ? fxSummaryText(fxT) : isFxRow(r) ? (r.foreignAmount ?? '') : ''), width: 16 },
+      { header: '외화 지급금액', value: (r) => ((r as any)._adj ? '' : r._total ? fxSummaryText(fxT) : isFxRow(r) ? (r.foreignAmount ?? '') : ''), width: 16 },
       { header: '지급상태', value: v(r => r.payStatusLabel ?? ''), width: 13 }, { header: '지급완료 근거', value: v(r => r.paidBasis ?? ''), width: 30 } ] });
     onToast(`건별 상세내역 ${rows.length}건을 Excel로 내보냈습니다.`);
   };
@@ -358,9 +370,9 @@ function ItemTable({ token, onToast, items, payees, loading, selPayee, setSelPay
                 <td style={{ ...td, whiteSpace: 'normal', maxWidth: 140 }}>{p.language ?? '-'}</td>
                 <td style={{ ...td, maxWidth: 200 }} title={p.content ?? undefined}><div style={clamp2}>{p.content ?? '-'}</div></td>
                 <td style={{ ...td, maxWidth: 230 }} title={p.filename ?? undefined}><div style={clamp2}>{p.filename ?? '-'}</div></td>
-                <td style={td}>{p.deliveryDate ?? <span style={{ color: '#b45309' }}>(납품일 미상)</span>}</td>
-                <td style={td}>{p.payoutDate ?? <span style={{ color: '#b45309', fontWeight: 700 }}>(지급일 미확인)</span>}</td>
-                <td style={td} data-testid={`pu-detail-actual-${i}`}>{p.actualPaymentDate ?? <span style={{ color: '#d1d5db' }}>-</span>}</td>
+                <td style={td}>{p.deliveryDate ? formatDisplayDate(p.deliveryDate) : <span style={{ color: '#b45309' }}>(납품일 미상)</span>}</td>
+                <td style={td}>{p.payoutDate ? formatDisplayDate(p.payoutDate) : <span style={{ color: '#b45309', fontWeight: 700 }}>(지급일 미확인)</span>}</td>
+                <td style={td} data-testid={`pu-detail-actual-${i}`}>{p.actualPaymentDate ? formatDisplayDate(p.actualPaymentDate) : <span style={{ color: '#d1d5db' }}>-</span>}</td>
                 <td style={tdR}>{won(p.pretax)}</td>
                 <td style={{ ...tdR, color: '#dc2626' }}>{won(p.withholdingImplied)}
                   {p.taxConflict && <div title={p.taxConflict} style={{ fontSize: 10, color: '#c2410c', fontWeight: 700 }}>⚠ 세금 확인</div>}</td>
@@ -382,7 +394,7 @@ function ItemTable({ token, onToast, items, payees, loading, selPayee, setSelPay
               <td style={{ ...tdR, fontWeight: 800 }}>{won(tot.pre)}</td>
               <td style={{ ...tdR, fontWeight: 800, color: '#dc2626' }}>{won(tot.wh)}</td>
               <td style={{ ...tdR, fontWeight: 800, color: '#7c3aed' }}>{won(tot.vat)}</td>
-              <td style={{ ...tdR, fontWeight: 800 }}>{won(tot.pay)}{fxT.length > 0 && <div style={{ fontSize: 10, color: '#1d4ed8' }}>{fxSummaryText(fxT)}</div>}</td>
+              <td style={{ ...tdR, fontWeight: 800 }} data-testid="pd-item-total-pay">{won(tot.pay)}{payNote && <div data-testid="pd-item-total-rounding" style={{ fontSize: 10, color: '#6b7280', fontWeight: 600, whiteSpace: 'normal' }}>{payNote}</div>}{fxT.length > 0 && <div style={{ fontSize: 10, color: '#1d4ed8' }}>{fxSummaryText(fxT)}</div>}</td>
               <td style={td} colSpan={2} />
             </tr></tfoot>
           )}
@@ -496,14 +508,14 @@ function OperationalTab({ token, onToast, payoutDate, opRounds, reloadOpRounds, 
         )}
         {!hasActive && canManage && (
           <button type="button" onClick={() => setShowCreate(true)} data-testid="pd-op-create" aria-label="지급회차 생성"
-            style={{ marginLeft: 'auto', padding: '7px 14px', borderRadius: 8, fontSize: 12, fontWeight: 700, border: 'none', background: '#0369a1', color: '#fff', cursor: 'pointer' }}>+ 지급회차 생성 ({payoutDate})</button>
+            style={{ marginLeft: 'auto', padding: '7px 14px', borderRadius: 8, fontSize: 12, fontWeight: 700, border: 'none', background: '#0369a1', color: '#fff', cursor: 'pointer' }}>+ 지급회차 생성 ({formatDisplayDate(payoutDate)})</button>
         )}
       </div>
 
       {!roundSel && preview && (
         <div data-testid="pd-op-preview" style={{ border: '1px solid #e5e7eb', borderRadius: 10, marginBottom: 12, overflowX: 'auto' }}>
           <div style={{ padding: '8px 12px', fontSize: 12.5, fontWeight: 700, background: '#f0f9ff', color: '#0369a1' }}>
-            수집 예정 {preview.length}건 — 지급예정일 {payoutDate} · 미지급·미배정·납품확인·지급액 확정 건(회차 생성 시 지급예정일 기준으로 자동수집)
+            수집 예정 {preview.length}건 — 지급예정일 {formatDisplayDate(payoutDate)} · 미지급·미배정·납품확인·지급액 확정 건(회차 생성 시 지급예정일 기준으로 자동수집)
           </div>
           <table className="veritas-read-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead><tr>{['지급대상', '거래처', '상품·업무', '납품일', '지급예정일', '세전', '실지급'].map(h => <th key={h} style={{ padding: '7px 12px', textAlign: h === '세전' || h === '실지급' ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
@@ -530,7 +542,7 @@ function OperationalTab({ token, onToast, payoutDate, opRounds, reloadOpRounds, 
               <tbody>
                 {outside.map((i) => { const sm = STATUS_META[i.status] ?? STATUS_META.deposit_unconfirmed; return (
                   <tr key={i.sourceKey} data-testid={`pd-op-outside-${i.id}`}>
-                    <td style={td}>{i.translator ?? '-'}</td><td style={td}>{i.client ?? '-'}</td><td style={td}>{i.deliveryDate ?? '-'}</td><td style={td}>{i.payoutDate ?? '-'}</td>
+                    <td style={td}>{i.translator ?? '-'}</td><td style={td}>{i.client ?? '-'}</td><td style={td}>{formatDisplayDate(i.deliveryDate) || '-'}</td><td style={td}>{formatDisplayDate(i.payoutDate) || '-'}</td>
                     <td style={tdR}>{won(i.pretax)}</td>
                     <td style={td}><span style={{ padding: '1px 7px', borderRadius: 8, background: sm.bg, color: sm.fg, fontSize: 11.5, fontWeight: 700 }}>{sm.label}</span></td>
                     <td style={{ ...td, whiteSpace: 'normal', color: '#92400e', fontWeight: 600 }}>{i.reason}</td>

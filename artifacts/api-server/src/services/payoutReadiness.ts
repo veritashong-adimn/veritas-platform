@@ -23,7 +23,7 @@ import { masterTreatmentOf } from "./legacyActivationLineage";
 import { DATE_DECISIONS } from "../lib/payoutDateDecisions";
 import { payStatusOf, isAmountMissing, PAY_STATUS_LABEL, emptyStatusCounts, type PayStatusKey } from "../lib/payDisplayStatus";
 import { decrypt } from "../lib/encrypt";
-import { splitPayAmount, type PayeeType } from "../lib/payoutAmount";
+import { splitPayAmount, domesticPayeeKey, wonPayTotals, type PayeeType } from "../lib/payoutAmount";
 import { isLegacyPlaceholderEmail } from "../lib/mailer";
 import { rawRowFromRecord } from "../routes/pastWorkImport";
 
@@ -523,7 +523,10 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
   const order: Record<string, number> = { base: 0, delivery_window: 1, carry_over: 2, no_payout_date: 3, other: 4, all: 0 };
   out.sort((a, b) => (order[a.candidate] - order[b.candidate]) || a.state.localeCompare(b.state) || String(a.payee ?? "").localeCompare(String(b.payee ?? "")));
   // 원화 합계 — 외화 지급 건(payCurrency ≠ KRW)은 원화 합계에 넣지 않고 foreignTotals 로 별도 집계
-  const sum = (arr: any[]) => { const c = arr.filter(x => x.countedInTotals && x.payCurrency === "KRW"); return { count: arr.length, counted: c.length, pretax: c.reduce((s, x) => s + x.pretax, 0), posttax: Math.round(c.reduce((s, x) => s + x.posttax, 0)),
+  //   실지급(posttax) = 지급대상자별 원 단위 반올림 후 합산(2026-11-26 — 지급회차·IBK 송금파일과 같은 기준). 건별 합계는 posttaxExact, 차이는 payRoundingAdjustment.
+  const domKey = (x: any) => domesticPayeeKey({ source: x.source, payeeType: x.payeeType, payCurrency: x.payCurrency, userId: x.masterId, vendorId: x.vendorId });
+  const sum = (arr: any[]) => { const c = arr.filter(x => x.countedInTotals && x.payCurrency === "KRW"); const w = wonPayTotals(c, (x: any) => x.posttax, domKey);
+    return { count: arr.length, counted: c.length, pretax: c.reduce((s, x) => s + x.pretax, 0), posttax: w.pay, posttaxExact: w.exact, payRoundingAdjustment: w.roundingAdjustment,
     vendorCount: c.filter(x => x.payeeType === "vendor").length, vat: Math.round(c.reduce((s, x) => s + (x.payAmount.vat ?? 0), 0)) }; };
   const by = (f: (x: any) => string) => { const m: Record<string, any> = {}; for (const k of [...new Set(out.map(f))]) m[k] = sum(out.filter(x => f(x) === k)); return m; };
   const issueCounts: Record<string, number> = {};

@@ -9,7 +9,7 @@ import { api } from '../../lib/constants';
 import { exportDataset, type ExcelColumn } from '../../lib/excelExport';
 import { DateField } from './DatePickerShared';
 import { orderBySale } from '../../lib/payoutReadinessExcelOrder';
-import { PAY_STATUS_META, type PayStatusKey, payStatusChips, fxSummaryText, SaleLink } from './payoutDisplayShared';
+import { PAY_STATUS_META, type PayStatusKey, payStatusChips, fxSummaryText, SaleLink, domesticPayeeKeyOf, wonPayTotalsOf, roundingNote } from './payoutDisplayShared';
 
 // 프로젝트 손익(판매 상세 '프로젝트 손익 요약'의 예상이익·예상이익률, 서버 공용 계산) — 엑셀 다운로드 시에만 조회
 type Profit = { amount: number; rate: number | null; supply: number; cost: number; cancelled: boolean };
@@ -42,7 +42,7 @@ type Item = {
   paymentStatus: string; payoutRoundId: number | null; hasAccount: boolean; roundEligible: boolean; candidate: string; countedInTotals: boolean;
   state: 'A' | 'B' | 'C' | 'D'; stateLabel: string; blockers: Blocker[]; actions: string[];
 };
-type Sum = { count: number; counted: number; pretax: number; posttax: number };
+type Sum = { count: number; counted: number; pretax: number; posttax: number; posttaxExact?: number; payRoundingAdjustment?: number };   // posttax = 실지급(송금 기준, 지급대상자별 원 단위)
 type Resp = { canRevealResidentNumber?: boolean; scope: 'date' | 'all'; payoutDate: string | null; deliveryWindow: { from: string; to: string } | null; items: Item[];
   summary: { total: Sum; foreignTotals?: { currency: string; count: number; amount: number; missing: number }[]; byState: Record<string, Sum>; byKind: Record<string, Sum>; byCandidate: Record<string, Sum>; roundEligible: Sum; duplicates: number; issueCounts: Record<string, number>; payStatusCounts?: Record<string, number> } };
 
@@ -189,6 +189,14 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast, def
         { header: '누락·확인필요 사유', value: (r) => reasonText(r), width: 40 },
     ];
     const footer: unknown[] = columns.map(() => null);
+    // 실지급 합계(송금 기준, 2026-11-26) — 합계 집계 대상(원화·중복 제외) 건을 지급대상자별 원 단위 반올림 후 합산. 건별 합계와 차이는 아래 행에 구분.
+    const payCol = columns.findIndex(c => c.header === '실지급금액');
+    const wp = wonPayTotalsOf(rows.filter(r => r.countedInTotals && !isFx(r)), (r) => r.payAmount?.payTotal ?? r.posttax,
+      (r) => domesticPayeeKeyOf({ source: r.source, payeeType: r.payeeType, payCurrency: r.payCurrency, userId: r.masterId, vendorId: r.vendorId }));
+    if (payCol >= 0) footer[payCol] = wp.pay;
+    const adjNote = roundingNote(wp.exact, wp.adjustment);
+    const adjFooter: unknown[] | null = adjNote ? columns.map(() => null) : null;
+    if (adjFooter) { adjFooter[0] = `※ 실지급 합계 = 지급대상자별 원 단위 반올림 후 합산(기업은행 송금 기준) — ${adjNote}`; if (payCol >= 0) adjFooter[payCol] = wp.adjustment; }
     footer[0] = `합계(프로젝트 ${projProfit.size}건${noProfit ? ` · 손익 계산 불가 ${noProfit}행 제외` : ''})`;
     footer[columns.findIndex(c => c.header === '수익금액')] = pSum.amount;
     footer[columns.findIndex(c => c.header === '수익률')] = pRate;
@@ -196,7 +204,7 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast, def
       filename: (scope === 'date' ? `지급준비점검_${date}` : `지급누락점검_전체기간`) + (full ? '_주민번호전체' : '') + '.xlsx', sheetName: scope === 'date' ? '지급준비점검' : '지급누락점검',
       columns,
       rows: orderBySale(rows),   // 같은 판매건 연속 표시(개인 → 외주업체) — 출력 순서만, 화면 목록 순서 불변
-      footerRows: [footer],
+      footerRows: adjFooter ? [footer, adjFooter] : [footer],
     });
     onToast(`${rows.length}건을 Excel로 내보냈습니다.${full ? ' (주민번호 전체 — 외부 유출 주의)' : ''}`);
   };
@@ -285,10 +293,11 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast, def
                 {(['A', 'B', 'C', 'D'] as const).map(k => chip(k, data.summary.byState[k]))}
                 <div style={{ fontSize: 11.5, color: '#475569', alignSelf: 'center', lineHeight: 1.6 }}>
                   전체 <b data-testid="ready-total">{data.summary.total.count}건 · {won(data.summary.total.pretax)}원</b>
+                  {' · '}실지급 <b data-testid="ready-total-pay" title={roundingNote(data.summary.total.posttaxExact ?? data.summary.total.posttax, data.summary.total.payRoundingAdjustment ?? 0) ?? '지급대상자별 원 단위 반올림 후 합산(기업은행 송금 기준)'}>{won(data.summary.total.posttax)}원</b>
                   {(data.summary.foreignTotals ?? []).length > 0 && <span data-testid="ready-fx-total" style={{ marginLeft: 8, color: '#4338ca', fontWeight: 700 }}>외화 {fxSummaryText(data.summary.foreignTotals ?? [])}</span>}
                   {' · '}공식 회차 자동포함 <b data-testid="ready-round-eligible">{data.summary.roundEligible.count}건 · {won(data.summary.roundEligible.pretax)}원</b><br />
                   {data.summary.payStatusCounts && <span data-testid="ready-pay-status-counts">{payStatusChips(data.summary.payStatusCounts)}</span>}<br />
-                  {data.scope === 'date' && Object.entries(data.summary.byCandidate).map(([k, v]) => <span key={k} data-testid={`ready-cand-${k}`} style={{ marginRight: 10 }}>{CAND_LABEL[k] ?? k} {v.count}건·{won(v.pretax)}원</span>)}
+                  {data.scope === 'date' && Object.entries(data.summary.byCandidate).map(([k, v]) => <span key={k} data-testid={`ready-cand-${k}`} style={{ marginRight: 10 }} title={roundingNote(v.posttaxExact ?? v.posttax, v.payRoundingAdjustment ?? 0) ?? undefined}>{CAND_LABEL[k] ?? k} {v.count}건·{won(v.pretax)}원 (실지급 {won(v.posttax)}원)</span>)}
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 6, marginBottom: 6, flexWrap: 'wrap', alignItems: 'center' }}>

@@ -77,3 +77,27 @@ export function splitPayAmount(p: {
   }
   return { payeeType: "vendor", pretax, withholding, posttax, supply: pretax, vat, payTotal: posttax, taxConflict: conflict };
 }
+
+// ─── 국내 실지급 합계(2026-11-26 대표 결정) — 지급대상자별 원 단위 반올림 후 합산 ─────────────────────────
+//   지급회차(payoutRounds withWonPayTotal)·송금건·IBK 송금파일과 같은 기준. 지급준비점검·통합 조회(지급대상별 요약·건별 상세)·Excel 공통.
+//   · 대상: 플랫폼 수행정보(source='current')의 원화(KRW) 지급 건 — 지급대상(개인 i:{userId} / 외주 v:{companyId})별 합계를 원 단위 반올림.
+//   · 외화 지급 건·과거 CRM 자료는 기존 금액 그대로 더한다(반올림 대상 아님).
+//   · 개별 수행건 금액·원천세·부가세는 바꾸지 않는다 — 합계 단계의 원 단위 처리 차이만 roundingAdjustment 로 구분한다.
+export function domesticPayeeKey(r: { source?: string | null; payeeType?: string | null; payCurrency?: string | null; userId?: number | null; vendorId?: number | null }): string | null {
+  if (r.source !== "current") return null;
+  if (r.payCurrency && String(r.payCurrency).toUpperCase() !== "KRW") return null;
+  if (r.payeeType === "vendor") return r.vendorId != null ? `v:${r.vendorId}` : null;
+  return r.userId != null ? `i:${r.userId}` : null;
+}
+export function wonPayTotals<T>(rows: T[], net: (r: T) => number, key: (r: T) => string | null): { exact: number; pay: number; roundingAdjustment: number } {
+  const groups = new Map<string, number>();
+  let other = 0, exact = 0;
+  for (const r of rows) {
+    const v = Number(net(r)) || 0; exact += v;
+    const k = key(r);
+    if (k) groups.set(k, (groups.get(k) ?? 0) + v); else other += v;
+  }
+  let pay = r2(other);
+  for (const s of groups.values()) pay += Math.round(r2(s));
+  return { exact: r2(exact), pay: r2(pay), roundingAdjustment: r2(pay - exact) };
+}

@@ -1190,6 +1190,19 @@ router.put("/admin/projects/:id/performances", ...adminGuard, requireRolePermiss
   const { rows, deletedIds } = parsed.data;
   const changeReason = parsed.data.changeReason?.trim() || null;
   const userId = req.user?.id ?? null;
+  // 판매취소 건의 지급보류 해제 차단(2026-11) — 취소된 판매의 수행정보를 지급보류 → 미지급으로 바꾸면 지급 대상처럼 보일 수 있다.
+  //   (지급회차 수집은 판매취소를 이미 제외하지만, 상태 자체를 풀지 않도록 서버에서 막는다. 다른 수정은 기존대로.)
+  {
+    const unholdIds = rows.filter(r => r.id != null && r.paymentStatus === "unpaid").map(r => r.id as number);
+    if (unholdIds.length) {
+      const blocked = (await db.execute(sql`SELECT pa.id FROM performance_assignments pa JOIN projects p ON p.id = pa.project_id
+        WHERE pa.id IN (${sql.join(unholdIds.map(i => sql`${i}`), sql`, `)}) AND pa.payment_status = 'payment_hold' AND p.status = 'cancelled'`)).rows as any[];
+      if (blocked.length) {
+        res.status(409).json({ error: "판매취소된 판매건의 수행정보는 지급보류를 해제할 수 없습니다.", code: "CANCELLED_SALE_HOLD", assignmentIds: blocked.map(b => Number(b.id)) });
+        return;
+      }
+    }
+  }
   // 외주 정산 행(공급가액 = 수량 × 단가)에 단가가 있는데 수량이 비어 있으면 저장 차단 — 수량 미입력이 0원으로 저장돼
   //   기존 지급금액이 사라지는 것을 막는다(KDI 155). 지급완료·지급회차 배정 행은 금액 변경 대상이 아니므로 검사에서 제외.
   {
