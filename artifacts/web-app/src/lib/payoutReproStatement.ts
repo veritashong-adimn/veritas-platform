@@ -85,6 +85,73 @@ function totals(rows: ReproStmtRow[], vendor = false) {
   const vat = vendor ? r2(rows.reduce((a, r) => a + Math.max(0, num(r.posttax) - num(r.pretax)), 0)) : 0;
   return { base: gross, expense: 0, deduction: 0, gross, withholding, net, vat };
 }
+// ── 외화 포함 지급명세서(2026-11) — 외화 행이 하나라도 있을 때만 사용(원화만 있는 명세서는 위 기존 계산·양식 그대로) ──
+//  · '통번역료' 열 → '지급금액'. 외화 행 금액 = 저장된 외화 지급금액(수행정보 contract_amount_foreign) 그대로, 통화 표기. 미입력 = '미입력'.
+//  · 외화 기타비용·차감 = '—'(외화 분해 저장값 없음 — 상품명·비고에서 금액 추출 안 함).
+//  · 원천징수 제외(외주업체 포함) 외화: 세전금액 = 실지급액 = 외화 지급금액. 그 외 세금처리는 계산하지 않고 '세금 확인 필요'.
+//  · 합계·최종 실지급액은 통화별로 구분(원화와 합산·원화 환산 없음). 미입력 건은 입력된 금액만 합계하고 '미확정' 안내.
+const FX_MISSING = '미입력';
+const TAX_UNKNOWN = '세금 확인 필요';
+const DASH = '—';
+const CUR_NO_DECIMAL = new Set(['JPY', 'KRW']);
+const fxAmt = (cur: string, n: number) => { const d = CUR_NO_DECIMAL.has(cur) ? 0 : 2; return `${cur} ${n.toLocaleString('ko-KR', { minimumFractionDigits: d, maximumFractionDigits: d })}`; };
+const wonTxt = (n: number) => `${Math.round(n).toLocaleString('ko-KR')}원`;
+const fxNoTax = (r: ReproStmtRow, vendor: boolean) => vendor || r.withholdingTreatment === 'exempt';
+type FxGroup = { cur: string; count: number; amount: number; missing: number; taxUnknown: number };
+type FxCells = { base: string; expense: string; deduction: string; gross: string; tax: string; net: string };
+function fxStatement(rows: ReproStmtRow[], vendor: boolean) {
+  const krw = rows.filter(r => !isFx(r));
+  const hasKrw = krw.length > 0;
+  const tK = totals(krw, vendor);
+  const gm = new Map<string, FxGroup>();
+  for (const r of rows) {
+    if (!isFx(r)) continue;
+    const g = gm.get(r.payCurrency!) ?? { cur: r.payCurrency!, count: 0, amount: 0, missing: 0, taxUnknown: 0 };
+    g.count++;
+    if (r.foreignAmount != null) g.amount = Math.round((g.amount + r.foreignAmount) * 100) / 100; else g.missing++;
+    if (!fxNoTax(r, vendor)) g.taxUnknown++;
+    gm.set(g.cur, g);
+  }
+  const groups = [...gm.values()];
+  // 외화 행 표시값(원화 행은 null → 기존 원화 값)
+  const cellsOf = (r: ReproStmtRow): FxCells | null => {
+    if (!isFx(r)) return null;
+    const amt = r.foreignAmount != null ? fxAmt(r.payCurrency!, r.foreignAmount) : FX_MISSING;
+    const noTax = fxNoTax(r, vendor);
+    return { base: amt, expense: DASH, deduction: DASH, gross: amt,
+      tax: noTax ? fxAmt(r.payCurrency!, 0) : TAX_UNKNOWN, net: r.foreignAmount == null ? FX_MISSING : (noTax ? amt : TAX_UNKNOWN) };
+  };
+  const gAmt = (g: FxGroup) => `${fxAmt(g.cur, g.amount)}${g.missing ? ` (${FX_MISSING} ${g.missing}건)` : ''}`;
+  const join = (krwPart: string | null, fxParts: string[]) => [...(krwPart != null ? [krwPart] : []), ...fxParts].join(' · ');
+  const totalsText = {
+    base: join(hasKrw ? wonTxt(tK.base) : null, groups.map(gAmt)),
+    expense: join(hasKrw ? wonTxt(tK.expense) : null, groups.map(() => DASH)),
+    deduction: join(hasKrw ? wonTxt(tK.deduction) : null, groups.map(() => DASH)),
+    gross: join(hasKrw ? wonTxt(tK.gross) : null, groups.map(gAmt)),
+  };
+  // 합계 요약 — 원화(있으면, 기존 항목 그대로) + 통화별 항목
+  const sfx = (cur: string) => ` (${cur})`;
+  const summaryRows: [string, string, boolean?][] = [];
+  if (hasKrw) {
+    summaryRows.push(['지급금액 합계 (원화)', wonTxt(tK.base)], ['기타비용 합계 (원화)', wonTxt(tK.expense)], ['차감 합계 (원화)', wonTxt(tK.deduction)]);
+    if (vendor) {
+      summaryRows.push(['공급가 합계 (원화)', wonTxt(tK.gross)], ['부가세 (원화)', wonTxt(tK.vat)]);
+      if (tK.withholding > 0) summaryRows.push(['CRM 공제 기록(세금 확인 필요)', wonTxt(tK.withholding), true]);
+    } else summaryRows.push(['세전금액 합계 (원화)', wonTxt(tK.gross)], ['원천세공제 (원화)', `${tK.withholding.toLocaleString('ko-KR', { maximumFractionDigits: 2 })}원`, true]);
+  }
+  for (const g of groups) {
+    summaryRows.push([`지급금액 합계${sfx(g.cur)}`, gAmt(g)], [`기타비용 합계${sfx(g.cur)}`, DASH], [`차감 합계${sfx(g.cur)}`, DASH],
+      [`${vendor ? '공급가 합계' : '세전금액 합계'}${sfx(g.cur)}`, gAmt(g)],
+      [`${vendor ? '부가세' : '원천세공제'}${sfx(g.cur)}`, g.taxUnknown ? TAX_UNKNOWN : fxAmt(g.cur, 0), true]);
+    if (g.missing) summaryRows.push([`${g.cur} 금액 ${FX_MISSING}`, `${g.missing}건 — 입력된 금액만 합계, 최종 지급액 미확정`]);
+  }
+  const fxFinal = (g: FxGroup) => g.taxUnknown ? `${g.cur} ${TAX_UNKNOWN}` : `${fxAmt(g.cur, g.amount)}${g.missing ? ' (미확정)' : ''}`;
+  const finalText = join(hasKrw ? wonTxt(tK.net) : null, groups.map(fxFinal));
+  const pending = groups.filter(g => g.missing).map(g => `${g.cur} 금액 미입력 ${g.missing}건`);
+  const note = `외화 지급은 지급통화 금액 그대로 표시하며 원화와 합산하거나 원화로 환산하지 않습니다.${pending.length ? ` ${pending.join(', ')} — 입력된 금액만 합계했으며 최종 지급액은 미확정입니다.` : ''}`;
+  return { hasKrw, tK, groups, cellsOf, totalsText, summaryRows, finalText, note };
+}
+
 const taxDisplayOf = (vendor: boolean, vat: number, crmDeduct = 0, rows: ReproStmtRow[] = []) => (!vendor ? headTaxLabel(rows)
   : `외주업체 — 원천징수 없음${vat > 0 ? `, 부가세 ${Math.round(vat).toLocaleString()}원 포함` : ''}${crmDeduct > 0 ? ` · CRM 공제 기록 ${Math.round(crmDeduct).toLocaleString()}원(세금 확인 필요)` : ''}`);
 
@@ -93,27 +160,39 @@ export function exportReproStatementExcel(opts: ReproStmtOpts): void {
   const vendor = opts.payeeType === 'vendor';
   const t = totals(opts.rows, vendor);
   const taxCol = vendor ? '부가세' : '원천세공제';
+  const fx = opts.rows.some(isFx) ? fxStatement(opts.rows, vendor) : null;   // 외화 포함 명세서만(원화만 = 기존 그대로)
   const columns: ExcelColumn[] = [
     { header: '거래처', width: 16 }, { header: '상품·업무', width: 26 }, { header: '상세내역', width: 38 },
-    { header: '납품일', width: 12 }, { header: '지급일', width: 12 }, { header: '통번역료', type: 'number', width: 12 },
+    { header: '납품일', width: 12 }, { header: '지급일', width: 12 }, { header: fx ? '지급금액' : '통번역료', type: 'number', width: fx ? 16 : 12 },
     { header: '기타비용 내역', width: 14 }, { header: '기타비용 금액', type: 'number', width: 13 },
     { header: '차감 내역', width: 12 }, { header: '차감 금액', type: 'number', width: 11 },
     { header: '세전금액', type: 'number', width: 13 }, { header: '세금처리', width: 16 },
     { header: taxCol, type: 'number', width: 16 }, { header: vendor ? '지급합계' : '실지급액', type: 'number', width: 16 },
   ];
-  const rows: ExcelCell[][] = opts.rows.map((r) => [
+  const rows: ExcelCell[][] = opts.rows.map((r) => {
+    const c = fx?.cellsOf(r);
+    if (c) return [r.client || '거래처 확인 필요', r.content || '-', detailOf(r), r.deliveryDate || '-', r.payoutDate || '-',
+      c.base, DASH, c.expense, DASH, c.deduction, c.gross, vendor ? '외주업체' : treatmentLabel(r), c.tax, c.net];
+    return [
     r.client || '거래처 확인 필요', r.content || '-', detailOf(r), r.deliveryDate || '-', r.payoutDate || '-',
     Math.round(num(r.pretax)),
     '', 0, '', 0,
     Math.round(num(r.pretax)), vendor ? '외주업체' : treatmentLabel(r),
     Math.round(vendor ? Math.max(0, num(r.posttax) - num(r.pretax)) : num(r.pretax) - num(r.posttax)), Math.round(num(r.posttax)),
-  ]);
-  const totRow: ExcelCell[] = [
+  ]; });
+  const totRow: ExcelCell[] = fx ? [
+    `합계 (${opts.rows.length}건)`, '', '', '', '',
+    fx.totalsText.base, '', fx.totalsText.expense, '', fx.totalsText.deduction, fx.totalsText.gross, '', '', fx.finalText,
+  ] : [
     `합계 (${opts.rows.length}건)`, '', '', '', '',
     Math.round(t.base), '', 0, '', 0,
     Math.round(t.gross), '', Math.round(vendor ? t.vat : t.withholding), Math.round(t.net),
   ];
-  const footerRows: [string, ExcelCell][] = [
+  const footerRows: [string, ExcelCell][] = fx ? [
+    ...fx.summaryRows.map(([k, v]) => [k, v] as [string, ExcelCell]),
+    ['안내', fx.note],
+    [vendor ? '지급합계' : '최종 실지급액', fx.finalText],
+  ] : [
     ['통번역료 합계', Math.round(t.base)],
     ['기타비용 합계', 0],
     ['차감 합계', 0],
@@ -144,11 +223,16 @@ export function exportReproStatementExcel(opts: ReproStmtOpts): void {
 export function exportReproStatementPdf(opts: ReproStmtOpts): boolean {
   const vendor = opts.payeeType === 'vendor';
   const t = totals(opts.rows, vendor);
-  const pdfRows: PayoutStatementPdfRow[] = opts.rows.map((r) => ({
-    customer: r.client || '거래처 확인 필요', product: r.content || '-', detail: detailOf(r),
-    deliveryDate: r.deliveryDate || '-', payDate: r.payoutDate || '-',
-    base: num(r.pretax), expenses: '', deductions: '', gross: num(r.pretax),
-  }));
+  const fx = opts.rows.some(isFx) ? fxStatement(opts.rows, vendor) : null;   // 외화 포함 명세서만(원화만 = 기존 그대로)
+  const pdfRows: PayoutStatementPdfRow[] = opts.rows.map((r) => {
+    const c = fx?.cellsOf(r);
+    return {
+      customer: r.client || '거래처 확인 필요', product: r.content || '-', detail: detailOf(r),
+      deliveryDate: r.deliveryDate || '-', payDate: r.payoutDate || '-',
+      base: num(r.pretax), expenses: c ? c.expense : '', deductions: c ? c.deduction : '', gross: num(r.pretax),
+      ...(c ? { baseText: c.base, grossText: c.gross } : {}),
+    };
+  });
   const d = new Date();
   const p2 = (n: number) => String(n).padStart(2, '0');
   return printPayoutStatementPdf({
@@ -159,5 +243,6 @@ export function exportReproStatementPdf(opts: ReproStmtOpts): boolean {
     payDate: opts.payDate || '-', taxDisplay: taxDisplayOf(vendor, t.vat, vendor ? t.withholding : 0, opts.rows) + (fxSummary(opts.rows) ? ` · 외화 지급 ${fxSummary(opts.rows)}` : ''),
     count: opts.rows.length, rows: pdfRows,
     totals: t,
+    ...(fx ? { fx: { baseHeader: '지급금액', totalsText: fx.totalsText, summaryRows: fx.summaryRows, finalText: fx.finalText, note: fx.note } } : {}),
   });
 }

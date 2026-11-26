@@ -30,6 +30,9 @@ export interface PayoutStatementPdfRow {
   deductions: string;
   gross: number;
   vatIncluded?: boolean;
+  /** 외화 지급명세서(2026-11) — 지정 시 금액 칸에 원화 대신 이 표시값(예: 'EUR 1,090.00' · '미입력'). 미지정 = 기존 원화 표시. */
+  baseText?: string;
+  grossText?: string;
 }
 
 export interface PayoutStatementPdfData {
@@ -52,6 +55,14 @@ export interface PayoutStatementPdfData {
     vat?: number;
     /** 원 단위 조정(수취인별 최종 지급액 원 단위 반올림 − 건별 실지급 합계). 0·미지정이면 표시하지 않음. */
     rounding?: number };
+  /** 외화 포함 명세서(2026-11) 표시 전용 — 지정 시 해당 영역만 이 값으로 표시(통화별 구분, 합산·원화 환산 없음). 미지정 = 기존과 동일. */
+  fx?: {
+    baseHeader: string;                                                        // '통번역료' → '지급금액'
+    totalsText: { base: string; expense: string; deduction: string; gross: string };   // 표 합계 행
+    summaryRows: [string, string, boolean?][];                                 // 합계 요약(통화별)
+    finalText: string;                                                         // 최종 실지급액(통화별)
+    note: string;                                                              // 안내문 추가(외화 표시 기준·미확정 안내)
+  };
 }
 
 // ── 페이지 나눔 ─────────────────────────────────────────────────────────────────
@@ -128,14 +139,14 @@ export function buildPayoutStatementHtml(data: PayoutStatementPdfData): string {
       <td class="detail">${esc(r.detail || '-')}</td>
       <td class="date">${esc(r.deliveryDate)}</td>
       <td class="date">${esc(r.payDate)}</td>
-      <td class="num">${won(r.base)}</td>
+      <td class="num">${r.baseText != null ? esc(r.baseText) : won(r.base)}</td>
       <td class="detail">${esc(r.expenses)}</td>
       <td class="detail">${esc(r.deductions)}</td>
-      <td class="num strong">${won(r.gross)}${r.vatIncluded ? '<span class="vat">(VAT별도)</span>' : ''}</td>
+      <td class="num strong">${r.grossText != null ? esc(r.grossText) : won(r.gross)}${r.vatIncluded ? '<span class="vat">(VAT별도)</span>' : ''}</td>
     </tr>`).join('');
 
   const vendorMode = data.payeeType === '외주업체' && data.totals.vat != null;
-  const summaryRows: [string, string, boolean?][] = [
+  const summaryRows: [string, string, boolean?][] = data.fx ? data.fx.summaryRows : [
     ['통번역료 합계', won(data.totals.base)],
     ['기타비용 합계', won(data.totals.expense)],
     ['차감 합계', won(data.totals.deduction)],
@@ -214,6 +225,7 @@ export function buildPayoutStatementHtml(data: PayoutStatementPdfData): string {
   .summary-total { display: flex; justify-content: space-between; align-items: center; padding: 8px 16px; background: #1e3a5f; border-radius: 6px; margin-top: 4px; }
   .summary-total .sk { color: #bfdbfe; font-size: 12px; font-weight: 700; }
   .summary-total .sv { color: #fff; font-size: 18px; font-weight: 900; font-variant-numeric: tabular-nums; }
+  .summary-total .sv.multi { font-size: 13px; text-align: right; margin-left: 10px; }
   .note { flex: 1; min-width: 0; font-size: 9px; color: #9ca3af; line-height: 1.45; border-top: 1px solid #e5e7eb; padding-top: 7px; }
   .items tr.pb { page-break-before: always; break-before: page; }
 </style>
@@ -242,24 +254,24 @@ export function buildPayoutStatementHtml(data: PayoutStatementPdfData): string {
     <thead>
       <tr>
         <th>거래처</th><th>상품·업무</th><th>상세내역</th>
-        <th>납품일</th><th>지급일</th><th>통번역료</th>
+        <th>납품일</th><th>지급일</th><th>${esc(data.fx?.baseHeader ?? '통번역료')}</th>
         <th>기타비용 내역</th><th>차감</th><th>세전금액</th>
       </tr>
     </thead>
     <tbody class="rows">${detailRows || '<tr><td colspan="9" class="center" style="padding:16px;color:#9ca3af">상세내역이 없습니다.</td></tr>'}</tbody>
     <tfoot><tr>
       <td colspan="5" class="num">합계 (${data.count}건)</td>
-      <td class="num">${won(data.totals.base)}</td>
-      <td class="num">${won(data.totals.expense)}</td>
-      <td class="num">${won(data.totals.deduction)}</td>
-      <td class="num">${won(data.totals.gross)}</td>
+      <td class="num">${data.fx ? esc(data.fx.totalsText.base) : won(data.totals.base)}</td>
+      <td class="num">${data.fx ? esc(data.fx.totalsText.expense) : won(data.totals.expense)}</td>
+      <td class="num">${data.fx ? esc(data.fx.totalsText.deduction) : won(data.totals.deduction)}</td>
+      <td class="num">${data.fx ? esc(data.fx.totalsText.gross) : won(data.totals.gross)}</td>
     </tr></tfoot>
   </table>
   <div class="tail">
-  <div class="note">본 지급명세서는 VERITAS 정산 확정 데이터를 기준으로 발행되었습니다. 기재된 금액은 세전금액 = 통번역료 + 기타비용 − 차감이며, ${vendorMode ? '외주업체는 원천징수 없이 지급합계 = 공급가 + 부가세입니다.' : '최종 실지급액 = 세전금액 − 원천세공제(세금처리 기준)입니다.'}</div>
+  <div class="note">본 지급명세서는 VERITAS 정산 확정 데이터를 기준으로 발행되었습니다. 기재된 금액은 세전금액 = 통번역료 + 기타비용 − 차감이며, ${vendorMode ? '외주업체는 원천징수 없이 지급합계 = 공급가 + 부가세입니다.' : '최종 실지급액 = 세전금액 − 원천세공제(세금처리 기준)입니다.'}${data.fx ? ` ${esc(data.fx.note)}` : ''}</div>
   <div class="summary">
     ${summaryRows.map(([k, v, deduct]) => `<div class="summary-row${deduct ? ' deduct' : ''}"><span class="sk">${esc(k)}</span><span class="sv">${esc(v)}</span></div>`).join('')}
-    <div class="summary-total"><span class="sk">${vendorMode ? '지급합계' : '최종 실지급액'}</span><span class="sv">${won(data.totals.net)}</span></div>
+    <div class="summary-total"><span class="sk">${vendorMode ? '지급합계' : '최종 실지급액'}</span>${data.fx ? `<span class="sv multi">${esc(data.fx.finalText)}</span>` : `<span class="sv">${won(data.totals.net)}</span>`}</div>
   </div>
   </div>
 </div>
