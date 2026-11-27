@@ -511,7 +511,8 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
             {editMode ? (
               <>
                 {isLegacyOrigin && <LegacyVatNotice quoteId={quote.id} token={token} />}
-                <QuoteItemsEditor items={editItems} onItemsChange={setEditItems} vatType={vatType} products={products} />
+                <QuoteItemsEditor items={editItems} onItemsChange={setEditItems} vatType={vatType} products={products}
+                  multilineMemo={quote?.quoteType === 'b2c_prepaid' || quote?.quoteType === 'prepaid_deduction'} />
                 {/* 수정모드 — 편집 그리드와 동일 폭의 overflow 안에 합계 행을 렌더해 공급가액 컬럼과 정렬.
                     조회모드는 QuoteItemsView 내부에 합계 행이 포함된다. */}
                 <div style={{ overflowX: 'auto', scrollbarWidth: 'thin' }}>

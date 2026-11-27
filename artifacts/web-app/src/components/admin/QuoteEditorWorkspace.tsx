@@ -1433,9 +1433,10 @@ function ServiceFields({ it, update, products }: {
 
 // ─── 견적 항목 Row ────────────────────────────────────────────────────────────
 
-function QuoteItemRow({ it, idx, total, vatType, baseSupply, baseTotal, products, parentOptions, updateItem, removeItem, addItemBelow, moveItem, duplicateItem, productCreate, allowNegativePrice }: {
+function QuoteItemRow({ it, idx, total, vatType, baseSupply, baseTotal, products, parentOptions, updateItem, removeItem, addItemBelow, moveItem, duplicateItem, productCreate, allowNegativePrice, multilineMemo }: {
   it: QuoteItemForm; idx: number; total: number; vatType: VatMode; baseSupply: number; baseTotal: number; products: Product[];
   allowNegativePrice?: boolean;   // 차감 견적서 — 과거 차감내역의 음수 단가(정정·환입) 입력 허용
+  multilineMemo?: boolean;        // 차감 견적서 — 행 비고 여러 줄 입력(줄바꿈 그대로 저장·출력). 일반 견적서는 기존 한 줄 입력 유지
   productCreate?: QuoteProductCreate;
   parentOptions: { lid: string; label: string }[];
   updateItem: (idx: number, p: Partial<QuoteItemForm>) => void;
@@ -1638,12 +1639,22 @@ function QuoteItemRow({ it, idx, total, vatType, baseSupply, baseTotal, products
 
         {/* ⑩ 비고 — 공급가액과 명확히 구분 */}
         <div style={{ borderLeft: '2px solid #e5e7eb', paddingLeft: 14 }}>
+          {multilineMemo ? (
+            <textarea value={it.memo} onChange={e => updateItem(idx, { memo: e.target.value })}
+              onBlur={e => { const v = formatMemoUnitNumbers(e.target.value); if (v !== e.target.value) updateItem(idx, { memo: v }); }}
+              placeholder={MEMO_PLACEHOLDER[it.productType] ?? '비고'} rows={1}
+              data-testid={`qe-memo-${idx}`} aria-label={`${idx + 1}행 비고`}
+              ref={el => { if (el) { el.style.height = 'auto'; el.style.height = `${el.scrollHeight + 2}px`; } }}
+              style={{ ...rinp('100%'), color: C.textPrimary, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.4, overflow: 'hidden', display: 'block' }}
+              title={it.memo || '비고 (선택) — Enter 로 줄바꿈'} />
+          ) : (
           <input value={it.memo} onChange={e => updateItem(idx, { memo: e.target.value })}
             onBlur={e => { const v = formatMemoUnitNumbers(e.target.value); if (v !== e.target.value) updateItem(idx, { memo: v }); }}
             placeholder={MEMO_PLACEHOLDER[it.productType] ?? '비고'}
             data-testid={`qe-memo-${idx}`} aria-label={`${idx + 1}행 비고`}
             style={{ ...rinp('100%'), color: C.textPrimary }}
             title={it.memo || '비고 (선택)'} />
+          )}
           {/* 서비스 그룹 연결 — 부대비용(expense) 행만. 어느 본 서비스의 매출 묶음에 속하는지 지정(수익률 계산용, 정산 불변). */}
           {it.productType === 'expense' && parentOptions.length > 0 && (
             <select value={it.parentLid ?? ''} onChange={e => updateItem(idx, { parentLid: e.target.value || null })}
@@ -1717,9 +1728,10 @@ function CardSectionHeader({ badge, badgeBg, badgeColor, title, hint }: {
 // (Card·CardSectionHeader 는 포함하지 않는다 — 견적='상품정보' / 판매='판매정보' 로 각자 표기)
 /** 상품 검색의 간편등록 연결(견적 편집기만 전달 — 판매관리 수정모드 등은 기존 그대로) */
 type QuoteProductCreate = { canCreate: boolean; onCreate: (idx: number, query: string) => void };
-export function QuoteItemsEditor({ items, onItemsChange, vatType, products, productCreate, allowNegativePrice }: {
+export function QuoteItemsEditor({ items, onItemsChange, vatType, products, productCreate, allowNegativePrice, multilineMemo }: {
   items: QuoteItemForm[];
   allowNegativePrice?: boolean;
+  multilineMemo?: boolean;   // 차감 견적서 행 비고 여러 줄 입력
   onItemsChange: (items: QuoteItemForm[]) => void;
   vatType: VatMode;
   products: Product[];
@@ -1770,7 +1782,7 @@ export function QuoteItemsEditor({ items, onItemsChange, vatType, products, prod
             <QuoteItemRow key={idx} it={it} idx={idx} total={items.length} vatType={vatType} baseSupply={baseSupply} baseTotal={baseTotal} products={products}
               parentOptions={parentOptions}
               updateItem={updateItem} removeItem={removeItem} addItemBelow={addItemBelow} moveItem={moveItem} duplicateItem={duplicateItem}
-              productCreate={productCreate} allowNegativePrice={allowNegativePrice} />
+              productCreate={productCreate} allowNegativePrice={allowNegativePrice} multilineMemo={multilineMemo} />
           ))}
         </div>
       </div>
@@ -3131,7 +3143,7 @@ export function QuoteEditorWorkspace({
             누적 마감 시 편집 차단(pointer-events 무효화 + 흐리게). API에서도 수정 차단됨. */}
         {/* 판매확정 견적도 상품·수량·단가·금액 직접 수정 가능(2026-11) — 금액 변경 시 저장 단계에서 변경 사유 입력(REASON_REQUIRED) */}
         <div style={batchClosed ? { pointerEvents: 'none', opacity: 0.6 } : undefined} aria-disabled={batchClosed} data-testid="quote-items-editor-wrap">
-          <QuoteItemsEditor items={items} onItemsChange={setItems} vatType={vatType} products={products} allowNegativePrice={isPrepaidQuote}
+          <QuoteItemsEditor items={items} onItemsChange={setItems} vatType={vatType} products={products} allowNegativePrice={isPrepaidQuote} multilineMemo={isPrepaidQuote}
             productCreate={{ canCreate: canCreateProduct, onCreate: openQuickCreate }} />
         </div>
       </Card>

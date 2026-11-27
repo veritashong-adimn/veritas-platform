@@ -397,7 +397,9 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
                         <th style={th('단위', 'center', false)}>단위</th>
                         <th style={th('단가', 'right', false)}>단가</th>
                         <th style={th('공급가액', 'right', false)}>공급가액</th>
-                        <th style={th('차감액(VAT 포함)', 'right', true)}>차감액(VAT 포함)</th>
+                        <th style={th('차감액(VAT 포함)', 'right', false)}>차감액(VAT 포함)</th>
+                        {/* 비고 — 차감 사용내역 행에 입력한 비고(일반 견적서 품목 비고와 같은 값·같은 맨 끝 위치) */}
+                        <th style={th('비고', 'left', true)}>비고</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -412,6 +414,7 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
                           <td style={{ padding: '6px', textAlign: 'right', borderBottom: bd, fontSize: 10, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{fmt(item.unitPrice)}</td>
                           <td style={{ padding: '6px', textAlign: 'right', borderBottom: bd, fontSize: 10, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', color: '#374151' }}>{fmt(item.supplyAmount)}</td>
                           <td style={{ padding: '6px', textAlign: 'right', borderBottom: bd, fontSize: 10, fontWeight: 700, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', color: BRAND }}>{fmt(item.totalAmount)}원</td>
+                          <td data-testid={`pdf-prepaid-item-memo-${idx}`} style={{ padding: '6px', borderBottom: bd, fontSize: 10, color: '#6b7280', whiteSpace: 'pre-line', wordBreak: 'break-word', maxWidth: 90, minWidth: 50 }}>{item.memo || ''}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -420,6 +423,7 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
                         <td colSpan={7} style={{ padding: '7px 6px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: BRAND }}>합계</td>
                         <td style={{ padding: '7px 6px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: '#374151', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{fmt(data.supplyTotal)}</td>
                         <td style={{ padding: '7px 6px', textAlign: 'right', fontSize: 11, fontWeight: 900, color: BRAND, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{fmt(data.grandTotal)}원</td>
+                        <td />
                       </tr>
                     </tfoot>
                   </table>
