@@ -12,7 +12,8 @@ import { Card, FilterPill, GhostBtn } from '../ui';
 import { Pagination } from '../ui/Paginator';
 import './readTableView.css';
 import { formatDisplayDate } from '../../lib/dateFormat';
-import { exportSaleCollections, installmentSummary, saleFxText, SALE_STATUS_LABEL, INSTALLMENT_STATUS_LABEL, type SaleCollectionExportRow } from '../../lib/collectionsExcel';
+import { exportSaleCollections, installmentSummary, saleFxText, saleIssueEntries, issueInRange, INVOICE_STATUS_LABEL, SALE_STATUS_LABEL, INSTALLMENT_STATUS_LABEL, type SaleCollectionExportRow } from '../../lib/collectionsExcel';
+import { DateField } from './DatePickerShared';
 import { displayPaymentMethod } from '../../lib/paymentMethodDisplay';
 import { VAT_MODE_LABEL, type VatMode } from '../../lib/quoteTaxType';
 
@@ -41,6 +42,11 @@ type SaleSummary = {
 };
 
 type StatusFilter = 'all' | 'unpaid' | 'partial' | 'completed' | 'overpaid' | 'review';
+// 세금계산서 발행상태 필터(수금상태와 독립 · 복합 적용). 미발행 = 미발행 회차가 있는 판매건(일부발행 포함) — 상단 '세금계산서 미발행' 금액과 같은 대상.
+type IssueFilter = 'all' | 'issued' | 'partial' | 'unissued';
+const ISSUE_FILTERS: { key: IssueFilter; label: string }[] = [
+  { key: 'all', label: '전체' }, { key: 'issued', label: '발행완료' }, { key: 'partial', label: '일부발행' }, { key: 'unissued', label: '미발행' },
+];
 type SourceFilter = 'all' | 'current' | 'legacy';
 type SortKey = 'default' | 'paidRate' | 'receivable' | 'expectedDate';
 const FILTERS: { key: StatusFilter; label: string }[] = [
@@ -84,6 +90,9 @@ export function CollectionsSaleView({ token, onToast, onOpenSalesDetail, onOpenL
   const [filter, setFilter] = useState<StatusFilter>('all');
   const [source, setSource] = useState<SourceFilter>('all');
   const [search, setSearch] = useState('');
+  const [issueFilter, setIssueFilter] = useState<IssueFilter>('all');
+  const [issueFrom, setIssueFrom] = useState('');   // 세금계산서 발행기간(실제 발행일) 시작 YYYY-MM-DD
+  const [issueTo, setIssueTo] = useState('');
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'default', dir: 'desc' });
   const [pg, setPg] = useState({ page: 1, pageSize: 50 });
 
@@ -112,6 +121,11 @@ export function CollectionsSaleView({ token, onToast, onOpenSalesDetail, onOpenL
       if (source !== 'all' && r.source !== source) return false;
       if (filter === 'overpaid') { if (!r.overpaid) return false; }
       else if (filter !== 'all' && r.status !== filter) return false;
+      // 세금계산서 발행상태 — 과거 CRM(발행 여부 미확인)·발행 대상 아님은 발행상태 필터에 포함하지 않는다(전체에서만 조회)
+      if (issueFilter === 'unissued') { if (r.invoiceStatus !== 'unissued' && r.invoiceStatus !== 'partial') return false; }
+      else if (issueFilter !== 'all' && r.invoiceStatus !== issueFilter) return false;
+      // 발행기간 — 발행 대상 회차의 실제 발행일 기준(과거 CRM 원본 발행(예정)일은 실제 발행일이 아니므로 제외)
+      if ((issueFrom || issueTo) && !(r.source === 'current' && r.installments.some((i) => i.invoiceTarget && issueInRange(i.issueDate, issueFrom, issueTo)))) return false;
       if (q) {
         const hay = [r.saleNumber, r.companyName, r.projectTitle, r.pmName].filter(Boolean).join(' ').toLowerCase();
         if (!hay.includes(q)) return false;
@@ -133,14 +147,18 @@ export function CollectionsSaleView({ token, onToast, onOpenSalesDetail, onOpenL
       if (vb == null) return -1;
       return (typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb))) * d;
     });
-  }, [rows, filter, source, search, sort]);
-  useEffect(() => { setPg((v) => ({ ...v, page: 1 })); }, [filter, source, search, sort]);
+  }, [rows, filter, source, search, sort, issueFilter, issueFrom, issueTo]);
+  useEffect(() => { setPg((v) => ({ ...v, page: 1 })); }, [filter, source, search, sort, issueFilter, issueFrom, issueTo]);
+  // 조회 결과의 미발행금액 합계 — 상단 '세금계산서 미발행'과 대조(미발행 필터만 적용 시 일치)
+  const filteredUnissued = useMemo(() => filtered.reduce((s, r) => s + (r.unissuedAmount ?? 0), 0), [filtered]);
   const pageRows = filtered.slice((pg.page - 1) * pg.pageSize, pg.page * pg.pageSize);
   const toggleSort = (key: SortKey) => setSort((s) => (s.key === key
     ? (s.dir === (key === 'expectedDate' ? 'asc' : 'desc') ? { key, dir: key === 'expectedDate' ? 'desc' : 'asc' } : { key: 'default', dir: 'desc' })
     : { key, dir: key === 'expectedDate' ? 'asc' : 'desc' }));
   const sortMark = (key: SortKey) => (sort.key === key ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ' ↕');
-  const reset = () => { setFilter('all'); setSource('all'); setSearch(''); setSort({ key: 'default', dir: 'desc' }); };
+  const reset = () => { setFilter('all'); setSource('all'); setSearch(''); setSort({ key: 'default', dir: 'desc' }); setIssueFilter('all'); setIssueFrom(''); setIssueTo(''); };
+  // 상단 '세금계산서 미발행' 클릭 — 다른 조건을 모두 해제하고 미발행 대상(미발행·일부발행 판매건)만 조회 → 합계가 상단 금액과 일치
+  const showUnissued = () => { reset(); setIssueFilter('unissued'); };
   const openRow = (r: SaleCollectionRow) => {
     if (r.source === 'legacy') { if (r.legacyRowId != null) onOpenLegacyDetail?.(r.legacyRowId); }
     else if (r.projectId != null) onOpenSalesDetail?.(r.projectId);
@@ -156,6 +174,7 @@ export function CollectionsSaleView({ token, onToast, onOpenSalesDetail, onOpenL
     { label: '청구 전 금액', align: 'right', title: '총 판매금액 중 아직 청구행이 없는 금액' },
     { label: '미발행금액', align: 'right', title: '결제방법이 세금계산서인 청구 중 발행일 기록이 없는 금액' },
     { label: '발행 후 입금대기', align: 'right', title: '세금계산서 발행일이 기록된 청구 중 아직 입금되지 않은 금액' },
+    { label: '세금계산서 발행일', title: '청구정보의 실제 세금계산서 발행일(회차별) · 발행 대상인데 발행일이 없으면 미발행 · 과거 CRM 은 원본 발행(예정)일' },
     { label: '입금예정일', sortKey: 'expectedDate', title: '미수금이 남은 청구회차 중 가장 빠른 입금예정일' },
     { label: '최종 입금일' }, { label: '담당PM' },
   ];
@@ -175,7 +194,9 @@ export function CollectionsSaleView({ token, onToast, onOpenSalesDetail, onOpenL
       {summary && (
         <div data-testid="sale-sum-sub" style={{ display: 'flex', flexWrap: 'wrap', gap: 14, margin: '0 0 12px', padding: '7px 12px', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8, fontSize: 12, color: '#4b5563' }}>
           <span title="총 판매금액 중 아직 청구행이 없는 금액(미수금에 포함)">청구 전 금액 <b>{formatWon(summary.unbilled)}</b></span>
-          <span title="세금계산서 청구 중 발행 기록이 없는 금액 — 미수금과 별개">세금계산서 미발행 <b>{formatWon(summary.unissued)}</b></span>
+          <span role="button" tabIndex={0} onClick={showUnissued} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showUnissued(); } }}
+            data-testid="sale-sum-unissued" aria-label="세금계산서 미발행 대상 조회" title="클릭: 세금계산서 미발행 대상 조회(미발행·일부발행 판매건) — 미수금과 별개"
+            style={{ cursor: 'pointer', textDecoration: 'underline', textDecorationStyle: 'dotted', textUnderlineOffset: 3 }}>세금계산서 미발행 <b>{formatWon(summary.unissued)}</b></span>
           <span title="세금계산서 발행 후 아직 입금되지 않은 금액">발행 후 입금대기 <b>{formatWon(summary.issuedAwaiting)}</b></span>
           {summary.overpaid.count > 0 && <span style={{ color: '#dc2626', fontWeight: 600 }}>⚠ 초과입금 {summary.overpaid.count}건 · {formatWon(summary.overpaid.amount)}</span>}
           {summary.overdueCount > 0 && <span style={{ color: '#dc2626' }}>기한경과 {summary.overdueCount}건</span>}
@@ -215,6 +236,18 @@ export function CollectionsSaleView({ token, onToast, onOpenSalesDetail, onOpenL
         </div>
       </div>
 
+      {/* ── 세금계산서 발행상태·발행기간(실제 발행일) — 수금상태 필터·검색과 함께 적용 ── */}
+      <div data-testid="sale-issue-bar" style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: '#6b7280', marginRight: 2 }}>세금계산서</span>
+        {ISSUE_FILTERS.map((f) => (
+          <span key={f.key} data-testid={`sale-issue-filter-${f.key}`}><FilterPill label={f.label} active={issueFilter === f.key} onClick={() => setIssueFilter(f.key)} /></span>
+        ))}
+        <span style={{ fontSize: 12, color: '#6b7280', marginLeft: 8 }}>발행기간</span>
+        <div style={{ width: 132 }}><DateField value={issueFrom} onChange={(v) => setIssueFrom(v || '')} ariaLabel="세금계산서 발행기간 시작" testid="sale-issue-from" style={{ padding: '6px 9px', fontSize: 12, border: '1px solid #e5e7eb', borderRadius: 8, width: '100%' }} /></div>
+        <span style={{ fontSize: 12, color: '#9ca3af' }}>~</span>
+        <div style={{ width: 132 }}><DateField value={issueTo} onChange={(v) => setIssueTo(v || '')} ariaLabel="세금계산서 발행기간 끝" testid="sale-issue-to" style={{ padding: '6px 9px', fontSize: 12, border: '1px solid #e5e7eb', borderRadius: 8, width: '100%' }} /></div>
+      </div>
+
       {loading ? (
         <div style={{ textAlign: 'center', padding: '32px 0', color: '#9ca3af', fontSize: 14 }}>불러오는 중...</div>
       ) : loadError ? (
@@ -225,7 +258,8 @@ export function CollectionsSaleView({ token, onToast, onOpenSalesDetail, onOpenL
         <Card style={{ textAlign: 'center', padding: 32, color: '#9ca3af', fontSize: 14 }}>{rows.length === 0 ? '판매건이 없습니다.' : '조건에 맞는 판매건이 없습니다.'}</Card>
       ) : (
         <Card style={{ padding: 0, overflow: 'hidden' }}>
-          <div style={{ fontSize: 12, color: '#6b7280', padding: '8px 12px', borderBottom: '1px solid #edf0f3' }} data-testid="sale-collections-count">판매건 {filtered.length.toLocaleString()}건</div>
+          <div style={{ fontSize: 12, color: '#6b7280', padding: '8px 12px', borderBottom: '1px solid #edf0f3' }} data-testid="sale-collections-count">판매건 {filtered.length.toLocaleString()}건
+            {issueFilter === 'unissued' && <span data-testid="sale-filtered-unissued" style={{ marginLeft: 10, color: '#7c3aed', fontWeight: 600 }}>· 미발행금액 합계 {formatWon(filteredUnissued)}</span>}</div>
           <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 340px)' }}>
             <table className="veritas-read-table vz-sticky" style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
@@ -288,6 +322,18 @@ export function CollectionsSaleView({ token, onToast, onOpenSalesDetail, onOpenL
                       <td style={{ ...tdNum, color: (r.unbilledAmount ?? 0) > 0 ? '#b45309' : '#9ca3af' }}>{r.unbilledAmount == null ? '-' : r.unbilledAmount > 0 ? formatWon(r.unbilledAmount) : '0'}</td>
                       <td style={{ ...tdNum, color: (r.unissuedAmount ?? 0) > 0 ? '#7c3aed' : '#9ca3af' }}>{r.unissuedAmount == null ? '-' : r.unissuedAmount > 0 ? formatWon(r.unissuedAmount) : '0'}</td>
                       <td style={{ ...tdNum, color: (r.issuedAwaitingAmount ?? 0) > 0 ? '#0369a1' : '#9ca3af' }}>{r.issuedAwaitingAmount == null ? '-' : r.issuedAwaitingAmount > 0 ? formatWon(r.issuedAwaitingAmount) : '0'}</td>
+                      <td data-testid={`sale-issue-${r.rowKey}`} data-invoice-status={r.invoiceStatus ?? undefined} style={{ ...td, whiteSpace: 'nowrap' }}
+                        title={isLegacy ? (r.legacyIssueDate ? '과거 CRM 원본 세금계산서발행(예정)일 — 실제 발행 여부 미확인' : undefined) : r.invoiceStatus === 'na' ? '세금계산서 발행 대상 아님' : r.invoiceStatus ? INVOICE_STATUS_LABEL[r.invoiceStatus] : undefined}>
+                        {(() => {
+                          const es = saleIssueEntries(r);
+                          if (!es.length) return <span style={{ color: '#9ca3af' }}>-</span>;
+                          return es.map((e, k) => (
+                            <div key={k} style={{ color: isLegacy ? '#9ca3af' : e.unissued ? '#dc2626' : '#374151', fontWeight: e.unissued ? 700 : 400, fontSize: 12 }}>
+                              {e.seq != null ? <span style={{ color: '#9ca3af', fontWeight: 400 }}>{e.seq}차 </span> : null}{e.text}
+                            </div>
+                          ));
+                        })()}
+                      </td>
                       <td style={{ ...td, whiteSpace: 'nowrap', color: r.overdue ? '#dc2626' : '#6b7280', fontWeight: r.overdue ? 700 : 400 }}>{fmtDate(r.nextExpectedDate)}{r.overdue ? ' ⚠' : ''}</td>
                       <td style={{ ...td, whiteSpace: 'nowrap', color: '#6b7280' }}>{fmtDate(r.lastPaidDate)}</td>
                       <td style={{ ...td, whiteSpace: 'nowrap' }}>{r.pmName ?? '-'}</td>

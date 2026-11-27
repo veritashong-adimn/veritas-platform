@@ -31,6 +31,12 @@ function fxKrw(amount: number, fx: FxSummary) {
   return { paid: fx.paidKrwForSale, receivable, status: FX_TO_ROW_STATUS[fx.status] };
 }
 
+// 세금계산서 발행상태(조회 전용 파생값 — 저장하지 않음). 발행 대상 = 결제방법이 세금계산서·영세율 계산서·면세 계산서인 청구행.
+//  · issued: 발행일 기록 있음 · unissued: 발행 대상인데 발행일 없음 · na: 발행 대상 아님(카드·외화입금·해외 인보이스 등)
+//  · 과거 CRM 행은 'unknown'(원본 '세금계산서발행(예정)일'만 있어 실제 발행 여부 미확인 — 미발행으로 분류하지 않음)
+type InvoiceStatus = "issued" | "unissued" | "na";
+const invoiceStatusOf = (method: string | null, issueDate: string | null): InvoiceStatus =>
+  !isTaxInvoiceMethod(method) ? "na" : issueDate ? "issued" : "unissued";
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
 
@@ -188,6 +194,8 @@ router.get("/admin/collections", ...adminGuard, requireStaffPermission(["payment
         billingCompanyName: r.billing_company_name,
         paymentMethod: r.payment_method,
         issueDate: r.issue_date,
+        invoiceTarget: isTaxInvoiceMethod(r.payment_method),           // 세금계산서 발행 대상(조회 파생값)
+        invoiceStatus: invoiceStatusOf(r.payment_method, r.issue_date) as InvoiceStatus | "unknown",
         expectedDate: r.expected_date,
         lastPaidDate,
         amount,
@@ -276,7 +284,7 @@ export type SalePayRow = {
   fx?: FxSummary | null;   // 외화 청구회차 요약(라우트에서 loadFxSummaries 로 채움)
 };
 // 발행 대상 — 세금계산서 · 영세율 계산서 · 면세 계산서(청구정보 결제방법, web-app lib/paymentSplit 과 동일 규칙)
-const isTaxInvoiceMethod = (m: string | null) => ["세금계산서", "영세율계산서", "면세계산서"].includes((m ?? "").replace(/\s/g, ""));
+function isTaxInvoiceMethod(m: string | null) { return ["세금계산서", "영세율계산서", "면세계산서"].includes((m ?? "").replace(/\s/g, "")); }
 
 // 판매건 1건의 수금 집계(순수 함수 — DB 접근 없음). 위 규칙의 단일 구현.
 export function summarizeSaleCollection(b: SaleBaseRow, rows: SalePayRow[], today: string) {
@@ -313,6 +321,10 @@ export function summarizeSaleCollection(b: SaleBaseRow, rows: SalePayRow[], toda
     };
   });
   const fxReview = installments.filter((i) => i.fx?.status === "review");
+  // 판매건 세금계산서 발행상태 — 발행 대상 회차 기준: 모두 발행 → issued / 일부 → partial / 모두 미발행 → unissued / 대상 없음 → na
+  const inv = installments.filter((i) => i.invoiceTarget);
+  const invIssued = inv.filter((i) => !!i.issueDate).length;
+  const invoiceStatus: "issued" | "partial" | "unissued" | "na" | "unknown" = !inv.length ? "na" : invIssued === inv.length ? "issued" : invIssued === 0 ? "unissued" : "partial";
   const receivable = Math.max(saleTotal - paidTotal, 0);
   const status: "unpaid" | "partial" | "completed" = paidTotal <= 0 && saleTotal > 0 ? "unpaid" : paidTotal < saleTotal ? "partial" : "completed";
   return {
@@ -324,6 +336,7 @@ export function summarizeSaleCollection(b: SaleBaseRow, rows: SalePayRow[], toda
     status, overpaid: paidTotal > saleTotal, overpaidAmount: Math.max(paidTotal - saleTotal, 0),
     billedAmount: billed, unbilledAmount: Math.max(saleTotal - billed, 0),
     invoiceTargetAmount: invoiceTarget, unissuedAmount: unissued, issuedAwaitingAmount: issuedAwaiting,
+    invoiceStatus, legacyIssueDate: null as string | null,
     installments, lastPaidDate, nextExpectedDate, overdue: overdue && receivable > 0,
     pmName: b.pm_name,
     reviewReason: (fxReview.length ? `외화 입금 확인 필요: ${[...new Set(fxReview.flatMap((i) => i.fx!.reviewReasons))].join(", ")}` : null) as string | null,
@@ -391,6 +404,7 @@ router.get("/admin/collections/sales", ...adminGuard, requireStaffPermission(["p
       overpaid: false, overpaidAmount: 0,
       billedAmount: null, unbilledAmount: null,
       invoiceTargetAmount: null, unissuedAmount: null, issuedAwaitingAmount: null,
+      invoiceStatus: "unknown" as const, legacyIssueDate: l.issueDate,   // 과거 CRM 원본 발행(예정)일 — 발행 여부 미확인
       installments: [], lastPaidDate: l.lastPaidDate, nextExpectedDate: null, overdue: false,
       pmName: l.pmName, reviewReason: l.reviewReason, parsedDepositAmount: l.parsedDepositAmount, saleDate: l.saleDate,
     }));
@@ -472,6 +486,7 @@ async function loadLegacyCollections() {
       billingCompanyId: null, billingCompanyName: x.client,
       paymentMethod: null,
       issueDate: x.invoice_date,         // 원본 '세금계산서발행(예정)일'
+      invoiceTarget: false, invoiceStatus: "unknown",   // 실제 발행 여부 미확인 — 미발행으로 분류하지 않음
       expectedDate: null,                // 원본에 입금예정일 없음(추정 금지)
       lastPaidDate: x.deposit_date,
       amount,

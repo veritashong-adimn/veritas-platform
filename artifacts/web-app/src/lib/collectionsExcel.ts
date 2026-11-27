@@ -17,6 +17,8 @@ export interface CollectionExportRow {
   billingCompanyName: string | null;
   paymentMethod: string | null;
   issueDate: string | null;
+  invoiceTarget?: boolean;           // 세금계산서 발행 대상(서버 파생값)
+  invoiceStatus?: 'issued' | 'unissued' | 'na' | 'unknown';   // 발행완료 · 미발행 · 대상 아님 · 과거 CRM(발행 여부 미확인)
   expectedDate: string | null;
   lastPaidDate: string | null;
   amount: number;
@@ -60,7 +62,8 @@ const COLLECTION_COLUMNS: ExcelColumn<CollectionExportRow>[] = [
   { header: '프로젝트명', value: (r) => r.projectTitle ?? '' },
   { header: '청구업체', value: (r) => r.billingCompanyName ?? '' },
   { header: '결제방법', value: (r) => displayPaymentMethod(r.paymentMethod) },
-  { header: '발행일', value: 'issueDate', type: 'date' },
+  // 세금계산서 발행일 — 실제 발행일(청구정보). 발행 대상인데 발행일 없으면 '미발행'. 과거 CRM 은 원본 발행(예정)일 그대로.
+  { header: '세금계산서 발행일', value: (r) => (r.invoiceStatus === 'unissued' ? '미발행' : r.issueDate ?? ''), type: 'date' },
   { header: '입금예정일', value: 'expectedDate', type: 'date' },
   { header: '최근입금일', value: 'lastPaidDate', type: 'date' },
   { header: '청구금액', value: (r) => num(r.amount), type: 'number' },
@@ -111,7 +114,9 @@ export interface SaleCollectionExportRow {
   status: 'unpaid' | 'partial' | 'completed' | 'review';
   overpaid: boolean;
   overpaidAmount: number;
-  installments: { sequence: number; amount: number; status: 'scheduled' | 'partial' | 'completed' | 'review' | 'minus'; fx?: FxSummary | null }[];
+  installments: { sequence: number; amount: number; status: 'scheduled' | 'partial' | 'completed' | 'review' | 'minus'; fx?: FxSummary | null; issueDate?: string | null; invoiceTarget?: boolean }[];
+  invoiceStatus?: 'issued' | 'partial' | 'unissued' | 'na' | 'unknown';   // 판매건 세금계산서 발행상태(서버 파생값)
+  legacyIssueDate?: string | null;   // 과거 CRM 원본 '세금계산서발행(예정)일'(발행 여부 미확인)
   unbilledAmount: number | null;
   unissuedAmount: number | null;
   issuedAwaitingAmount: number | null;
@@ -135,6 +140,25 @@ export const saleFxText = (r: Pick<SaleCollectionExportRow, 'installments'>) => 
       + ` · 미수 ${fmtForeign(cur, addScaled(fs.map(f => f.receivableForeign))).slice(cur.length + 1)} · 원화 환산 입금 ${krw.toLocaleString('ko-KR')}원${unconf ? `(환율 미확정 ${unconf}건 제외)` : ''}`;
   }).join(' / ');
 };
+// ─── 세금계산서 발행일·발행상태(수금현황 화면·Excel 공용 — 서버 파생값 표시만, 재계산 없음) ───────────────
+export const fmtIssueDate = (d: string | null | undefined) => (d ? String(d).slice(0, 10).replace(/-/g, '.') : '');
+/** 판매건의 발행 대상 회차별 발행일 — [{ seq, text, unissued }]. 회차가 2개 이상이면 'N차' 표기. 과거 CRM 은 원본 발행(예정)일 1건. */
+export const saleIssueEntries = (r: Pick<SaleCollectionExportRow, 'installments' | 'source' | 'legacyIssueDate'>) => {
+  if (r.source === 'legacy') return r.legacyIssueDate ? [{ seq: null as number | null, text: fmtIssueDate(r.legacyIssueDate), unissued: false }] : [];
+  const multi = r.installments.length > 1;
+  return r.installments.filter((i) => i.invoiceTarget).map((i) => ({
+    seq: multi ? i.sequence : null, text: i.issueDate ? fmtIssueDate(i.issueDate) : '미발행', unissued: !i.issueDate,
+  }));
+};
+export const saleIssueText = (r: Pick<SaleCollectionExportRow, 'installments' | 'source' | 'legacyIssueDate'>) =>
+  saleIssueEntries(r).map((e) => (e.seq != null ? `${e.seq}차 ${e.text}` : e.text)).join(' / ');
+export const INVOICE_STATUS_LABEL: Record<string, string> = { issued: '발행완료', partial: '일부발행', unissued: '미발행', na: '발행 대상 아님', unknown: '확인 불가(과거 CRM)' };
+/** 발행기간(실제 발행일) 포함 여부 — from·to 는 YYYY-MM-DD(빈 값이면 제한 없음) */
+export const issueInRange = (d: string | null | undefined, from: string, to: string) => {
+  if (!d) return false;
+  const v = String(d).slice(0, 10);
+  return (!from || v >= from) && (!to || v <= to);
+};
 /** 청구회차 요약 — "1차 완료 / 2차 대기" */
 export const installmentSummary = (r: Pick<SaleCollectionExportRow, 'installments'>) =>
   r.installments.map((i) => `${i.sequence}차 ${INSTALLMENT_STATUS_LABEL[i.status] ?? i.status}`).join(' / ');
@@ -155,6 +179,9 @@ const SALE_COLUMNS: ExcelColumn<SaleCollectionExportRow>[] = [
   { header: '청구 전 금액', value: (r) => num(r.unbilledAmount), type: 'number' },
   { header: '미발행금액', value: (r) => num(r.unissuedAmount), type: 'number' },
   { header: '발행 후 입금대기', value: (r) => num(r.issuedAwaitingAmount), type: 'number' },
+  // 세금계산서 발행일 — 발행 대상 회차별 실제 발행일(미발행은 '미발행'), 과거 CRM 은 원본 발행(예정)일
+  { header: '세금계산서 발행일', value: (r) => saleIssueText(r) },
+  { header: '세금계산서 발행상태', value: (r) => (r.invoiceStatus ? INVOICE_STATUS_LABEL[r.invoiceStatus] ?? r.invoiceStatus : '') },
   { header: '입금예정일', value: 'nextExpectedDate', type: 'date' },
   { header: '최종 입금일', value: 'lastPaidDate', type: 'date' },
   { header: '담당PM', value: (r) => r.pmName ?? '' },
