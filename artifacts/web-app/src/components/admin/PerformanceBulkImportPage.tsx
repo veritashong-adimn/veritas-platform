@@ -1,3 +1,4 @@
+import { canExport as canExportData } from '../../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import './readTableView.css';
 import { api } from '../../lib/constants';
@@ -209,10 +210,10 @@ function PerformanceBulkImportInner({ projectId, token, meta, onClose, onToast, 
           <Card style={{ padding: 20, marginBottom: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>1. 템플릿 다운로드 → 작성 → 업로드</div>
-              <GhostBtn onClick={doTemplate} disabled={downloadingTpl} style={{ fontSize: 12, padding: '6px 12px' }}
+              {canExportData() && (<GhostBtn onClick={doTemplate} disabled={downloadingTpl} style={{ fontSize: 12, padding: '6px 12px' }}
                 data-testid="perf-import-template" aria-label="수행자배정 템플릿 다운로드">
                 {downloadingTpl ? '준비 중…' : '⬇ 템플릿 다운로드(판매품목 채움)'}
-              </GhostBtn>
+              </GhostBtn>)}
             </div>
             <p style={{ fontSize: 12, color: '#9ca3af', margin: '0 0 12px' }}>
               현재 판매의 판매품목이 미리 채워진 <b>단일 시트(수행자배정)</b> 템플릿을 내려받아, 통번역사·금액·세금처리를 입력한 뒤 업로드하세요.

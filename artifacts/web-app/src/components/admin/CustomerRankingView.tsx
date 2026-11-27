@@ -5,6 +5,7 @@
  *  · 동일 기준값 공동 순위(1,1,3). 검색은 표시 범위만 좁히고 순위는 유지.
  *  · Excel 은 현재 조회 조건 그대로 전체 행을 서버에서 받아 생성.
  */
+import { canExport as canExportData } from '../../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
 import React, { useCallback, useEffect, useState } from 'react';
 import { api } from '../../lib/constants';
 import { formatWon } from '../../lib/utils';
@@ -139,9 +140,9 @@ export function CustomerRankingView({ token, onToast, onOpenCustomer }: { token:
           {loading ? '조회 중...' : '조회'}
         </PrimaryBtn>
         <GhostBtn onClick={() => { setForm(DEFAULT); setApplied(DEFAULT); setPage(1); }} style={{ padding: '7px 12px', fontSize: 13 }} data-testid="ranking-reset" aria-label="조회 조건 초기화">초기화</GhostBtn>
-        <GhostBtn onClick={downloadExcel} disabled={exporting || !data?.total} style={{ padding: '7px 12px', fontSize: 13, marginLeft: 'auto' }} data-testid="ranking-excel" aria-label="고객 순위 Excel 다운로드">
+        {canExportData() && (<GhostBtn onClick={downloadExcel} disabled={exporting || !data?.total} style={{ padding: '7px 12px', fontSize: 13, marginLeft: 'auto' }} data-testid="ranking-excel" aria-label="고객 순위 Excel 다운로드">
           {exporting ? '생성 중...' : 'Excel 다운로드'}
-        </GhostBtn>
+        </GhostBtn>)}
       </div>
 
       {data && (

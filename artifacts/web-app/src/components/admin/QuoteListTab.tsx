@@ -1,3 +1,4 @@
+import { canExport as canExportData } from '../../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
 import React, { useState, useEffect, useCallback } from 'react';
 import { chainStatusMap, QUOTE_CHAIN_STATUS_LABEL, QUOTE_CHAIN_STATUS_COLOR, QUOTE_CHAIN_STATUS_TITLE, type QuoteChainStatus } from '../../lib/quoteChainStatus';
 import { api } from '../../lib/constants';
@@ -594,11 +595,11 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
           <span style={listSubtitle}>검색 및 필터</span>
           <div style={listGroup}>
-            <button onClick={handleExportQuotes} disabled={exporting}
+            {canExportData() && (<button onClick={handleExportQuotes} disabled={exporting}
               data-testid="quote-excel-export-btn" aria-label="견적 Excel 다운로드"
               style={listBtnGhost(exporting)}>
               {exporting ? '내보내는 중…' : 'Excel 다운로드'}
-            </button>
+            </button>)}
             {onOpenBulkImport && (
               <button onClick={onOpenBulkImport}
                 data-testid="quote-bulk-import-btn" aria-label="견적 대량등록"

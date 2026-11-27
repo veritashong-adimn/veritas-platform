@@ -14,7 +14,7 @@ import {
 import { eq, and, ilike, ne, or, sql, desc, gte, lte, inArray, isNotNull, isNull } from "drizzle-orm";
 import { normalizeCompanyName, vendorIdentityKeys } from "../lib/normalizeCompany";
 import { buildTranslatorAliasValues, ensureDefaultTranslatorAlias } from "../lib/translatorAlias";
-import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
+import { requireAuth, requireRole, requirePermission, requireAdminExport } from "../middlewares/auth";
 import { getPermissionsForRole } from "../lib/rbac";
 import { encrypt, decrypt, maskResidentNumber } from "../lib/encrypt";
 import { autoLinkTranslatorByRrn, type AutoLinkResult } from "../lib/autoLinkPastCrm";
@@ -895,7 +895,7 @@ const excelUpload = multer({
 // ─── 샘플 엑셀 다운로드 ─────────────────────────────────────────────────────
 // [DEPRECATED] 구식 통번역사 엑셀 경로. UI 접근은 제거됨(공통 Excel Engine /admin/translators/bulk-import 로 일원화).
 //   남은 호출부 없음(2026-09 기준). 백엔드 라우트는 안전을 위해 즉시 삭제하지 않고 미참조 상태로 유지한다.
-router.get("/admin/translators/sample-excel", ...adminGuard, (_req, res) => {
+router.get("/admin/translators/sample-excel", ...adminGuard, requireAdminExport, (_req, res) => {
   // ■ 최신 표준 컬럼 순서 (21열)
   const headers = [
     "이름", "이메일", "휴대폰",

@@ -1,3 +1,4 @@
+import { canExport as canExportData } from '../../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
 import React, { useState, useCallback, useRef } from 'react';
 import { CompanyChangeAnalysis } from './CompanyChangeAnalysis';
 import { TranslatorImportApprovalPanel } from './TranslatorImportApprovalPanel';
@@ -818,11 +819,11 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
           <Card style={{ padding: 20, marginBottom: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>1. 파일 업로드</div>
-              <GhostBtn onClick={() => { (entity === 'company' ? downloadCompanyTemplate : entity === 'translator' ? downloadTranslatorTemplate : entity === 'quote' ? downloadQuoteTemplate : downloadContactTemplate)(); onToast('대량등록 템플릿을 다운로드했습니다.'); }}
+              {canExportData() && (<GhostBtn onClick={() => { (entity === 'company' ? downloadCompanyTemplate : entity === 'translator' ? downloadTranslatorTemplate : entity === 'quote' ? downloadQuoteTemplate : downloadContactTemplate)(); onToast('대량등록 템플릿을 다운로드했습니다.'); }}
                 style={{ fontSize: 12, padding: '6px 12px' }}
                 data-testid="bulk-import-template-download" aria-label="대량등록 템플릿 다운로드">
                 ⬇ 템플릿 다운로드
-              </GhostBtn>
+              </GhostBtn>)}
             </div>
             <p style={{ fontSize: 12, color: '#9ca3af', margin: '0 0 12px' }}>
               {entity === 'company'

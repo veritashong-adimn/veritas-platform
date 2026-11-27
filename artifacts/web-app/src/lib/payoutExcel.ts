@@ -12,6 +12,7 @@
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore
 import XLSX from 'xlsx-js-style';
+import { writeWorkbookFile } from './exportAccess';   // Excel 저장 — 관리자만(공통 기준)
 
 export type ExcelCellType = 'text' | 'number';
 export interface ExcelColumn {
@@ -84,7 +85,7 @@ export function downloadTableExcel(opts: {
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, sheetName);
-  XLSX.writeFile(wb, filename);
+  writeWorkbookFile(XLSX, wb, filename);
 }
 
 // 파일명용 오늘 날짜 YYYYMMDD (로컬/KST 표시 기준).
@@ -206,5 +207,5 @@ export function downloadStatementExcel(opts: {
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, sheetName);
-  XLSX.writeFile(wb, filename);
+  writeWorkbookFile(XLSX, wb, filename);
 }

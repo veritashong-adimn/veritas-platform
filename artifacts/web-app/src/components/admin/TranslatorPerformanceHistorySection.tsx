@@ -2,6 +2,7 @@
 //   · 데이터: GET /admin/performances/history-by-translator (Master 연결 기준 · 원본/금액 불변).
 //   · 기본 정렬 최근 수행일 순. 날짜·거래처·상품 검색 · 페이지네이션 · Excel 다운로드.
 //   · 원본에 없는 정보는 표시하지 않음(빈 값은 '-'). zebra(흰/연회색 교차)는 veritas-read-table 사용.
+import { canExport as canExportData } from '../../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
 import React, { useCallback, useEffect, useState } from 'react';
 import { api } from '../../lib/constants';
 import { Pagination } from '../ui/Paginator';
@@ -184,7 +185,7 @@ export function TranslatorPerformanceHistorySection({ translatorId, token, onToa
         <input style={{ ...inp, minWidth: 130 }} placeholder="상품/업무" value={product} onChange={e => setProduct(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') search(); }} aria-label="상품/업무 검색" data-testid="tph-product" />
         <button style={btn(true)} onClick={search} disabled={loading} data-testid="tph-search">{loading ? '조회 중…' : '조회'}</button>
         <button style={btn()} onClick={reset} data-testid="tph-reset">초기화</button>
-        <button style={{ ...btn(), background: '#059669', color: '#fff' }} onClick={exportExcel} disabled={loading || (pg.total === 0)} data-testid="tph-excel">Excel 다운로드</button>
+        {canExportData() && (<button style={{ ...btn(), background: '#059669', color: '#fff' }} onClick={exportExcel} disabled={loading || (pg.total === 0)} data-testid="tph-excel">Excel 다운로드</button>)}
       </div>
 
       {/* 동일인 조회 링크 안내 — 대표 승인/병합기록 근거로 비활성 Master 과거이력을 조회 표시(물리 병합 아님) */}

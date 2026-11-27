@@ -1,3 +1,4 @@
+import { canExport as canExportData } from '../../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { formatDisplayDate } from '../../lib/dateFormat';
 import {
@@ -936,12 +937,12 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
       {salesRange === "current" && (
       <Section title={`전체 판매건 (${projects.length})`} action={
         <div style={{ display: "flex", gap: 8 }}>
-          <button type="button" onClick={handleExportProjects} style={listBtnGhost()} data-testid="sales-csv-export-btn" aria-label="판매 CSV 내보내기">⬇ CSV 내보내기</button>
-          <button type="button" onClick={handleExportSalesExcel} disabled={excelExporting}
+          {canExportData() && (<button type="button" onClick={handleExportProjects} style={listBtnGhost()} data-testid="sales-csv-export-btn" aria-label="판매 CSV 내보내기">⬇ CSV 내보내기</button>)}
+          {canExportData() && (<button type="button" onClick={handleExportSalesExcel} disabled={excelExporting}
             data-testid="sales-excel-export-btn" aria-label="판매 Excel 다운로드"
             style={listBtnGhost(excelExporting)}>
             {excelExporting ? "내보내는 중…" : "⬇ Excel 다운로드"}
-          </button>
+          </button>)}
         </div>
       }>
         {/* 필터 영역 (sticky) */}

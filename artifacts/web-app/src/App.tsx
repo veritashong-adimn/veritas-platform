@@ -3,6 +3,7 @@ import { User, NavPage, saveSession, clearSession, loadSession, getDefaultPage, 
 import { IdleLogoutGuard } from "./components/shared/IdleLogoutGuard";
 import { fallbackIdleMinutes, idlePhase, sessionKeyOf } from "./lib/idleTimer";
 import { idleStore, SESSION_ENDED_EVENT } from "./lib/sessionGuard";
+import { setExportAllowed, useCanExport } from "./lib/exportAccess";
 import { Card, GhostBtn } from "./components/ui";
 import { ConfirmHost } from "./components/ui/confirmDialog";
 import { Navbar } from "./components/shared/Navbar";
@@ -76,6 +77,8 @@ function AppInner() {
   const [page, setPage] = useState<NavPage>("dashboard");
   // 미사용 자동 로그아웃 시간(분) — 서버 값 우선(관리자 60·직원 30), 받기 전에는 역할 기본값
   const [idleMinutes, setIdleMinutes] = useState<number | null>(null);
+  // Excel·CSV 출력 권한 변경(서버 canExport 수신) 시 화면 전체를 다시 그려 출력 버튼 표시를 맞춘다(버튼은 canExport() 로 판정)
+  useCanExport();
   const [logoutNotice] = useState(() => takeLogoutReason());   // 자동 로그아웃 직후 로그인 화면 안내(1회)
 
   // 최신 권한·역할을 서버에서 새로고침 — 역할관리에서 권한을 바꾸거나 사용자에게 역할을 지정한 뒤
@@ -110,6 +113,7 @@ function AppInner() {
         if (roleChanged) setUser(nextUser);
         saveSession(current.token, nextUser, d.permissions);
         if (d.idleTimeoutMinutes !== undefined) { saveIdleMinutes(d.idleTimeoutMinutes); setIdleMinutes(d.idleTimeoutMinutes ?? null); }
+        setExportAllowed(d.canExport === true);   // Excel·CSV 출력 — 서버 판정(관리자만)
       })
       .catch(() => {});
   }, []);
@@ -124,6 +128,7 @@ function AppInner() {
     }
     if (session) {
       setIdleMinutes(loadIdleMinutes() ?? fallbackIdleMinutes(session.user.role));
+      setExportAllowed(session.user.role === "admin");   // 서버 응답(canExport) 전 표시 기준 — refreshPermissions 에서 확정
       setToken(session.token);
       setUser(session.user);
       setPermissions(session.permissions);
@@ -142,6 +147,8 @@ function AppInner() {
     saveSession(t, u, p);
     const min = idleMin !== undefined ? idleMin : fallbackIdleMinutes(u.role);
     saveIdleMinutes(min); setIdleMinutes(min ?? null);
+    setExportAllowed(u.role === "admin");   // 아래 권한 재조회(canExport)로 확정
+    setTimeout(refreshPermissions, 0);
     setToken(t);
     setUser(u);
     setPermissions(p);

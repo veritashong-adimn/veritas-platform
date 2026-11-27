@@ -1,3 +1,4 @@
+import { canExport as canExportData } from '../../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
 import React, { useState, useCallback, useEffect } from 'react';
 import { formatDisplayDate } from '../../lib/dateFormat';
 import { formatWon } from "@/lib/utils";
@@ -363,10 +364,10 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
         (
           <div style={{ display: "flex", gap: 8 }}>
             {/* Excel 다운로드 — 목록 조회 권한(현재 화면 진입 권한)으로 충분. 전체 매칭 rows 내보내기. */}
-            <GhostBtn onClick={handleExportExcel} disabled={exporting} style={{ fontSize: 13, padding: "7px 14px" }}
+            {canExportData() && (<GhostBtn onClick={handleExportExcel} disabled={exporting} style={{ fontSize: 13, padding: "7px 14px" }}
               data-testid="company-excel-export-btn" aria-label="거래처 Excel 다운로드">
               {exporting ? "내보내는 중…" : "Excel 다운로드"}
-            </GhostBtn>
+            </GhostBtn>)}
             {hasPerm("company.create") && (
               <>
                 <PrimaryBtn onClick={() => navigate(companyPaths.new)} style={{ fontSize: 13, padding: "7px 14px" }}

@@ -5,6 +5,7 @@
 //  · 금액(amount)은 payout_transfers snapshot 그대로 표시 — 정산 재계산 없음(§2·§14).
 //  · 계좌번호는 서버가 마스킹한 값만 수신(전체 계좌번호 미수신, §3·§13).
 // ─────────────────────────────────────────────────────────────────────────────
+import { canExport as canExportData } from '../../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { formatDisplayDate, formatLabelDates } from '../../lib/dateFormat';
 import { api } from '../../lib/constants';
@@ -296,7 +297,7 @@ export default function PayoutExecutionModal({ token, round, onToast, onClose, c
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               {!isPaid && canTransfer && <GhostBtn onClick={reverifyAll} disabled={busy || genBusy} data-testid="payout-reverify-all" style={{ fontSize: 12, padding: '7px 14px' }}>전체 재검증</GhostBtn>}
-              {canTransfer && <PrimaryBtn
+              {canTransfer && (canExportData() ? <PrimaryBtn
                 onClick={generateIbkFile}
                 disabled={!gate?.canGenerateFile || busy || genBusy}
                 data-testid="payout-ibk-file"
@@ -304,7 +305,7 @@ export default function PayoutExecutionModal({ token, round, onToast, onClose, c
                 style={{ fontSize: 12, padding: '7px 16px' }}
               >
                 {genBusy ? '생성 중…' : '📥 IBK 대량이체 파일 생성'}
-              </PrimaryBtn>}
+              </PrimaryBtn> : null)}
             </div>
           </div>
 

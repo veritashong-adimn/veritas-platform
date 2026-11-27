@@ -1,6 +1,7 @@
 // ─── 과거 CRM 자료 (Legacy CRM Archive Lite) — C-4A(Import) + C-4B(조회/검색/상세) ─
 // 기존 CRM Excel 을 "원본 그대로" 보존·조회. Current Master 를 생성/통합하지 않는다.
 // 한 화면 안에서 [자료 조회](기본) / [Excel 등록] 모드로 구분. 검색은 server-side pagination.
+import { canExport as canExportData } from '../../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { api } from '../../lib/constants';
 import { formatAmountDisplay } from '../../lib/utils';
@@ -349,8 +350,8 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
               {showSnapshots ? '스냅샷 이력 닫기' : '과거 스냅샷'}
             </button>
             {/* (C-4I-d) Excel 다운로드 — 현재 페이지가 아니라 일치하는 전체 행을 내려받는다. */}
-            <button style={{ ...btn(false), background: '#047857', color: '#fff' }} data-testid="archive-download-btn"
-                    onClick={openDownload} aria-label="Excel 다운로드">↓ Excel 다운로드</button>
+            {canExportData() && (<button style={{ ...btn(false), background: '#047857', color: '#fff' }} data-testid="archive-download-btn"
+                    onClick={openDownload} aria-label="Excel 다운로드">↓ Excel 다운로드</button>)}
           </div>
         )}
       </div>

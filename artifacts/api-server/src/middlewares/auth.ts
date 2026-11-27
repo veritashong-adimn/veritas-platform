@@ -4,6 +4,7 @@ import { getPermissionsForRole } from "../lib/rbac";
 import { db, usersTable, rolesTable, userSessionsTable } from "@workspace/db";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { idleTimeoutMinutes, checkSession } from "../lib/idlePolicy";
+import { isAdminAccount } from "../lib/adminTier";
 
 // 서명 키 — 운영(NODE_ENV=production)에서는 환경변수 JWT_SECRET 만 사용한다. 없으면 공개된 개발용 기본키로 동작하지 않고
 //   토큰 발급·인증을 모두 거부한다(fail-closed: 개발용 키로 만든 토큰이 운영 인증을 통과하는 일을 원천 차단).
@@ -134,7 +135,16 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
 
   // 역할·RBAC 역할(roleId)·이메일은 토큰 발급 시점 값이 아니라 현재 DB 값을 쓴다.
   //   로그인 이후 관리자가 역할을 지정·변경해도 재로그인 없이 다음 요청부터 화면(/auth/permissions)과 API 권한에 함께 반영된다.
-  req.user = { id: payload.id, email: account.email, role: account.role as UserRole, roleId: account.roleId ?? null, sessionId: payload.sessionId, idleTimeoutMinutes: idleMin };
+  req.user = { id: payload.id, email: account.email, role: account.role as UserRole, roleId: account.roleId ?? null, sessionId: payload.sessionId, idleTimeoutMinutes: idleMin, isAdmin: isAdminAccount(account.role, account.roleName) };
+  next();
+}
+
+// Excel·CSV 출력·다운로드 — 관리자(최고관리자·일반 관리자)만 허용하는 공통 기준(lib/adminTier). PM·직원·재무·게스트·열람 → 403.
+//   서버가 Excel·CSV 파일을 만들거나 Excel 작성용 자료만 내려주는 모든 API 에 requireAuth 뒤에 붙인다(신규 출력 기능도 동일하게 사용).
+export const EXPORT_FORBIDDEN = { error: "Excel·CSV 출력·다운로드는 관리자만 사용할 수 있습니다.", code: "EXPORT_ADMIN_ONLY" } as const;
+export function requireAdminExport(req: Request, res: Response, next: NextFunction): void {
+  if (!req.user) { res.status(401).json({ error: "인증이 필요합니다." }); return; }
+  if (!req.user.isAdmin) { res.status(403).json(EXPORT_FORBIDDEN); return; }
   next();
 }
 

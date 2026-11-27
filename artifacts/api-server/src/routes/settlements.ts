@@ -4,7 +4,7 @@ import {
   translatorSensitiveTable,
 } from "@workspace/db";
 import { eq, inArray, and, lte, sql } from "drizzle-orm";
-import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
+import { requireAuth, requireRole, requirePermission, requireAdminExport } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
 
 const router: IRouter = Router();
@@ -316,7 +316,7 @@ router.post("/admin/settlements/bulk-pay", ...adminGuard, async (req, res) => {
 });
 
 // ── 지급 파일 내보내기 CSV ─────────────────────────────────────────────────────
-router.get("/admin/settlements/export", ...adminGuard, async (req, res) => {
+router.get("/admin/settlements/export", ...adminGuard, requireAdminExport, async (req, res) => {
   const rawIds = String(req.query.ids ?? "");
   const ids = rawIds
     .split(",")

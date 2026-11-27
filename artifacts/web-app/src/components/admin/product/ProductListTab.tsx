@@ -1,3 +1,4 @@
+import { canExport as canExportData } from '../../../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
 import { useState, useCallback, useEffect, useRef, type CSSProperties } from 'react';
 import { api, Product, ProductOption, PRODUCT_TYPES_META } from '../../../lib/constants';
 import { Card, PrimaryBtn, GhostBtn, ClickSelect } from '../../ui';
@@ -326,11 +327,11 @@ export function ProductListTab({ token, hasPerm, setToast, authHeaders, onNaviga
       <Section title={canView ? `상품 목록 (${total.toLocaleString()})` : "상품 목록"} action={
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
           {/* 엑셀 다운로드 — 현재 검색/필터 결과 전체 다운로드(§2). Export 로직 무변경. */}
-          <button onClick={() => handleProductExcelDownload("export")}
+          {canExportData() && (<button onClick={() => handleProductExcelDownload("export")}
             data-testid="product-excel-download"
             style={{ fontSize: 12, padding: "6px 12px", borderRadius: 7, border: "1px solid #bbf7d0", background: "#f0fdf4", color: "#059669", cursor: "pointer", fontWeight: 600 }}>
             ⬇ 엑셀 다운로드
-          </button>
+          </button>)}
           {/* 대량등록 — 기존 Import 진입점(파일 업로드 → 분석 → 미리보기 → 확정, §3·§6). 템플릿 다운로드는 이 흐름 내부로 이동 예정(§1·8번 작업). */}
           {canCreate && (
           <label data-testid="product-bulk-import"

@@ -6,6 +6,7 @@ import { db, usersTable, userSessionsTable, invitationsTable, projectsTable, rol
 import { eq, and, gte, sql } from "drizzle-orm";
 import { signToken, requireAuth, authConfigured } from "../middlewares/auth";
 import { idleTimeoutMinutes, activityTimeFromReport } from "../lib/idlePolicy";
+import { isAdminAccount } from "../lib/adminTier";
 import { getPermissionsForRole, ALL_PERMISSIONS } from "../lib/rbac";
 
 /** 오늘 날짜 키 (YYYY-MM-DD, KST) */
@@ -195,6 +196,7 @@ router.post("/auth/login", async (req, res) => {
     token,
     user: { id: user.id, email: user.email, role: user.role, name: user.name, roleId: user.roleId, permissions, mustChangePassword: user.mustChangePassword },
     idleTimeoutMinutes: idleTimeoutMinutes(user.role, roleRow?.name),   // 미사용 자동 로그아웃(분) — 관리자 60·직원 30·그 외 null
+    canExport: isAdminAccount(user.role, roleRow?.name),                 // Excel·CSV 출력·다운로드 허용(관리자만)
   });
 });
 
@@ -204,7 +206,7 @@ router.get("/auth/permissions", requireAuth, async (req, res) => {
   const permissions = await resolvePermissions(user);
   const [flags] = await db.select({ mustChangePassword: usersTable.mustChangePassword }).from(usersTable).where(eq(usersTable.id, user.id));
   // 기존 응답(permissions) 유지 + 현재 역할 정보 추가 — 화면이 저장된 사용자 정보(role/roleId)를 최신으로 맞춘다.
-  res.json({ permissions, role: user.role, roleId: user.roleId ?? null, mustChangePassword: !!flags?.mustChangePassword, idleTimeoutMinutes: user.idleTimeoutMinutes ?? null });
+  res.json({ permissions, role: user.role, roleId: user.roleId ?? null, mustChangePassword: !!flags?.mustChangePassword, idleTimeoutMinutes: user.idleTimeoutMinutes ?? null, canExport: !!user.isAdmin });
 });
 
 // ─── 본인 비밀번호 변경 ──────────────────────────────────────────────────────

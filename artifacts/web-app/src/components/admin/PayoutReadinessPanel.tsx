@@ -4,6 +4,7 @@
 //   ② 전체 기간: 지급 누락·날짜 공란·확인필요 전체
 //   플랫폼·과거 CRM 전환·CRM 원본 통합. A 지급 준비 완료 / B 계좌 / C 금액·세금·수행정보·날짜 / D 과거 지급 여부·중복.
 //   한 건의 모든 사유·필요한 조치 표시. 지급상태·금액·날짜·회차를 바꾸지 않는다(처리는 기존 화면).
+import { canExport as canExportData } from '../../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../../lib/constants';
 import { exportDataset, type ExcelColumn } from '../../lib/excelExport';
@@ -267,11 +268,11 @@ export function PayoutReadinessPanel({ token, payoutDate: propDate, onToast, def
           {open && tabBtn('date', '① 지급일 기준 후보')}
           {open && tabBtn('all', '② 전체 기간 누락·공란')}
           {open && scope === 'date' && !embedded && <DateField value={date} onChange={v => v && setDate(v)} style={{ fontSize: 12, padding: '4px 6px', width: 130, border: '1px solid #cbd5e1', borderRadius: 6 }} testid="ready-date" ariaLabel="지급일" allowClear={false} />}
-          {open && data && <button type="button" onClick={exportPlainExcel} disabled={excelBusy || fullBusy} data-testid="ready-excel" aria-label="지급 준비 점검 Excel" aria-busy={excelBusy}
-            style={{ border: 'none', borderRadius: 7, padding: '5px 10px', background: '#059669', color: '#fff', fontWeight: 700, fontSize: 12, cursor: excelBusy || fullBusy ? 'wait' : 'pointer', opacity: fullBusy ? 0.6 : 1 }}>{excelBusy ? '출력 중…' : 'Excel'}</button>}
-          {open && data?.canRevealResidentNumber && <button type="button" onClick={exportFullExcel} disabled={fullBusy || excelBusy} data-testid="ready-excel-full-rrn" aria-label="주민번호 전체 Excel(관리자 전용)"
+          {open && data && (canExportData() ? <button type="button" onClick={exportPlainExcel} disabled={excelBusy || fullBusy} data-testid="ready-excel" aria-label="지급 준비 점검 Excel" aria-busy={excelBusy}
+            style={{ border: 'none', borderRadius: 7, padding: '5px 10px', background: '#059669', color: '#fff', fontWeight: 700, fontSize: 12, cursor: excelBusy || fullBusy ? 'wait' : 'pointer', opacity: fullBusy ? 0.6 : 1 }}>{excelBusy ? '출력 중…' : 'Excel'}</button> : null)}
+          {open && data?.canRevealResidentNumber && (canExportData() ? <button type="button" onClick={exportFullExcel} disabled={fullBusy || excelBusy} data-testid="ready-excel-full-rrn" aria-label="주민번호 전체 Excel(관리자 전용)"
             title="관리자 전용 — 주민등록번호 전체가 포함됩니다. 외부 유출에 주의하세요."
-            style={{ border: '1px solid #b91c1c', borderRadius: 7, padding: '5px 10px', background: '#fff', color: '#b91c1c', fontWeight: 700, fontSize: 12, cursor: fullBusy ? 'wait' : 'pointer' }}>{fullBusy ? '출력 중…' : '전체번호 Excel'}</button>}
+            style={{ border: '1px solid #b91c1c', borderRadius: 7, padding: '5px 10px', background: '#fff', color: '#b91c1c', fontWeight: 700, fontSize: 12, cursor: fullBusy ? 'wait' : 'pointer' }}>{fullBusy ? '출력 중…' : '전체번호 Excel'}</button> : null)}
           {!embedded && <button type="button" onClick={() => setOpen(o => !o)} data-testid="ready-toggle" aria-expanded={open} aria-label="지급 준비 점검 열기"
             style={{ border: '1px solid #cbd5e1', borderRadius: 7, padding: '5px 10px', background: open ? '#0369a1' : '#fff', color: open ? '#fff' : '#334155', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
             {open ? '접기' : '점검 열기'}</button>}

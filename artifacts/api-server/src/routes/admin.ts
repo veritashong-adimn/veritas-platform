@@ -18,7 +18,7 @@ import {
 //  · 향후 기본값을 domestic_2_2 로 바꾸면 레거시 정산도 함께 2.2% 로 반영된다(과거 저장 정산건은 불변).
 const DEFAULT_WITHHOLDING_RATE = WITHHOLDING_RATE_BY_TREATMENT[DEFAULT_DOMESTIC_WITHHOLDING_TREATMENT] ?? 3.3;
 import { eq, and, ne, ilike, or, gte, lte, inArray, sql, desc, isNull, type SQL } from "drizzle-orm";
-import { requireAuth, requireRole, requirePermission, requireStaffPermission } from "../middlewares/auth";
+import { requireAuth, requireRole, requirePermission, requireStaffPermission, requireAdminExport } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
 import { getSettings, invalidateSettingsCache } from "../lib/getSettings";
 import { isSealRef, publicSignatureValue } from "../services/companySeal";
@@ -387,7 +387,7 @@ router.get("/admin/projects", ...adminGuard, async (req, res) => {
 //    품목 없으면 유효견적 price 합 → 그래도 없으면 대표견적 price fallback.
 //  · 청구/입금/미수금: collections 로직을 project 단위로 집계(선입/차감 견적 제외, N+1 없음). billing/payment SSOT 실시간 계산.
 //  · 관계견적 중복 방지: effectiveQuoteConditions 로 derived 제외 → 판매행 중복 없음(§7). 누적/차감도 project 1건=판매 1행.
-router.get("/admin/projects/export", ...adminGuard, async (req, res) => {
+router.get("/admin/projects/export", ...adminGuard, requireAdminExport, async (req, res) => {
   try {
     const base = await buildFilteredSalesProjectList(req.query as Record<string, string | undefined>);
     const projectIds = base.map((p) => p.id);
@@ -3379,7 +3379,7 @@ router.patch("/admin/translator-profiles/:userId", ...adminGuard, async (req, re
 });
 
 // ─── 프로젝트 목록 CSV 내보내기 ───────────────────────────────────────────────
-router.get("/admin/export/projects", ...adminGuard, async (req, res) => {
+router.get("/admin/export/projects", ...adminGuard, requireAdminExport, async (req, res) => {
   try {
     const rows = await db
       .select({
@@ -3415,7 +3415,7 @@ router.get("/admin/export/projects", ...adminGuard, async (req, res) => {
 });
 
 // ─── 정산 목록 CSV 내보내기 ───────────────────────────────────────────────────
-router.get("/admin/export/settlements", ...adminGuard, async (req, res) => {
+router.get("/admin/export/settlements", ...adminGuard, requireAdminExport, async (req, res) => {
   try {
     const rows = await db
       .select({

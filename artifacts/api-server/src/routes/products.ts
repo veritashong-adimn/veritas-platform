@@ -1,7 +1,7 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { db, productsTable, productOptionsTable, productRequestsTable, quoteItemsTable, translatorProductsTable, performanceAssignmentsTable, usersTable, importBatchesTable, importRowSourcesTable } from "@workspace/db";
 import { eq, desc, sql, and, or, isNull, isNotNull } from "drizzle-orm";
-import { requireAuth, requireRole } from "../middlewares/auth";
+import { requireAuth, requireRole, requireAdminExport } from "../middlewares/auth";
 import { getPermissionsForRole } from "../lib/rbac";
 import { logEvent } from "../lib/logEvent";
 import multer from "multer";
@@ -1427,7 +1427,7 @@ router.post("/admin/products", ...canCreate, async (req, res) => {
 });
 
 // ─── 엑셀 템플릿 다운로드 ─────────────────────────────────────────────────────
-router.get("/admin/products/template", ...adminGuard, (_req, res) => {
+router.get("/admin/products/template", ...adminGuard, requireAdminExport, (_req, res) => {
   const wb = XLSX.utils.book_new();
   // 10-column Product Catalog Schema (상품코드 = "(자동생성)" in template)
   // cols: 상품코드, 상품유형, 하위유형, 출발언어, 도착언어, 상품명, canonical_key, 상태, 생성방식, 비고
@@ -1454,7 +1454,7 @@ router.get("/admin/products/template", ...adminGuard, (_req, res) => {
 });
 
 // ─── 엑셀 내보내기 ────────────────────────────────────────────────────────────
-router.get("/admin/products/export", ...adminGuard, async (req, res) => {
+router.get("/admin/products/export", ...adminGuard, requireAdminExport, async (req, res) => {
   try {
     const rows = await db.select().from(productsTable)
       .where(isNull(productsTable.deletedAt))

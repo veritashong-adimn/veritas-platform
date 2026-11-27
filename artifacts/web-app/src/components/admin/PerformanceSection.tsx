@@ -5,6 +5,7 @@
 //  · 추가비용·차감·금액상세는 소형 팝업(performancePopups). 계산 로직은 기존 유지(§15).
 //  · 저장은 PUT /admin/projects/:id/performances — 원가·원천세·부가세 서버 재계산. 판매금액과 분리.
 // ─────────────────────────────────────────────────────────────────────────────
+import { canExport as canExportData } from '../../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
 import React, { useMemo, useState, useEffect } from 'react';
 import { formatDisplayDate } from '../../lib/dateFormat';
 import { api } from '../../lib/constants';
@@ -1302,7 +1303,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
           </>
         ) : (
           <>
-            <GhostBtn onClick={handleExportExcel} style={{ fontSize: 12, padding: '6px 12px' }} data-testid="btn-perf-excel" aria-label="수행정보 Excel 다운로드">⬇ Excel 다운로드</GhostBtn>
+            {canExportData() && (<GhostBtn onClick={handleExportExcel} style={{ fontSize: 12, padding: '6px 12px' }} data-testid="btn-perf-excel" aria-label="수행정보 Excel 다운로드">⬇ Excel 다운로드</GhostBtn>)}
             <GhostBtn onClick={() => setShowBulkImport(true)} style={{ fontSize: 12, padding: '6px 12px' }} data-testid="btn-perf-bulk-import" aria-label="수행자 배정 대량등록">⬆ 대량등록</GhostBtn>
             <GhostBtn onClick={enterEdit} style={{ fontSize: 12, padding: '6px 12px' }} data-testid="btn-perf-edit" aria-label="수행정보 수정">✏ 수행정보 수정</GhostBtn>
           </>

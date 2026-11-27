@@ -5,6 +5,7 @@
 //  · 미수금(입금 기준)과 세금계산서 미발행금액·발행 후 입금대기(발행 기록 기준)·청구 전 금액은 서로 다른 값으로 분리 표시.
 //  · 입력/수정 없음 — 행 클릭 시 판매상세(청구정보) 또는 과거 CRM 판매 상세로 이동.
 // ─────────────────────────────────────────────────────────────────────────────
+import { canExport as canExportData } from '../../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { formatWon } from "@/lib/utils";
 import { api } from '../../lib/constants';
@@ -225,14 +226,14 @@ export function CollectionsSaleView({ token, onToast, onOpenSalesDetail, onOpenL
             value={search} onChange={(e) => setSearch(e.target.value)}
             style={{ padding: '7px 12px', fontSize: 13, border: '1px solid #e5e7eb', borderRadius: 8, minWidth: 260 }} />
           <GhostBtn onClick={reset} style={{ fontSize: 12, padding: '6px 12px' }} data-testid="sale-collections-reset" aria-label="검색 초기화">초기화</GhostBtn>
-          <GhostBtn
+          {canExportData() && (<GhostBtn
             onClick={() => {
               if (filtered.length === 0) { onToast?.('다운로드할 수금 내역이 없습니다.'); return; }
               exportSaleCollections(filtered); onToast?.(`${filtered.length.toLocaleString()}건을 Excel로 내보냈습니다.`);
             }}
             style={{ fontSize: 12, padding: '6px 14px' }} data-testid="sale-collections-excel" aria-label="판매건별 수금 현황 Excel 다운로드">
             Excel 다운로드
-          </GhostBtn>
+          </GhostBtn>)}
         </div>
       </div>
 

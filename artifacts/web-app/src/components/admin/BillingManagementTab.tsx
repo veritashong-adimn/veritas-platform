@@ -1,3 +1,4 @@
+import { canExport as canExportData } from '../../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
 import React, { useState, useCallback, useEffect } from 'react';
 import { formatDisplayDate, formatScheduleRange } from '../../lib/dateFormat';
 import { formatWon } from "@/lib/utils";
@@ -96,7 +97,7 @@ export function BillingManagementTab({ token, onToast, onNavigateToProjects }: P
             {f.label}
           </button>
         ))}
-        <GhostBtn
+        {canExportData() && (<GhostBtn
           onClick={() => {
             if (billingBatches.length === 0) { onToast("다운로드할 누적 청구 내역이 없습니다."); return; }
             exportAccumulatedBilling(billingBatches);
@@ -107,7 +108,7 @@ export function BillingManagementTab({ token, onToast, onNavigateToProjects }: P
           aria-label="누적 청구 Excel 다운로드"
         >
           Excel 다운로드
-        </GhostBtn>
+        </GhostBtn>)}
         <GhostBtn onClick={fetchBillingBatches} style={{ padding: "6px 14px", fontSize: 12 }}>새로고침</GhostBtn>
       </div>
 

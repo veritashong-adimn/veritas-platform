@@ -1,3 +1,4 @@
+import { canExport as canExportData } from '../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
 import React, { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import { formatDisplayDate } from '../lib/dateFormat';
 import { ADMIN_NAV_GROUPS, ADMIN_PAGE_TITLE, STAFF_DEFAULT_PERMS, navItemVisible, navItemMatches, findNavItem } from '../config/adminNav';
@@ -1876,10 +1877,10 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               data-testid="contact-create-btn" aria-label="담당자 등록">
               + 담당자 등록
             </PrimaryBtn>
-            <GhostBtn onClick={handleExportContacts} disabled={contactExporting} style={{ fontSize: 13, padding: "7px 14px" }}
+            {canExportData() && (<GhostBtn onClick={handleExportContacts} disabled={contactExporting} style={{ fontSize: 13, padding: "7px 14px" }}
               data-testid="contact-excel-export-btn" aria-label="담당자 Excel 다운로드">
               {contactExporting ? "내보내는 중…" : "Excel 다운로드"}
-            </GhostBtn>
+            </GhostBtn>)}
             <GhostBtn onClick={() => setShowContactBulkImport(true)} style={{ fontSize: 13, padding: "7px 14px" }}
               data-testid="contact-bulk-import-btn" aria-label="담당자 대량등록">
               대량등록
@@ -2377,10 +2378,10 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
         // 엑셀 대량등록은 목록이 아니라 [통번역사 등록 → 엑셀 대량등록] 탭으로 이동(§2).
         <Section title={`통번역사 목록 (${translatorTotal.toLocaleString()})`} action={
           <div style={{ display: "flex", gap: 8 }}>
-            <GhostBtn onClick={handleExportTranslators} disabled={translatorExporting} style={{ fontSize: 13, padding: "7px 14px" }}
+            {canExportData() && (<GhostBtn onClick={handleExportTranslators} disabled={translatorExporting} style={{ fontSize: 13, padding: "7px 14px" }}
               data-testid="translator-excel-export-btn" aria-label="통번역사 Excel 다운로드">
               {translatorExporting ? "내보내는 중…" : "Excel 다운로드"}
-            </GhostBtn>
+            </GhostBtn>)}
           </div>
         }>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14, alignItems: "center" }}>

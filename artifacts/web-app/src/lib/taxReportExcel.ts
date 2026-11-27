@@ -9,6 +9,7 @@
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore
 import XLSX from 'xlsx-js-style';
+import { writeWorkbookFile } from './exportAccess';   // Excel 저장 — 관리자만(공통 기준)
 import { formatTaxTreatment } from './taxTreatmentDisplay';
 
 export interface TaxReportRow {
@@ -140,5 +141,5 @@ export function downloadTaxReportExcel(opts: { filename: string; rows: TaxReport
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, '세무자료');
-  XLSX.writeFile(wb, filename);
+  writeWorkbookFile(XLSX, wb, filename);
 }

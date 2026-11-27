@@ -1,6 +1,7 @@
 // ─── 선입금관리(조회 전용) — 거래처별 목록(거래처명 · 총 입금액 · 총 차감액 · 현재 잔액) ─────────────
 //  거래처 행 클릭 → 그 아래에 원장 펼침, 다시 클릭하면 접힘. 잔액 = 누적 입금 − 누적 차감.
 //  값은 매번 서버에서 다시 받는다(캐시 미사용) — 수정 후 펼침/메뉴 이동/새로고침 어디서 봐도 같은 최신값.
+import { canExport as canExportData } from '../../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { GhostBtn, confirmDialog, alertDialog } from "../ui";
 import { api } from "../../lib/constants";
@@ -140,7 +141,7 @@ export function PrepaidLedgerTab({ authHeaders, reloadKey, onToast }: {
         <span style={{ fontSize: 12, color: "#94a3b8" }}>~</span>
         <div style={{ width: 130 }}><DateField value={to} onChange={v => setTo(v)} ariaLabel="거래기간 끝" testid="prepaid-to" style={{ ...inp, width: "100%" }} /></div>
         <div style={{ flex: 1 }} />
-        <GhostBtn onClick={exportExcel} data-testid="prepaid-overview-excel" aria-label="거래처별 선입금 Excel 다운로드" style={{ fontSize: 12, padding: "5px 12px" }}>Excel</GhostBtn>
+        {canExportData() && (<GhostBtn onClick={exportExcel} data-testid="prepaid-overview-excel" aria-label="거래처별 선입금 Excel 다운로드" style={{ fontSize: 12, padding: "5px 12px" }}>Excel</GhostBtn>)}
         <button type="button" onClick={() => void removeSelected()} disabled={selected.size === 0 || deleting}
           data-testid="prepaid-bulk-delete" aria-label={`선택한 거래처 선입금 원장 삭제 (${selected.size}건)`}
           style={{ fontSize: 12, padding: "5px 12px", fontWeight: 700, borderRadius: 6, whiteSpace: "nowrap",

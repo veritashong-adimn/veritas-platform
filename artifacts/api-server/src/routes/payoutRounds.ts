@@ -14,7 +14,7 @@ import {
 import { eq, and, or, isNull, isNotNull, inArray, ne, sql } from "drizzle-orm";
 import { loadRemittanceSummaries } from "../services/performanceRemittance";
 import { z } from "zod";
-import { requireAuth, requireRole, requireStaffPermission } from "../middlewares/auth";
+import { requireAuth, requireRole, requireStaffPermission, requireAdminExport } from "../middlewares/auth";
 import { getPermissionsForRole } from "../lib/rbac";
 import { decrypt, maskResidentNumber, maskBankAccount, readAccountPlain, isValidBankAccountFormat } from "../lib/encrypt";
 import { generatePayoutTransfers, reverifyTransfer, REVERIFIABLE_STATUSES, resyncTransfersIfAny } from "../services/payoutTransfers";
@@ -1253,7 +1253,7 @@ router.post("/admin/payout-rounds/:id/transfers/:transferId/fail", ...payoutTran
 //  · 확정 snapshot(amount) 재계산 금지. payout_round_items 재집계 금지. status 를 paid 로 바꾸지 않는다(§8).
 //  · 계좌번호 원본은 이 요청 처리 중 서버 메모리에서만 복호화하고, 응답 헤더·JSON·로그에 남기지 않는다(§11).
 //  · 재생성 허용(§9): 동일 snapshot 으로 Excel 만 다시 만들고 ibkFileGeneratedAt 만 갱신한다.
-router.post("/admin/payout-rounds/:id/transfers/ibk-file", ...payoutTransfer, async (req, res) => {
+router.post("/admin/payout-rounds/:id/transfers/ibk-file", ...payoutTransfer, requireAdminExport, async (req, res) => {
   const id = Number(req.params.id);
   try {
     const [round] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));

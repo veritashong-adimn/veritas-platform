@@ -12,6 +12,7 @@
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore
 import XLSX from 'xlsx-js-style';
+import { writeWorkbookFile } from './exportAccess';   // Excel 저장 — 관리자만(공통 기준)
 import { getPolicy } from './languagePagePolicy';
 import { displayUnit, calcInterpretation } from './quotePdf';
 import { formatScheduleRange } from './dateFormat';
@@ -304,7 +305,7 @@ export function downloadQuoteExcel(data: QuoteExportData): void {
 
   // 파일명: VERITAS_견적관리_견적명_견적일.xlsx
   const safeName = (data.title || '견적').replace(/[\\/:*?"<>|\s]+/g, '_');
-  XLSX.writeFile(wb, `VERITAS_견적관리_${safeName}_${data.issueDate}.xlsx`);
+  writeWorkbookFile(XLSX, wb, `VERITAS_견적관리_${safeName}_${data.issueDate}.xlsx`);
 }
 
 // ─── 견적 목록 Excel 다운로드(공통 Engine) + 대량등록 템플릿 ───────────────────

@@ -7,6 +7,7 @@
 //      운영 지급 = /admin/payout-rounds(신규 플랫폼 수행정보만, 생성·확정·지급 실행·IBK·지급완료 — 탭 4, 기존 PayoutRoundsTab 재사용)
 //  · 계산·저장 로직 없음. 서버가 내려준 값만 표시·합산한다.
 // ─────────────────────────────────────────────────────────────────────────────
+import { canExport as canExportData } from '../../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../../lib/constants';
 import { exportReproStatementExcel, exportReproStatementPdf, reproPayeeLanguages } from '../../lib/payoutReproStatement';
@@ -248,8 +249,8 @@ function PayeeTable({ payees, items, payoutDate, loading, onToast, onPick }: { p
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
-        <button type="button" onClick={exportAll} disabled={!payees.length} data-testid="pu-payee-excel-all" aria-label="지급대상별 요약 전체 Excel"
-          style={{ border: 'none', borderRadius: 7, padding: '6px 12px', background: '#059669', color: '#fff', fontWeight: 700, fontSize: 12, cursor: payees.length ? 'pointer' : 'default', opacity: payees.length ? 1 : 0.5 }}>전체 Excel</button>
+        {canExportData() && (<button type="button" onClick={exportAll} disabled={!payees.length} data-testid="pu-payee-excel-all" aria-label="지급대상별 요약 전체 Excel"
+          style={{ border: 'none', borderRadius: 7, padding: '6px 12px', background: '#059669', color: '#fff', fontWeight: 700, fontSize: 12, cursor: payees.length ? 'pointer' : 'default', opacity: payees.length ? 1 : 0.5 }}>전체 Excel</button>)}
       </div>
       <div data-testid="pu-payee-panel" style={{ border: '1px solid #e5e7eb', borderRadius: 10, background: '#fff', overflowX: 'auto' }}>
         <div style={{ minWidth: 1318 }}>
@@ -280,7 +281,7 @@ function PayeeTable({ payees, items, payoutDate, loading, onToast, onPick }: { p
                     {(g.foreignTotals ?? []).map(f => <div key={f.currency} data-testid={`pu-payee-fx-${g.masterKey}-${f.currency}`} style={{ fontSize: 10, color: '#1d4ed8', fontWeight: 700, whiteSpace: 'normal', wordBreak: 'keep-all', overflowWrap: 'anywhere' }} title="외화 지급 — 원화 합계 제외(별도 해외송금)">{fxSummaryText([f])}</div>)}</div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', rowGap: 2 }}>{payStatusChips(g.payStatusCounts, true)}</div>
                   <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                    <button type="button" style={stmtBtn} data-testid={`pu-excel-${g.name}`} aria-label={`${g.name} 지급명세서 Excel`} onClick={(e) => { e.stopPropagation(); exportReproStatementExcel(opts); onToast(`${g.name} 지급명세서 Excel을 다운로드했습니다.`); }}>Excel</button>
+                    {canExportData() && (<button type="button" style={stmtBtn} data-testid={`pu-excel-${g.name}`} aria-label={`${g.name} 지급명세서 Excel`} onClick={(e) => { e.stopPropagation(); exportReproStatementExcel(opts); onToast(`${g.name} 지급명세서 Excel을 다운로드했습니다.`); }}>Excel</button>)}
                     <button type="button" style={stmtBtn} data-testid={`pu-pdf-${g.name}`} aria-label={`${g.name} 지급명세서 PDF`} onClick={(e) => { e.stopPropagation(); if (!exportReproStatementPdf(opts)) onToast('팝업 차단을 해제한 후 다시 시도해 주세요.'); }}>PDF</button>
                   </div>
                 </div>
@@ -352,8 +353,8 @@ function ItemTable({ token, onToast, items, payees, loading, selPayee, setSelPay
         <select style={inp} value={status} onChange={e => setStatus(e.target.value)} aria-label="지급상태" data-testid="pd-item-status">{PAY_STATUS_FILTER_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
         <input style={{ ...inp, minWidth: 220 }} value={q} onChange={e => setQ(e.target.value)} placeholder="거래처·판매번호 검색" aria-label="거래처·판매번호 검색" data-testid="pd-item-search" />
         <span style={{ fontSize: 12, color: '#6b7280' }} data-testid="pu-detail-title">{rows.length}건</span>
-        <button type="button" onClick={exportAll} disabled={!rows.length} data-testid="pd-item-excel-all" aria-label="건별 상세내역 전체 Excel"
-          style={{ marginLeft: 'auto', border: 'none', borderRadius: 7, padding: '6px 12px', background: '#059669', color: '#fff', fontWeight: 700, fontSize: 12, cursor: rows.length ? 'pointer' : 'default', opacity: rows.length ? 1 : 0.5 }}>전체 Excel</button>
+        {canExportData() && (<button type="button" onClick={exportAll} disabled={!rows.length} data-testid="pd-item-excel-all" aria-label="건별 상세내역 전체 Excel"
+          style={{ marginLeft: 'auto', border: 'none', borderRadius: 7, padding: '6px 12px', background: '#059669', color: '#fff', fontWeight: 700, fontSize: 12, cursor: rows.length ? 'pointer' : 'default', opacity: rows.length ? 1 : 0.5 }}>전체 Excel</button>)}
       </div>
       <div style={{ overflowX: 'auto', border: '1px solid #e5e7eb', borderRadius: 10 }}>
         <table className="veritas-read-table vz-sticky pr-detail-zebra" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>

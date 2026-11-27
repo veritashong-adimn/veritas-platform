@@ -5,6 +5,7 @@
 //  · 동명이인은 payeeKey(개인 i:userId / 외주 v:companyId, 고유 ID) 기준으로 분리한다.
 //  · 표시·라벨·서식은 지급회차 화면(PayoutRoundsTab)과 동일 기준을 그대로 복제(세금처리 표기 일치).
 // ─────────────────────────────────────────────────────────────────────────────
+import { canExport as canExportData } from '../../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
 import React, { useState } from 'react';
 import { formatDisplayDate, formatScheduleRange, formatLabelDates } from '../../lib/dateFormat';
 import { ModalOverlay, GhostBtn, PrimaryBtn } from '../ui';
@@ -292,7 +293,7 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
             <>
               <GhostBtn onClick={() => setSel(null)} style={{ fontSize: 12, padding: '6px 12px' }} data-testid="payout-statement-back" aria-label="목록으로">← 목록</GhostBtn>
               <PrimaryBtn onClick={() => exportPdf(group)} style={{ fontSize: 12, padding: '6px 14px' }} data-testid="payout-statement-pdf" aria-label="PDF 다운로드">📄 PDF 다운로드</PrimaryBtn>
-              <GhostBtn onClick={() => exportExcel(group)} style={{ fontSize: 12, padding: '6px 14px' }} data-testid="payout-statement-excel" aria-label="Excel 다운로드">📊 Excel 다운로드</GhostBtn>
+              {canExportData() && (<GhostBtn onClick={() => exportExcel(group)} style={{ fontSize: 12, padding: '6px 14px' }} data-testid="payout-statement-excel" aria-label="Excel 다운로드">📊 Excel 다운로드</GhostBtn>)}
             </>
           ))}
           {/* 기본정보(상단·고정) — 지급대상 / 이메일 / 구분 / 지급회차 / 지급일 / 세금처리 */}

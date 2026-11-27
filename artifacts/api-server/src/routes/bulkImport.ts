@@ -26,7 +26,7 @@ import { decrypt, encrypt, maskResidentNumber } from "../lib/encrypt";
 import { isLegacyPlaceholderEmail } from "../lib/mailer";
 import { saveSnapshot, listSnapshots, readSnapshotBuffer, getSnapshotMeta, deleteSnapshot, pruneExpired, isValidSnapshotId } from "../lib/importSnapshot";
 import { sql, eq, and, desc, inArray } from "drizzle-orm";
-import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
+import { requireAuth, requireRole, requirePermission, requireAdminExport } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
 import { buildAliasValues } from "../lib/companyAlias";
 import { buildTranslatorAliasValues } from "../lib/translatorAlias";
@@ -2671,6 +2671,7 @@ async function analyzeQuotes(buffer: Buffer): Promise<{
 router.get(
   "/admin/quotes/bulk-import/export",   // 3-segment — /admin/quotes/:id 라우트와 충돌 방지
   ...adminGuard,
+  requireAdminExport,   // Excel 작성용 자료 — 관리자만
   async (req, res) => {
     try {
       const { companyId: companyIdQ, status, quoteType: qtFilter, dateFrom, dateTo } = req.query as Record<string, string>;

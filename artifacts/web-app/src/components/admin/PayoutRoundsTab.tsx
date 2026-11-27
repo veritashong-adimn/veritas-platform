@@ -3,6 +3,7 @@
 //  · 수행정보 미지급 건을 지급일별 회차로 묶어 지급대상(개인/외주)별 자동합산·검토·확정.
 //  · 계산은 서버(payoutRounds API)가 costTotal+세금처리로 산출. 화면은 표시·조작만.
 // ─────────────────────────────────────────────────────────────────────────────
+import { canExport as canExportData } from '../../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { formatDisplayDate, formatScheduleRange, formatLabelDates } from '../../lib/dateFormat';
 import { api, formatLanguageLabel } from '../../lib/constants';
@@ -732,8 +733,8 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
           {view === 'summary' && (
             <Card>
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: SP[2] }}>
-                <GhostBtn onClick={exportSummaryExcel} disabled={filteredSummary.length === 0}
-                  style={{ fontSize: 12, padding: '6px 14px' }} data-testid="payout-summary-excel" aria-label="지급대상별 요약 Excel 다운로드">📊 Excel 다운로드</GhostBtn>
+                {canExportData() && (<GhostBtn onClick={exportSummaryExcel} disabled={filteredSummary.length === 0}
+                  style={{ fontSize: 12, padding: '6px 14px' }} data-testid="payout-summary-excel" aria-label="지급대상별 요약 Excel 다운로드">📊 Excel 다운로드</GhostBtn>)}
               </div>
               <div style={{ overflowX: 'auto' }}>
                 <table className="veritas-thead" style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1260 }}>
@@ -787,8 +788,8 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
                     style={{ fontSize: 12, padding: '6px 12px', borderRadius: 7, fontWeight: 700, cursor: (busy || selectedItems.size === 0) ? 'not-allowed' : 'pointer', color: C.textSecondary, background: C.g50, border: `1px solid ${C.border}` }}>선택 확정취소</button>}
                   <span style={{ ...TYPO.helper, color: C.textSecondary }}>지급완료된 건은 선택할 수 없습니다.</span>
                 </>)}
-                <GhostBtn onClick={exportItemsExcel} disabled={itemRows.length === 0}
-                  style={{ marginLeft: 'auto', fontSize: 12, padding: '6px 14px' }} data-testid="payout-items-excel" aria-label="건별 상세내역 Excel 다운로드">📊 Excel 다운로드</GhostBtn>
+                {canExportData() && (<GhostBtn onClick={exportItemsExcel} disabled={itemRows.length === 0}
+                  style={{ marginLeft: 'auto', fontSize: 12, padding: '6px 14px' }} data-testid="payout-items-excel" aria-label="건별 상세내역 Excel 다운로드">📊 Excel 다운로드</GhostBtn>)}
               </div>
               <div style={{ overflowX: 'auto' }}>
                 <table className="veritas-thead" style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1990 }}>

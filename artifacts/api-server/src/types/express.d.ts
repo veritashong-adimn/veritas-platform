@@ -7,6 +7,7 @@ declare namespace Express {
       roleId?: number | null;
       sessionId?: string;
       idleTimeoutMinutes?: number | null;   // 미사용 자동 로그아웃 시간(분) — 관리자 60·직원 30·그 외 null(lib/idlePolicy)
+      isAdmin?: boolean;                    // 관리자 등급(lib/adminTier) — Excel·CSV 출력 허용 기준
     };
   }
 }

@@ -25,7 +25,7 @@ import {
   calcCostTotal, calcPayoutWithholding, calcPaymentDate, DEFAULT_DOMESTIC_WITHHOLDING_TREATMENT,
 } from "@workspace/db";
 import { eq, and, isNull, inArray } from "drizzle-orm";
-import { requireAuth, requireRole } from "../middlewares/auth";
+import { requireAuth, requireRole, requireAdminExport } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
 import { normalizeCompanyName } from "../lib/normalizeCompany";
 import {
@@ -507,7 +507,7 @@ function stripInternal(r: PerfImportRow) {
 }
 
 // ── GET Template seed(사전채움용 판매품목) ──────────────────────────────────
-router.get("/admin/projects/:id/performances/import-template", ...adminGuard, async (req, res) => {
+router.get("/admin/projects/:id/performances/import-template", ...adminGuard, requireAdminExport, async (req, res) => {
   const projectId = Number(req.params.id);
   if (!Number.isInteger(projectId)) { res.status(400).json({ error: "잘못된 프로젝트 ID" }); return; }
   try {

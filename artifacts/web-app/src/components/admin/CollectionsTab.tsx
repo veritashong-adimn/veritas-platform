@@ -6,6 +6,7 @@
 //  · 입력/수정은 하지 않는다. 행 클릭 시 해당 판매상세(청구정보)로 이동한다.
 //  · 조회 단위 = 청구행(project_payment) 1건. 분할청구면 판매 1건이 여러 행으로 표시된다.
 // ─────────────────────────────────────────────────────────────────────────────
+import { canExport as canExportData } from '../../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { formatWon } from "@/lib/utils";
 import { api } from '../../lib/constants';
@@ -224,7 +225,7 @@ function BillingCollections({ token, onToast, onOpenSalesDetail, onOpenLegacyDet
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
         <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#111827" }}>청구회차별 ({filtered.length})
           {issueFilter === "unissued" && <span data-testid="collections-filtered-unissued" style={{ marginLeft: 8, fontSize: 12, fontWeight: 600, color: "#7c3aed" }}>미발행 청구액 합계 {formatWon(filteredUnissued)}</span>}</h3>
-        <GhostBtn
+        {canExportData() && (<GhostBtn
           onClick={() => {
             if (filtered.length === 0) { onToast?.("다운로드할 수금 내역이 없습니다."); return; }
             exportCollections(filtered);
@@ -235,7 +236,7 @@ function BillingCollections({ token, onToast, onOpenSalesDetail, onOpenLegacyDet
           aria-label="수금 현황 Excel 다운로드"
         >
           Excel 다운로드
-        </GhostBtn>
+        </GhostBtn>)}
       </div>
       <p style={{ margin: "0 0 12px", fontSize: 12, color: "#6b7280" }}>
         판매상세 &gt; 청구정보의 청구/입금과 과거 CRM 판매목록을 함께 조회합니다. (선입금·차감 견적 제외 · 조회 전용 · 입금 판정이 불명확한 과거 건은 '확인 필요'로 분리해 상단 집계에서 제외)

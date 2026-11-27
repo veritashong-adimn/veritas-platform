@@ -6,6 +6,7 @@
 //  · 금액·세금은 저장값 그대로(재계산·보정 없음). 과거 CRM은 원본 세전·세후, 원천세액 = 세전−세후.
 //  · 주민번호: 화면은 마스킹, Excel(reveal=1)은 권한(translator.sensitive) 보유 시 전체값(과거 CRM 원본은 마스킹만).
 // ─────────────────────────────────────────────────────────────────────────────
+import { canExport as canExportData } from '../../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { api } from '../../lib/constants';
 import { Card, GhostBtn, PrimaryBtn, ClickSelect } from '../ui';
@@ -174,8 +175,8 @@ export default function TaxReportTab({ token, onToast }: Props) {
           <PrimaryBtn onClick={runSearch} disabled={loading} style={{ fontSize: 12, padding: '7px 16px' }} data-testid="tax-search" aria-label="세무자료 검색">{loading ? '조회 중…' : '검색'}</PrimaryBtn>
           <GhostBtn onClick={reset} style={{ fontSize: 12, padding: '7px 14px' }} data-testid="tax-filter-reset" aria-label="검색 초기화">초기화</GhostBtn>
           <div style={{ marginLeft: 'auto' }}>
-            <PrimaryBtn onClick={exportExcel} disabled={downloading || loading || filtered.length === 0}
-              style={{ fontSize: 12, padding: '7px 14px' }} data-testid="tax-excel" aria-label="세무자료 Excel 다운로드">📊 Excel 다운로드</PrimaryBtn>
+            {canExportData() && (<PrimaryBtn onClick={exportExcel} disabled={downloading || loading || filtered.length === 0}
+              style={{ fontSize: 12, padding: '7px 14px' }} data-testid="tax-excel" aria-label="세무자료 Excel 다운로드">📊 Excel 다운로드</PrimaryBtn>)}
           </div>
         </div>
         {!canReveal && (

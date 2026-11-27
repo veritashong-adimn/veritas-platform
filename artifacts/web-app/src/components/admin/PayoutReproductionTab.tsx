@@ -2,6 +2,7 @@
 //   · 운영 지급회차/지급명세서/송금과 완전 분리(저장·상태변경·IBK·자동수집 없음). 원본 불변.
 //   · 세전/세후는 원본값. 원천세 재계산은 현재 기본세율(3.3%) 참고치(과거 실제 세율 단정 아님).
 //   · 통번역사는 과거 CRM 이름 기준. 현재 Master는 '이름 유일 일치'일 때만 참고 연결(자동 병합 없음). 주민번호 미노출.
+import { canExport as canExportData } from '../../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
 import React, { useState, useCallback, useEffect } from 'react';
 import { api } from '../../lib/constants';
 import { Pagination } from '../ui/Paginator';
@@ -186,8 +187,8 @@ export function PayoutReproductionTab({ token, onToast }: { token: string; onToa
         <button style={btn(true)} onClick={() => loadRounds(1)} disabled={loading} data-testid="pr-search-btn">{loading ? '조회 중…' : '조회'}</button>
         <button style={btn()} onClick={() => { setBasis('payout'); setDateFrom(''); setDateTo(''); setTranslator(''); setTimeout(() => loadRounds(1), 0); }} data-testid="pr-reset-btn">초기화</button>
         <div style={{ flex: 1 }} />
-        <button style={btn()} onClick={exportRounds} data-testid="pr-export-rounds">↓ 회차 Excel</button>
-        {sel && <button style={btn()} onClick={exportDetail} data-testid="pr-export-detail">↓ 상세 Excel</button>}
+        {canExportData() && (<button style={btn()} onClick={exportRounds} data-testid="pr-export-rounds">↓ 회차 Excel</button>)}
+        {sel && (canExportData() ? <button style={btn()} onClick={exportDetail} data-testid="pr-export-detail">↓ 상세 Excel</button> : null)}
       </div>
 
       {/* 납품일 기준 안내 — 회차 합계가 '전체 지급내역'이 아니라 납품일 필터 결과임을 명시(§3) */}
@@ -277,7 +278,7 @@ export function PayoutReproductionTab({ token, onToast }: { token: string; onToa
                         <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#dc2626' }}>{won(pre - post)}</div>
                         <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>{won(post)}</div>
                         <div style={{ display: 'flex', gap: 6 }}>
-                          <button style={sBtn} data-testid={`pr-stmt-excel-${g.name}`} onClick={() => { exportReproStatementExcel(opts); onToast(`${g.name} 지급명세서(재현) Excel을 다운로드했습니다.`); }}>📊 Excel</button>
+                          {canExportData() && (<button style={sBtn} data-testid={`pr-stmt-excel-${g.name}`} onClick={() => { exportReproStatementExcel(opts); onToast(`${g.name} 지급명세서(재현) Excel을 다운로드했습니다.`); }}>📊 Excel</button>)}
                           <button style={sBtn} data-testid={`pr-stmt-pdf-${g.name}`} onClick={() => { if (!exportReproStatementPdf(opts)) onToast('팝업 차단을 해제한 후 다시 시도해 주세요.'); }}>📄 PDF</button>
                         </div>
                       </div>

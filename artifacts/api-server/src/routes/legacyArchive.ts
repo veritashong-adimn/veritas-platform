@@ -16,7 +16,7 @@ import type { Writable } from "node:stream";
 import { db, legacyArchiveRowsTable, importBatchesTable, legacySalesProgressLinksTable } from "@workspace/db";
 import crypto from "node:crypto";
 import { eq, ne, and, or, ilike, gte, lte, count, desc, asc, sql, isNotNull, type SQL } from "drizzle-orm";
-import { requireAuth, requireRole } from "../middlewares/auth";
+import { requireAuth, requireRole, requireAdminExport } from "../middlewares/auth";
 import {
   buildArchivePreview, analyzeArchiveDuplicates, computeFileHash, planArchiveImport, sourceIdentityKey,
   buildExcelPreviewPage, clampPreviewPageSize, analyzeExcelIdentity, analyzeRecordMatching, matchIncomingRows,
@@ -901,7 +901,7 @@ export async function writeArchiveWorkbook(stream: Writable, plan: ArchiveExport
 }
 
 // GET /admin/legacy-archive/export-estimate — 다운로드 대상 행수(유형별). 모달의 "N행 다운로드" 표시용(READ-ONLY).
-router.get("/admin/legacy-archive/export-estimate", ...adminGuard, async (req, res) => {
+router.get("/admin/legacy-archive/export-estimate", ...adminGuard, requireAdminExport, async (req, res) => {
   try {
     const qp = req.query as Record<string, string | undefined>;
     const scope = qp.scope === "all" ? "all" : "search";
@@ -923,7 +923,7 @@ router.get("/admin/legacy-archive/export-estimate", ...adminGuard, async (req, r
 });
 
 // GET /admin/legacy-archive/export — .xlsx 스트리밍 다운로드(READ-ONLY).
-router.get("/admin/legacy-archive/export", ...adminGuard, async (req, res) => {
+router.get("/admin/legacy-archive/export", ...adminGuard, requireAdminExport, async (req, res) => {
   try {
     const qp = req.query as Record<string, string | undefined>;
     const scope = qp.scope === "all" ? "all" : "search";

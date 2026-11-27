@@ -1,6 +1,7 @@
 // 과거 CRM Excel 등록 — 자료 유형별 분석 파일 저장·불러오기·삭제(보관)
 //   · 분석 / 파일 저장 / 동기화는 별개. 이 컴포넌트는 CRM 데이터를 바꾸지 않는다(파일·메타데이터만).
 //   · 원본은 서버(R2 비공개)에 보관, 분석 결과는 집계 요약만 저장 → 상세는 '불러오기/재분석'으로 원본에서 다시 계산.
+import { canExport as canExportData } from '../../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
 import React, { useCallback, useEffect, useState } from 'react';
 import { api } from '../../lib/constants';
 
@@ -145,7 +146,7 @@ export function LegacyCrmSavedFiles({ token, sourceType, sourceLabel, file, summ
                   <td style={{ ...td, display: 'flex', gap: 4 }}>
                     <button style={sm} disabled={busy} onClick={() => doLoad(f, false)} data-testid={`saved-load-${f.id}`} aria-label={`${f.fileName} 불러오기`}>불러오기</button>
                     <button style={sm} onClick={() => setView(v => (v?.id === f.id ? null : f))} data-testid={`saved-view-${f.id}`} aria-label={`${f.fileName} 분석 결과 보기`}>분석 결과</button>
-                    <button style={sm} onClick={() => download(f)} data-testid={`saved-download-${f.id}`} aria-label={`${f.fileName} 원본 다운로드`}>원본</button>
+                    {canExportData() && (<button style={sm} onClick={() => download(f)} data-testid={`saved-download-${f.id}`} aria-label={`${f.fileName} 원본 다운로드`}>원본</button>)}
                     <button style={sm} disabled={busy} onClick={() => doLoad(f, true)} data-testid={`saved-reanalyze-${f.id}`} aria-label={`${f.fileName} 재분석`}>재분석</button>
                     {f.status === 'saved' && (delArm === f.id
                       ? <><button style={{ ...sm, background: '#dc2626', color: '#fff', borderColor: '#dc2626' }} disabled={busy} onClick={() => remove(f)} data-testid={`saved-delete-confirm-${f.id}`} aria-label={`${f.fileName} ${f.syncStatus === 'not_synced' ? '삭제' : '보관'} 확정`}>{f.syncStatus === 'not_synced' ? '삭제 확정' : '보관 확정'}</button>

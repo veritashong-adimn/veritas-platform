@@ -5,6 +5,7 @@
 //  · 데이터·계산은 서버(payout-rounds API)가 산출한 값을 그대로 사용한다(재계산·상태변경 없음).
 //  · 지급대상 목록·명세서 보기·Excel 등은 PayoutStatementModal(inline)을 그대로 재사용한다.
 // ─────────────────────────────────────────────────────────────────────────────
+import { canExport as canExportData } from '../../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { formatDisplayDate, formatLabelDates } from '../../lib/dateFormat';
 import { api } from '../../lib/constants';
@@ -171,7 +172,7 @@ export default function PayoutStatementTab({ token, onToast }: Props) {
               style={{ fontSize: 12, padding: '7px 14px' }} data-testid="statement-filter-reset" aria-label="필터 초기화">필터 초기화</GhostBtn>
           )}
           {/* 명세서 목록 Excel — 현재 조회범위/필터에 해당하는 전체 지급건을 다행 목록으로 내보낸다(§3·§8, 현재 페이지 아님). */}
-          <GhostBtn
+          {canExportData() && (<GhostBtn
             onClick={() => {
               const roundName = round ? (formatLabelDates(round.batchNumber) || formatDisplayDate(round.paymentDate)) : (scopeLabel ?? '전체');
               const total = filteredSummary.reduce((n, g: any) => n + (g.items?.length ?? 0), 0);
@@ -180,7 +181,7 @@ export default function PayoutStatementTab({ token, onToast }: Props) {
               onToast(`${total.toLocaleString()}건을 Excel로 내보냈습니다.`);
             }}
             style={{ fontSize: 12, padding: '7px 14px', marginLeft: 'auto' }}
-            data-testid="statement-list-excel" aria-label="지급명세서 목록 Excel 다운로드">명세서 목록 Excel</GhostBtn>
+            data-testid="statement-list-excel" aria-label="지급명세서 목록 Excel 다운로드">명세서 목록 Excel</GhostBtn>)}
         </div>
       </Card>
 

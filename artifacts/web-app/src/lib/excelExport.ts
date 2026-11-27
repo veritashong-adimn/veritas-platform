@@ -16,6 +16,7 @@
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore
 import XLSX from 'xlsx-js-style';
+import { writeWorkbookFile } from './exportAccess';   // Excel 저장 — 관리자만(공통 기준)
 
 export type ExcelCellType = 'text' | 'number' | 'date';
 
@@ -152,7 +153,7 @@ export function exportDataset<Row>(opts: {
 }): void {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, buildStyledSheet(opts.columns, opts.rows, opts.footerRows), opts.sheetName);
-  XLSX.writeFile(wb, opts.filename);
+  writeWorkbookFile(XLSX, wb, opts.filename);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -163,7 +164,7 @@ export function exportWorkbook(opts: { filename: string; sheets: WorkbookSheet[]
   for (const s of opts.sheets) {
     XLSX.utils.book_append_sheet(wb, buildStyledSheet(s.columns, s.rows), s.sheetName);
   }
-  XLSX.writeFile(wb, opts.filename);
+  writeWorkbookFile(XLSX, wb, opts.filename);
 }
 
 // ── 대량등록 템플릿 ────────────────────────────────────────────────────────
@@ -211,7 +212,7 @@ export function downloadTemplate(opts: {
   XLSX.utils.book_append_sheet(wb, buildInputSheet(columns), sheetName);
   for (const es of extraSheets) XLSX.utils.book_append_sheet(wb, buildInputSheet(es.columns), es.sheetName);
   XLSX.utils.book_append_sheet(wb, buildGuideSheet([{ sheetName, columns }, ...extraSheets]), '입력안내');
-  XLSX.writeFile(wb, filename);
+  writeWorkbookFile(XLSX, wb, filename);
 }
 
 /** '입력안내' 시트 — 시트명 그룹별 컬럼/필수/허용값 안내표. downloadTemplate·exportTemplateWorkbook 공용. */
@@ -252,7 +253,7 @@ export function exportTemplateWorkbook(opts: {
   const wb = XLSX.utils.book_new();
   for (const s of opts.dataSheets) XLSX.utils.book_append_sheet(wb, buildStyledSheet(s.columns, s.rows), s.sheetName);
   XLSX.utils.book_append_sheet(wb, buildGuideSheet(opts.guideColumns), '입력안내');
-  XLSX.writeFile(wb, opts.filename);
+  writeWorkbookFile(XLSX, wb, opts.filename);
 }
 
 // 파일명용 오늘 날짜 YYYYMMDD (로컬/KST 표시 기준).

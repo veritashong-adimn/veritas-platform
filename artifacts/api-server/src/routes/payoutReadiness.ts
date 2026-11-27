@@ -2,7 +2,7 @@
 //   GET /admin/payout-unified/readiness?date=YYYY-MM-DD[&scope=date|all] → 통합 지급행(플랫폼·과거 CRM 전환·CRM 원본) A/B/C/D 분류 + 사유·조치
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { requireAuth, requireRole, requireStaffPermission } from "../middlewares/auth";
+import { requireAuth, requireRole, requireStaffPermission, requireAdminExport } from "../middlewares/auth";
 import { computePayoutReadiness, loadResidentNumbers, loadProjectProfits } from "../services/payoutReadiness";
 import { getPermissionsForRole } from "../lib/rbac";
 import { logEvent } from "../lib/logEvent";
@@ -37,7 +37,7 @@ async function canRevealRrn(req: any): Promise<boolean> {
 
 // ─── 지급준비점검 '전체번호 엑셀' 전용 — POST body { translatorIds } → { residentNumbers: { [id]: '900101-1234567' } } ─────
 //   번호를 URL·쿼리에 싣지 않고(POST), 캐시 금지. 응답값·번호는 로그에 남기지 않으며 열람 사실(건수)만 기록한다.
-router.post("/admin/payout-unified/readiness/resident-numbers", ...guard, async (req, res) => {
+router.post("/admin/payout-unified/readiness/resident-numbers", ...guard, requireAdminExport, async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   if (!(await canRevealRrn(req))) { res.status(403).json({ error: "주민등록번호 전체 열람 권한이 없습니다(관리자 전용)." }); return; }
   const ids = Array.isArray(req.body?.translatorIds) ? (req.body.translatorIds as unknown[]).map(Number).filter(n => Number.isInteger(n) && n > 0) : [];

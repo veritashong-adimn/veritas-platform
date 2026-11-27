@@ -8,6 +8,7 @@
 //    지급완료가 아닌 건(지급예정·지급대기·지급확인 필요·중복 의심·지급 제외)은 명세서에 넣지 않는다.
 //  · 저장·지급확정·상태변경·재지급 기능 없음(과거 CRM 지급완료 건 포함 — 조회·출력 전용).
 // ─────────────────────────────────────────────────────────────────────────────
+import { canExport as canExportData } from '../../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../../lib/constants';
 import { Pagination } from '../ui/Paginator';
@@ -279,7 +280,7 @@ export function PayoutStatementSearchTab({ token, onToast }: { token: string; on
                       <td style={td}><div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>{(Object.entries(s.byStatus) as [Status, number][]).map(([k, n]) => badge(k, n))}</div></td>
                       <td style={{ ...tdR }}>
                         <div style={{ display: 'flex', gap: 5, justifyContent: 'flex-end' }} title={tip}>
-                          <button type="button" style={stmtBtn(can)} disabled={!can} onClick={e => { e.stopPropagation(); exportStmt(s, 'excel'); }} data-testid={`ps-excel-${s.key}`} aria-label={`${s.name} ${roundLabel(s.payoutDate)} 지급명세서 Excel`}>Excel</button>
+                          {canExportData() && (<button type="button" style={stmtBtn(can)} disabled={!can} onClick={e => { e.stopPropagation(); exportStmt(s, 'excel'); }} data-testid={`ps-excel-${s.key}`} aria-label={`${s.name} ${roundLabel(s.payoutDate)} 지급명세서 Excel`}>Excel</button>)}
                           <button type="button" style={stmtBtn(can)} disabled={!can} onClick={e => { e.stopPropagation(); exportStmt(s, 'pdf'); }} data-testid={`ps-pdf-${s.key}`} aria-label={`${s.name} ${roundLabel(s.payoutDate)} 지급명세서 PDF`}>PDF</button>
                         </div>
                       </td>
@@ -331,14 +332,14 @@ export function PayoutStatementSearchTab({ token, onToast }: { token: string; on
           <div style={{ fontSize: 12, color: '#6b7280', lineHeight: 1.6, marginBottom: 10 }}>
             세전 <b style={{ color: '#111827' }}>{won(totals.pretax)}</b>원<br />원천징수 <b style={{ color: '#dc2626' }}>{won(totals.withholding)}</b>원<br />기타 공제 <b>{won(totals.other)}</b>원<br />실지급 <b style={{ color: '#111827' }}>{won(totals.posttax)}</b>원
           </div>
-          <button type="button" style={{ ...btn(), width: '100%', marginBottom: 12 }} onClick={exportList} data-testid="ps-list-excel" aria-label="검색 결과 명세서 목록 Excel 다운로드">명세서 목록 Excel</button>
+          {canExportData() && (<button type="button" style={{ ...btn(), width: '100%', marginBottom: 12 }} onClick={exportList} data-testid="ps-list-excel" aria-label="검색 결과 명세서 목록 Excel 다운로드">명세서 목록 Excel</button>)}
           <div style={{ borderTop: '1px solid #f3f4f6', paddingTop: 10, fontSize: 12 }}>
             {sel ? (
               <>
                 <div style={{ fontWeight: 700, color: '#111827' }}>{sel.name}</div>
                 <div style={{ color: '#6b7280', marginBottom: 6 }}>{roundLabel(sel.payoutDate)} · 지급완료 {sel.paidItems.length}/{sel.count}건</div>
                 <div style={{ display: 'flex', gap: 6 }}>
-                  <button type="button" style={{ ...stmtBtn(sel.paidItems.length > 0), flex: 1, padding: '6px 0' }} disabled={!sel.paidItems.length} onClick={() => exportStmt(sel, 'excel')} data-testid="ps-sel-excel" aria-label="선택 명세서 Excel">Excel</button>
+                  {canExportData() && (<button type="button" style={{ ...stmtBtn(sel.paidItems.length > 0), flex: 1, padding: '6px 0' }} disabled={!sel.paidItems.length} onClick={() => exportStmt(sel, 'excel')} data-testid="ps-sel-excel" aria-label="선택 명세서 Excel">Excel</button>)}
                   <button type="button" style={{ ...stmtBtn(sel.paidItems.length > 0), flex: 1, padding: '6px 0' }} disabled={!sel.paidItems.length} onClick={() => exportStmt(sel, 'pdf')} data-testid="ps-sel-pdf" aria-label="선택 명세서 PDF">PDF</button>
                 </div>
                 {sel.paidItems.length < sel.count && <div style={{ marginTop: 6, color: '#92400e', fontSize: 11.5 }}>지급완료가 아닌 {sel.count - sel.paidItems.length}건은 명세서에 포함되지 않습니다.</div>}

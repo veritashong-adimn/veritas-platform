@@ -2,6 +2,8 @@
 //  · 관리자(users.role='admin' 또는 RBAC 역할 'admin'): 60분 / 내부 직원(users.role='staff' — PM·재무·열람 등): 30분
 //  · 고객·통번역사 등 외부 계정: 이번 정책 대상 아님(null — 미사용 만료 검사 없음, 로그아웃 세션 차단은 공통 적용)
 //  · 미사용 시간 = 마지막 '실제 사용자 활동'(화면 활동 보고 heartbeat) 이후 경과시간. 일반 API 호출(백그라운드 조회)은 활동으로 보지 않는다.
+import { isAdminAccount } from "./adminTier";
+
 export const ADMIN_IDLE_MINUTES = 60;
 export const STAFF_IDLE_MINUTES = 30;
 export const IDLE_WARNING_MINUTES = 2;   // 만료 2분 전 안내(화면)
@@ -9,7 +11,7 @@ export const IDLE_WARNING_MINUTES = 2;   // 만료 2분 전 안내(화면)
 export const MAX_REPORTED_IDLE_MS = 10 * 60_000;
 
 export function idleTimeoutMinutes(role: string | null | undefined, roleName?: string | null): number | null {
-  if (role === "admin" || roleName === "admin") return ADMIN_IDLE_MINUTES;
+  if (isAdminAccount(role, roleName)) return ADMIN_IDLE_MINUTES;
   if (role === "staff") return STAFF_IDLE_MINUTES;
   return null;
 }

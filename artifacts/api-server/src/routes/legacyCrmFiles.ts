@@ -20,7 +20,7 @@ import multer from "multer";
 import crypto from "node:crypto";
 import { db, importBatchesTable, importRowSourcesTable } from "@workspace/db";
 import { sql, eq, and } from "drizzle-orm";
-import { requireAuth, requireRole } from "../middlewares/auth";
+import { requireAuth, requireRole, requireAdminExport } from "../middlewares/auth";
 import { ARCHIVE_SOURCE_TYPES, computeFileHash, type ArchiveSourceType } from "../services/legacyArchiveResolve";
 import { isR2Configured, uploadToR2, getR2ObjectBuffer, deleteFromR2 } from "../lib/r2";
 
@@ -131,7 +131,7 @@ router.patch("/admin/legacy-archive/files/:id/analysis", ...staffGuard, async (r
   } catch (err) { req.log.error({ err }, "legacy crm file reanalyze failed"); res.status(500).json({ error: "재분석 결과 저장 실패" }); }
 });
 
-router.get("/admin/legacy-archive/files/:id/download", ...adminGuard, async (req, res) => {
+router.get("/admin/legacy-archive/files/:id/download", ...adminGuard, requireAdminExport, async (req, res) => {
   try {
     const f = await loadFile(Number(req.params.id));
     if (!f || f.status === "deleted" || !f.meta?.r2Key) { res.status(404).json({ error: "원본 파일을 찾을 수 없습니다." }); return; }
