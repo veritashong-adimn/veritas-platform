@@ -430,10 +430,15 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
     } catch { /* ignore */ }
   }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // [현재] 목록은 [현재] 탭에 들어올 때만 조회(전체자료·과거 CRM 진입 시 중복 조회하지 않음 — 그쪽은 UnifiedSalesHistoryView 가 조회).
+  //  탭에 들어올 때마다 최신값으로 다시 조회(신규 등록·수정 즉시 반영).
   useEffect(() => {
-    fetchProjects();
-    fetchModalData();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    if (salesRange === "current") fetchProjects();
+  }, [salesRange]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 거래처·담당자·고객·플랫폼 사용자 목록(약 5.8MB)은 판매 직접 등록 모달을 열 때만 조회(진입 시 조회하지 않음).
+  useEffect(() => {
+    if (showCreateProject) fetchModalData();
+  }, [showCreateProject]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // [현재] 검색 실행 — 자동 검색·[검색]·Enter 공통: 첫 페이지부터 같은 fetchProjects(빈 검색어 = 전체)
   const runProjectSearch = () => {
@@ -455,7 +460,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
   useEffect(() => {
     if (!salePeriodMounted.current) { salePeriodMounted.current = true; return; }
     setProjectPage(1);
-    fetchProjects();
+    if (salesRange === "current") fetchProjects();   // 다른 탭에서는 [현재] 진입 시 같은 조건으로 조회
   }, [salePeriod]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // applyAdvancedFilter / resetAdvancedFilter 에서 증가 → 최신 fetchProjects(새 클로저) 호출

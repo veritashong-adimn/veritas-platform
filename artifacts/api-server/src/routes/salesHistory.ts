@@ -12,10 +12,10 @@ import { Router, type IRouter } from "express";
 import { convertedSaleExists, supersededCancelledConvertedSaleIds } from "../services/legacyActivationLineage";
 import { RESTORE_MODULE, restoredCustomerNameOfProject } from "../services/legacyContactRestore";
 import { db, legacyArchiveRowsTable, legacySalesProgressLinksTable } from "@workspace/db";
-import { eq, and, or, ilike, gte, lte, count, desc, sql, type SQL } from "drizzle-orm";
+import { eq, and, or, ilike, gte, lte, count, desc, inArray, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { requireAuth, requireRole } from "../middlewares/auth";
-import { buildFilteredSalesProjectList } from "./admin";
+import { buildFilteredSalesProjectList, projectMatchesSearch } from "./admin";
 import { loadSaleIdentities, saleIdentityMatches, type SaleIdentity } from "../services/saleIdentity";
 import { loadFxSummaries, fmtForeign, fmtForeignWithKrw, type FxSummary } from "../services/fxBilling";
 import { minusSumBySource } from "../lib/minusIssue";
@@ -31,8 +31,7 @@ const LA = legacyArchiveRowsTable;
 const LEGACY_SALE_DATE = sql<string>`coalesce(to_char(${LA.recordDate},'YYYY-MM-DD'), substring(${LA.sourceRaw} ->> '판매번호' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}'), substring(${LA.sourceRaw} ->> '세금계산서발행(예정)일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}'))`;
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 200;
-// Legacy 전량 로드 안전 상한(수만 건 규모). 초과 시 degraded/truncated 로 표기(거짓 total 금지).
-const LEGACY_FETCH_CAP = 20000;
+// (2026-11) 과거 CRM 은 전량 로드하지 않는다 — 정렬 순서대로 필요한 구간만 SQL 로 조회(서버 페이지네이션). 건수는 별도 count 로 정확히 집계.
 
 export interface SalesHistoryRow {
   source: "current" | "legacy";
@@ -208,16 +207,19 @@ async function fillProductNames(dbx: any, list: SalesHistoryRow[], quoteIdByProj
 }
 
 // 과거 CRM 전환 판매건 — 판매일은 전환일(createdAt)이 아니라 원본 판매번호의 판매일로 표시·정렬(원본 불변).
-async function markLegacyOrigin(dbx: any, list: SalesHistoryRow[]) {
-  if (!list.length) return;
-  const ids = list.map(r => Number(r.id));
+//  활성 판매 매핑(판매 id → 원본 판매번호) 조회 — 정렬 전 전체 current 후보에 대해 1회.
+async function loadLegacyOriginMap(dbx: any, ids: number[]): Promise<Map<number, string>> {
+  if (!ids.length) return new Map();
   const maps = (await dbx.execute(sql`SELECT entity_id, legacy_id FROM legacy_master_mappings
     WHERE source_system = 'old_crm' AND entity_type = 'sale' AND status = 'active' AND entity_id IN (${sql.join(ids.map(i => sql`${i}`), sql`, `)})`)).rows as any[];
-  const byId = new Map(maps.map(m => [Number(m.entity_id), String(m.legacy_id)]));
+  return new Map(maps.map(m => [Number(m.entity_id), String(m.legacy_id)]));
+}
+//  restoredById: 판매 id → { contact_id, name } — buildFilteredSalesProjectList 결과(projects.contact_id · 복원 고객명)를 그대로 사용
+//  (기존처럼 같은 값을 다시 조회하지 않는다. 값 규칙 동일: restoredCustomerNameOfProject).
+function markLegacyOrigin(list: SalesHistoryRow[], byId: Map<number, string>, restoredById: Map<number, { contact_id: number | null; name: string | null }>) {
+  if (!list.length) return;
   // 전환 판매의 고객 담당자: 운영 판매 담당자 Master 가 있으면 그대로, 없으면 진행관리표 복원 고객명(미연결)
-  const legacyIds = list.filter(r => byId.has(Number(r.id))).map(r => Number(r.id));
-  const restored = legacyIds.length ? new Map(((await dbx.execute(sql`SELECT p.id, p.contact_id, ${restoredCustomerNameOfProject(sql`p.id`)} AS name
-    FROM projects p WHERE p.id IN (${sql.join(legacyIds.map(i => sql`${i}`), sql`, `)})`)).rows as any[]).map(x => [Number(x.id), x])) : new Map();
+  const restored = restoredById;
   for (const r of list) {
     const saleNo = byId.get(Number(r.id));
     if (!saleNo) continue;
@@ -281,26 +283,35 @@ export function summarizeBillingForList(saleTotal: number | null, pays: any[], t
 }
 async function fillBillingInfo(dbx: any, list: SalesHistoryRow[]) {
   if (!list.length) return;
+  // 입금상태 판정 기준 금액은 호출 시점 값으로 고정(같은 페이지의 다른 보완 조회와 병렬 실행되어도 결과 동일)
+  const amountAt = new Map(list.map(r => [r, r.amount] as const));
   const ids = sql.join(list.map(r => sql`${Number(r.id)}`), sql`, `);
-  const pays = (await dbx.execute(sql`SELECT id, project_id, sequence, issue_date::text, amount, paid_date::text, deposit_status, deposit_confirmed, deposit_item
-    FROM project_payments WHERE project_id IN (${ids}) ORDER BY project_id, sequence, id`)).rows as any[];
-  const fxMap = await loadFxSummaries(dbx, pays.map(p => Number(p.id)));
-  const txns = pays.length ? (await dbx.execute(sql`SELECT t.project_payment_id, t.paid_date::text, t.bank_account, t.customer_paid_amount, t.settled_amount, t.fee_amount, t.method, t.txn_type, t.currency, t.foreign_amount, t.fx_rate, t.krw_amount
-    FROM payment_transactions t WHERE t.project_payment_id IN (${sql.join(pays.map(p => sql`${Number(p.id)}`), sql`, `)}) ORDER BY t.paid_date, t.id`)).rows as any[] : [];
-  // 과거 CRM 전환 판매 — 원본 sales_list 값(플랫폼 청구정보가 없을 때만 사용)
+  // 과거 CRM 전환 판매 — 원본 sales_list 값(플랫폼 청구정보가 없을 때만 사용). 청구행 조회와 독립이라 병렬.
   const conv = list.filter(r => r.origin === "legacy_crm" && r.saleNumber);
-  const raw = conv.length ? new Map(((await dbx.execute(sql`SELECT DISTINCT ON (source_raw ->> '판매번호') source_raw ->> '판매번호' AS sale_no,
+  const rawQ = conv.length ? dbx.execute(sql`SELECT DISTINCT ON (source_raw ->> '판매번호') source_raw ->> '판매번호' AS sale_no,
       nullif(btrim(source_raw ->> '세금계산서발행(예정)일'), '') AS tax_date,
       substring(source_raw ->> '입금일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') AS pay_date,
       nullif(btrim(source_raw ->> '입금내역'), '') AS pay_memo
     FROM legacy_archive_rows WHERE source_type = 'sales_list' AND is_effective AND source_raw ->> '판매번호' IN (${sql.join(conv.map(r => sql`${r.saleNumber}`), sql`, `)})
-    ORDER BY source_raw ->> '판매번호', id DESC`)).rows as any[]).map(x => [String(x.sale_no), x])) : new Map<string, any>();
+    ORDER BY source_raw ->> '판매번호', id DESC`) : Promise.resolve({ rows: [] });
+  const paysQ = dbx.execute(sql`SELECT id, project_id, sequence, issue_date::text, amount, paid_date::text, deposit_status, deposit_confirmed, deposit_item
+    FROM project_payments WHERE project_id IN (${ids}) ORDER BY project_id, sequence, id`);
+  const [paysRes, rawRes] = await Promise.all([paysQ, rawQ]);
+  const pays = paysRes.rows as any[];
+  // 외화 요약·입금거래 — 청구행 id 에만 의존, 서로 독립이라 병렬
+  const [fxMap, txRes] = await Promise.all([
+    loadFxSummaries(dbx, pays.map(p => Number(p.id))),
+    pays.length ? dbx.execute(sql`SELECT t.project_payment_id, t.paid_date::text, t.bank_account, t.customer_paid_amount, t.settled_amount, t.fee_amount, t.method, t.txn_type, t.currency, t.foreign_amount, t.fx_rate, t.krw_amount
+      FROM payment_transactions t WHERE t.project_payment_id IN (${sql.join(pays.map(p => sql`${Number(p.id)}`), sql`, `)}) ORDER BY t.paid_date, t.id`) : Promise.resolve({ rows: [] }),
+  ]);
+  const txns = txRes.rows as any[];
+  const raw = new Map((rawRes.rows as any[]).map(x => [String(x.sale_no), x]));
   const byProj = new Map<number, any[]>();
   for (const p of pays) { const k = Number(p.project_id); byProj.set(k, [...(byProj.get(k) ?? []), p]); }
   for (const r of list) {
     const ps = byProj.get(Number(r.id)) ?? [];
     const payIds = new Set(ps.map(p => Number(p.id)));
-    const b = summarizeBillingForList(r.amount, ps, txns.filter(t => payIds.has(Number(t.project_payment_id))), fxMap);
+    const b = summarizeBillingForList(amountAt.get(r) ?? null, ps, txns.filter(t => payIds.has(Number(t.project_payment_id))), fxMap);
     const src = r.origin === "legacy_crm" && r.saleNumber ? raw.get(r.saleNumber) : null;
     r.taxInvoiceDate = b.taxInvoiceDate ?? src?.tax_date ?? null;
     if (b.paymentMemo) { r.paymentDate = b.paymentDate; r.paymentMemo = b.paymentMemo; r.paymentStatus = b.paymentStatus; }
@@ -374,15 +385,17 @@ function legacyWhere(q: Record<string, string | undefined>): SQL {
   return and(...conds) as SQL;
 }
 
-// 통합 정렬: recordDate DESC(null 뒤) → key DESC(deterministic).
-function sortRows(rows: SalesHistoryRow[]): SalesHistoryRow[] {
-  return rows.sort((a, b) => {
-    if (a.recordDate && b.recordDate) { if (a.recordDate !== b.recordDate) return a.recordDate < b.recordDate ? 1 : -1; }
-    else if (a.recordDate && !b.recordDate) return -1;
-    else if (!a.recordDate && b.recordDate) return 1;
-    return a.key < b.key ? 1 : a.key > b.key ? -1 : 0;
-  });
+// 통합 정렬: recordDate DESC(null 뒤) → key DESC(deterministic, 문자 코드 순).
+//  과거 CRM SQL 정렬(LEGACY_ORDER — COLLATE "C")과 같은 순서 — 서버 페이지네이션 병합의 기준.
+function cmpRows(a: { recordDate: string | null; key: string }, b: { recordDate: string | null; key: string }): number {
+  if (a.recordDate && b.recordDate) { if (a.recordDate !== b.recordDate) return a.recordDate < b.recordDate ? 1 : -1; }
+  else if (a.recordDate && !b.recordDate) return -1;
+  else if (!a.recordDate && b.recordDate) return 1;
+  return a.key < b.key ? 1 : a.key > b.key ? -1 : 0;
 }
+function sortRows(rows: SalesHistoryRow[]): SalesHistoryRow[] { return rows.sort(cmpRows); }
+// 과거 CRM 행의 정렬 — cmpRows 와 동일(판매일 DESC NULLS LAST → 'legacy:'||id DESC, 바이트 순 비교)
+const LEGACY_ORDER = [sql`(${LEGACY_SALE_DATE}) COLLATE "C" DESC NULLS LAST`, sql`('legacy:' || ${LA.id}) COLLATE "C" DESC`];
 
 export interface SalesHistoryResult {
   rows: SalesHistoryRow[];
@@ -393,6 +406,97 @@ export interface SalesHistoryResult {
   forcedCurrentOnly: boolean;
 }
 
+// 과거 CRM 판매행 표시 컬럼(고객 담당자 집계·담당자 보완·확인 필요 포함) — 화면에 표시할 행(id)만 계산한다.
+//  값 규칙은 기존과 동일(같은 표현식). 고객 담당자 집계는 해당 판매행의 연결만 대상으로 좁혀 계산.
+async function loadLegacyDetailRows(dbx: any, ids: number[]) {
+  if (!ids.length) return [] as any[];
+  // (C-4J-2C-13) 고객 담당자 — 기존 확정 매핑(legacy_sales_progress_links)으로 연결된 진행관리 수행행의 '고객명'을 판매건별 집계.
+  //   READ-ONLY 조회만(매핑 재계산/DB 변경 없음). 고유 1명→이름 / 복수 상이→'확인 필요' / 없음·미연결→null.
+  //   '고객명'은 거래처 측 고객 담당자(내부 담당자·영업담당자·통번역사명과 구분됨 — 검증 완료).
+  const LP = alias(legacyArchiveRowsTable, "lp");
+  const LSP = legacySalesProgressLinksTable;
+  const custSq = dbx.select({
+    saleRowId: LSP.saleRowId,
+    dn: sql<number>`count(distinct nullif(btrim(${LP.sourceRaw} ->> '고객명'), ''))`.as("dn"),
+    oneName: sql<string | null>`max(nullif(btrim(${LP.sourceRaw} ->> '고객명'), ''))`.as("one_name"),
+  }).from(LSP).innerJoin(LP, eq(LP.id, LSP.progressRowId))
+    // 반복 업로드: 확정 연결 + 현재 유효 수행행만(수정 이전 버전·되돌린 이관 연결 제외 → 고객명 중복 집계 방지).
+    // 고객명으로 쓸 수 없는 값(문자 없음·전화번호 형태)은 제외 — 복원 서비스(legacyContactRestore)와 같은 기준
+    .where(and(inArray(LSP.saleRowId, ids), eq(LSP.decision, "confirmed"), eq(LP.isEffective, true),
+      sql`btrim(coalesce(${LP.sourceRaw} ->> '고객명', '')) ~ '[가-힣A-Za-z]'`,
+      sql`length(regexp_replace(coalesce(${LP.sourceRaw} ->> '고객명', ''), '[^0-9]', '', 'g')) < 7`))
+    .groupBy(LSP.saleRowId).as("cust");
+  return dbx.select({
+    id: LA.id, recordDate: LA.recordDate, saleDate: LEGACY_SALE_DATE, saleNumber: sql<string | null>`${LA.sourceRaw} ->> '판매번호'`,
+    companyName: LA.companyName, contactName: LA.contactName,
+    productName: LA.productName, totalAmount: LA.totalAmount, supplyAmount: LA.supplyAmount, vatAmount: LA.vatAmount, collectionDate: LA.collectionDate, collectionStatus: LA.collectionStatus,
+    taxInvoiceDate: sql<string | null>`nullif(btrim(${LA.sourceRaw} ->> '세금계산서발행(예정)일'), '')`,
+    salesRep: sql<string | null>`nullif(btrim(${LA.sourceRaw} ->> '영업담당자'), '')`,
+    paymentDate: sql<string | null>`substring(${LA.sourceRaw} ->> '입금일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}')`,
+    paymentMemo: sql<string | null>`nullif(btrim(${LA.sourceRaw} ->> '입금내역'), '')`,
+    opportunity: sql<string | null>`nullif(btrim(${LA.sourceRaw} ->> '영업기회명'), '')`,
+    // 내부 영업담당자 이름이 고객명 칸에 들어간 경우는 고객 담당자로 쓰지 않는다
+    customerContact: sql<string | null>`case when ${custSq.dn} = 1 and replace(${custSq.oneName}, ' ', '') <> replace(coalesce(${LA.sourceRaw} ->> '영업담당자', ''), ' ', '') then ${custSq.oneName} when ${custSq.dn} > 1 then '확인 필요' else null end`,
+    reviewNeeded: sql<boolean>`${LA.id} IN (SELECT rr.entity_id FROM import_row_sources rr JOIN import_batches rb ON rb.id = rr.batch_id AND rb.is_current AND rb.module = ${RESTORE_MODULE}
+      WHERE rr.module = ${RESTORE_MODULE} AND rr.status = 'review')`,
+    // 판매관리 고객 담당자 보완 연결(legacy_master_mappings 'sale_contact', 판매번호 기준 — 원본 불변)
+    supplementContact: sql<string | null>`(SELECT c.name FROM legacy_master_mappings m JOIN contacts c ON c.id = m.entity_id AND c.deleted_at IS NULL
+      WHERE m.source_system = 'old_crm' AND m.entity_type = 'sale_contact' AND m.status = 'active' AND m.legacy_id = ${LA.sourceRaw} ->> '판매번호')`,
+  }).from(LA).leftJoin(custSq, eq(custSq.saleRowId, LA.id)).where(inArray(LA.id, ids));
+}
+
+// Current 판매 전체(정렬 기준 판매일·판매번호 포함) — 판매건은 수백 건 규모라 전체를 계산해 정렬한다(정확한 병합·건수).
+async function loadCurrentSalesRows(dbx: any, q: Record<string, string | undefined>, effRange: "all" | "current" | "legacy", forcedCurrentOnly: boolean) {
+  // 판매관리 = 판매전환 완료건만. [현재] 탭과 같은 salesOnly 기준으로 견적 단계(created/quoted) project 제외
+  //  (변경견적 보관용 project·삭제된 견적의 project 가 판매번호·금액 없는 행으로 섞이던 문제 방지).
+  //  status 필터를 명시한 경우는 기존과 동일하게 그 필터를 따른다(buildFilteredSalesProjectList 규칙).
+  q = { ...q, salesOnly: "true" };
+  // [전체자료] 판매취소 건도 조회 — 일반 판매취소·과거 CRM 전환 판매취소 공통 기준(붉은색 '취소' 표시는 화면):
+  //   ① 유효 견적(현재 유효본·미삭제)이 남아 있는 판매만 — 판매번호·최초 계약금액이 있는 실제 판매취소 건.
+  //      견적 단계에서 정리된 프로젝트(견적 삭제 후 남은 프로젝트·테스트 정리·과거 CRM 원복)는 판매가 아니므로 제외.
+  //   ② 중복 방지 — 같은 원본 판매번호에 살아 있는 전환 판매나 더 최신의 취소 전환 판매가 있으면 제외,
+  //      그리고 아래에서 판매번호가 같은 정상 판매가 있으면 취소 행을 숨긴다(판매번호당 1건).
+  //   Current 전용 필터·상태 필터가 있으면 기존 규칙 그대로(취소 건 기본 제외).
+  const showCancelled = effRange === "all" && !forcedCurrentOnly && q.includeCancelled !== "true";
+  if (showCancelled) q = { ...q, includeCancelled: "true" };
+  // 판매번호 검색 — 기존 검색(판매명=프로젝트명·거래처·담당자 등) 결과에 판매번호/견적번호/원본 판매번호 일치 판매를 더한다(전체 대상, 페이지 분할 전).
+  //  검색어가 있으면 목록을 한 번만 만들고(검색 제외) 검색 일치/불일치를 나눈다 — 기존 2회 조회와 같은 결과(검색은 search 값 기준).
+  const term = (q.search || q.q || "").trim();
+  const [superseded, base] = await Promise.all([
+    showCancelled ? supersededCancelledConvertedSaleIds(dbx) : Promise.resolve(new Set<number>()),
+    buildFilteredSalesProjectList(term ? { ...q, search: undefined, q: undefined } : q) as Promise<any[]>,
+  ]);
+  const keepRow = (p: any) => !showCancelled || p.status !== "cancelled"
+    || (p.quoteStatus != null && !superseded.has(Number(p.id)));
+  const matched = term && q.search?.trim() ? base.filter((p: any) => projectMatchesSearch(p, q.search!)) : base;
+  const list = matched.filter(keepRow);
+  let currentRows: SalesHistoryRow[] = list.map(mapCurrentRow);
+  let extra: SalesHistoryRow[] = [];
+  if (term) {
+    const seen = new Set(currentRows.map(r => Number(r.id)));
+    extra = base.filter(keepRow).filter((p: any) => !seen.has(Number(p.id))).map(mapCurrentRow);
+  }
+  // 판매 식별(판매일·판매번호)·과거 CRM 전환 매핑 — 서로 독립이라 병렬
+  const allIds = [...currentRows, ...extra].map(r => Number(r.id));
+  const [idMap, originMap] = await Promise.all([loadSaleIdentities(dbx, allIds), loadLegacyOriginMap(dbx, allIds)]);
+  if (extra.length) currentRows = [...currentRows, ...extra.filter(r => saleIdentityMatches(idMap.get(Number(r.id)), term))];
+  const quoteIdByProject = fillSaleDates(currentRows, idMap);
+  const restoredById = new Map(base.map((p: any) => [Number(p.id), { contact_id: p.contactId ?? null, name: p.legacyCustomerName ?? null }]));
+  markLegacyOrigin(currentRows, originMap, restoredById);   // 과거 CRM 전환 판매는 원본 판매번호 날짜 유지(기존 규칙)
+  if (showCancelled) {
+    // 판매번호 기준 중복 방지(공통) — 정상 판매와 같은 판매번호의 취소 행은 숨기고, 취소 행끼리는 최신 1건만.
+    const liveNos = new Set(currentRows.filter(r => r.workflowStatus !== "cancelled" && r.saleNumber).map(r => String(r.saleNumber)));
+    const seenCancelled = new Set<string>();
+    currentRows = [...currentRows].sort((a, b) => Number(b.id) - Number(a.id)).filter(r => {
+      if (r.workflowStatus !== "cancelled" || !r.saleNumber) return true;
+      const no = String(r.saleNumber);
+      if (liveNos.has(no) || seenCancelled.has(no)) return false;
+      seenCancelled.add(no); return true;
+    });
+  }
+  return { rows: sortRows(currentRows), quoteIdByProject };
+}
+
 export async function getSalesHistory(dbx: any, q: Record<string, string | undefined>): Promise<SalesHistoryResult> {
   const reqRange = (q.range === "current" || q.range === "legacy" || q.range === "all") ? q.range : "all";
   const forcedCurrentOnly = reqRange !== "legacy" && hasCurrentOnlyFilter(q);
@@ -400,122 +504,85 @@ export async function getSalesHistory(dbx: any, q: Record<string, string | undef
 
   const page = Math.max(1, Math.floor(Number(q.page) || 1));
   const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Math.floor(Number(q.pageSize) || DEFAULT_PAGE_SIZE)));
+  const off = (page - 1) * pageSize;
 
   const sources: SalesHistoryResult["sources"] = { current: { ok: true }, legacy: { ok: true } };
-  let currentRows: SalesHistoryRow[] = [];
-  let legacyRows: SalesHistoryRow[] = [];
+  const wantCurrent = effRange === "all" || effRange === "current";
+  const wantLegacy = effRange === "all" || effRange === "legacy";
+  const where = wantLegacy ? legacyWhere(q) : null;
+
+  // ① Current 전체(수백 건) ∥ 과거 CRM 건수 — 서로 독립(부분 실패 격리)
+  let current: SalesHistoryRow[] = [];
   let quoteIdByProject = new Map<number, number>();
+  let legacyTotal = 0;
+  await Promise.all([
+    wantCurrent ? loadCurrentSalesRows(dbx, q, effRange, forcedCurrentOnly)
+      .then(r => { current = r.rows; quoteIdByProject = r.quoteIdByProject; sources.current = { ok: true, count: current.length }; })
+      .catch(() => { sources.current = { ok: false, error: "현재 판매자료 조회 실패" }; }) : null,
+    wantLegacy ? (async () => { const t = await dbx.select({ n: count() }).from(LA).where(where!); legacyTotal = Number(t[0]?.n ?? 0); })()
+      .then(() => { sources.legacy = { ok: true, count: legacyTotal, truncated: false }; })
+      .catch(() => { sources.legacy = { ok: false, error: "과거 CRM 자료 조회 실패" }; }) : null,
+  ]);
+  const legacyOk = wantLegacy && sources.legacy.ok;
+  const nC = sources.current.ok ? current.length : 0;
+  const total = nC + (legacyOk ? legacyTotal : 0);
 
-  // Current (기존 로직 재사용 — 전체 matching 반환)
-  if (effRange === "all" || effRange === "current") {
-    try {
-      // 판매관리 = 판매전환 완료건만. [현재] 탭과 같은 salesOnly 기준으로 견적 단계(created/quoted) project 제외
-      //  (변경견적 보관용 project·삭제된 견적의 project 가 판매번호·금액 없는 행으로 섞이던 문제 방지).
-      //  status 필터를 명시한 경우는 기존과 동일하게 그 필터를 따른다(buildFilteredSalesProjectList 규칙).
-      q = { ...q, salesOnly: "true" };
-      // [전체자료] 판매취소 건도 조회 — 일반 판매취소·과거 CRM 전환 판매취소 공통 기준(붉은색 '취소' 표시는 화면):
-      //   ① 유효 견적(현재 유효본·미삭제)이 남아 있는 판매만 — 판매번호·최초 계약금액이 있는 실제 판매취소 건.
-      //      견적 단계에서 정리된 프로젝트(견적 삭제 후 남은 프로젝트·테스트 정리·과거 CRM 원복)는 판매가 아니므로 제외.
-      //   ② 중복 방지 — 같은 원본 판매번호에 살아 있는 전환 판매나 더 최신의 취소 전환 판매가 있으면 제외,
-      //      그리고 아래에서 판매번호가 같은 정상 판매가 있으면 취소 행을 숨긴다(판매번호당 1건).
-      //   Current 전용 필터·상태 필터가 있으면 기존 규칙 그대로(취소 건 기본 제외).
-      const showCancelled = effRange === "all" && !forcedCurrentOnly && q.includeCancelled !== "true";
-      const superseded = showCancelled ? await supersededCancelledConvertedSaleIds(dbx) : new Set<number>();
-      if (showCancelled) q = { ...q, includeCancelled: "true" };
-      const keepRow = (p: any) => !showCancelled || p.status !== "cancelled"
-        || (p.quoteStatus != null && !superseded.has(Number(p.id)));
-      const list = (await buildFilteredSalesProjectList(q) as any[]).filter(keepRow);
-      currentRows = list.map(mapCurrentRow);
-      // 판매번호 검색 — 기존 검색(판매명=프로젝트명·거래처·담당자 등) 결과에 판매번호/견적번호/원본 판매번호 일치 판매를 더한다(전체 대상, 페이지 분할 전).
-      const term = (q.search || q.q || "").trim();
-      let extra: SalesHistoryRow[] = [];
-      if (term) {
-        const seen = new Set(currentRows.map(r => Number(r.id)));
-        extra = ((await buildFilteredSalesProjectList({ ...q, search: undefined, q: undefined })) as any[])
-          .filter(keepRow).filter(p => !seen.has(Number(p.id))).map(mapCurrentRow);
+  // ② 현재 페이지 구간 결정 — 통합 순서(cmpRows)에서 [off, off+pageSize) 위치의 행.
+  //   과거 CRM 은 정렬 순서대로 필요한 구간(id·판매일만)만 SQL 로 가져와 current 와 병합한다.
+  //   current 는 최대 nC 건이 과거 CRM 사이에 끼므로, 구간에 들어올 수 있는 과거 CRM 순위는 [off − nC, off + pageSize).
+  let pageItems: { key: string; recordDate: string | null; legacyId?: number; row?: SalesHistoryRow }[] = [];
+  if (!legacyOk || legacyTotal === 0) {
+    pageItems = current.slice(off, off + pageSize).map(r => ({ key: r.key, recordDate: r.recordDate, row: r }));
+  } else {
+    const L0 = Math.max(0, off - nC);
+    const lim = off + pageSize - L0;
+    let lights: { key: string; recordDate: string | null; legacyId: number }[] = [];
+    if (L0 < legacyTotal) {
+      try {
+        const lw = await dbx.select({ id: LA.id, sd: LEGACY_SALE_DATE }).from(LA).where(where!).orderBy(...LEGACY_ORDER).offset(L0).limit(lim);
+        lights = lw.map((x: any) => ({ key: `legacy:${x.id}`, recordDate: x.sd ?? null, legacyId: Number(x.id) }));
+      } catch { sources.legacy = { ok: false, error: "과거 CRM 자료 조회 실패" }; }
+    }
+    if (sources.legacy.ok) {
+      // 병합 시작점: L0 = 0 이면 처음부터, 아니면 첫 과거 CRM 행(순위 L0)의 통합 위치 = L0 + (그보다 앞선 current 수)
+      let i = 0, j = 0, g = 0;
+      if (L0 > 0 && lights.length) { const k = current.filter(c => cmpRows(c, lights[0]) < 0).length; i = k; g = L0 + k; }
+      else if (L0 > 0) { i = nC; g = total; }   // 과거 CRM 구간 밖(off ≥ total) — 빈 페이지
+      while (pageItems.length < pageSize && (i < nC || j < lights.length)) {
+        const takeLegacy = j < lights.length && (i >= nC || cmpRows(lights[j], current[i]) < 0);
+        const it = takeLegacy ? lights[j++] : { key: current[i].key, recordDate: current[i].recordDate, row: current[i++] };
+        if (g >= off) pageItems.push(it);
+        g++;
       }
-      const idMap = await loadSaleIdentities(dbx, [...currentRows, ...extra].map(r => Number(r.id)));
-      if (extra.length) currentRows = [...currentRows, ...extra.filter(r => saleIdentityMatches(idMap.get(Number(r.id)), term))];
-      quoteIdByProject = fillSaleDates(currentRows, idMap);
-      await markLegacyOrigin(dbx, currentRows);   // 과거 CRM 전환 판매는 원본 판매번호 날짜 유지(기존 규칙)
-      if (showCancelled) {
-        // 판매번호 기준 중복 방지(공통) — 정상 판매와 같은 판매번호의 취소 행은 숨기고, 취소 행끼리는 최신 1건만.
-        const liveNos = new Set(currentRows.filter(r => r.workflowStatus !== "cancelled" && r.saleNumber).map(r => String(r.saleNumber)));
-        const seenCancelled = new Set<string>();
-        currentRows = [...currentRows].sort((a, b) => Number(b.id) - Number(a.id)).filter(r => {
-          if (r.workflowStatus !== "cancelled" || !r.saleNumber) return true;
-          const no = String(r.saleNumber);
-          if (liveNos.has(no) || seenCancelled.has(no)) return false;
-          seenCancelled.add(no); return true;
-        });
-      }
-      await fillPmNames(dbx, currentRows);
-      sources.current = { ok: true, count: currentRows.length };
-    } catch (e: any) {
-      sources.current = { ok: false, error: "현재 판매자료 조회 실패" };
+    } else {
+      pageItems = current.slice(off, off + pageSize).map(r => ({ key: r.key, recordDate: r.recordDate, row: r }));
     }
   }
 
-  // Legacy sales_list (공통 filter 만)
-  if (effRange === "all" || effRange === "legacy") {
-    try {
-      const where = legacyWhere(q);
-      const totalRow = await dbx.select({ n: count() }).from(LA).where(where);
-      const legacyTotal = Number(totalRow[0]?.n ?? 0);
-      // (C-4J-2C-13) 고객 담당자 — 기존 확정 매핑(legacy_sales_progress_links)으로 연결된 진행관리 수행행의 '고객명'을 판매건별 집계.
-      //   READ-ONLY 조회만(매핑 재계산/DB 변경 없음). 고유 1명→이름 / 복수 상이→'확인 필요' / 없음·미연결→null.
-      //   '고객명'은 거래처 측 고객 담당자(내부 담당자·영업담당자·통번역사명과 구분됨 — 검증 완료).
-      const LP = alias(legacyArchiveRowsTable, "lp");
-      const LSP = legacySalesProgressLinksTable;
-      const custSq = dbx.select({
-        saleRowId: LSP.saleRowId,
-        dn: sql<number>`count(distinct nullif(btrim(${LP.sourceRaw} ->> '고객명'), ''))`.as("dn"),
-        oneName: sql<string | null>`max(nullif(btrim(${LP.sourceRaw} ->> '고객명'), ''))`.as("one_name"),
-      }).from(LSP).innerJoin(LP, eq(LP.id, LSP.progressRowId))
-        // 반복 업로드: 확정 연결 + 현재 유효 수행행만(수정 이전 버전·되돌린 이관 연결 제외 → 고객명 중복 집계 방지).
-        // 고객명으로 쓸 수 없는 값(문자 없음·전화번호 형태)은 제외 — 복원 서비스(legacyContactRestore)와 같은 기준
-        .where(and(eq(LSP.decision, "confirmed"), eq(LP.isEffective, true),
-          sql`btrim(coalesce(${LP.sourceRaw} ->> '고객명', '')) ~ '[가-힣A-Za-z]'`,
-          sql`length(regexp_replace(coalesce(${LP.sourceRaw} ->> '고객명', ''), '[^0-9]', '', 'g')) < 7`))
-        .groupBy(LSP.saleRowId).as("cust");
-      const fetched = await dbx.select({
-        id: LA.id, recordDate: LA.recordDate, saleDate: LEGACY_SALE_DATE, saleNumber: sql<string | null>`${LA.sourceRaw} ->> '판매번호'`,
-        companyName: LA.companyName, contactName: LA.contactName,
-        productName: LA.productName, totalAmount: LA.totalAmount, supplyAmount: LA.supplyAmount, vatAmount: LA.vatAmount, collectionDate: LA.collectionDate, collectionStatus: LA.collectionStatus,
-        taxInvoiceDate: sql<string | null>`nullif(btrim(${LA.sourceRaw} ->> '세금계산서발행(예정)일'), '')`,
-        salesRep: sql<string | null>`nullif(btrim(${LA.sourceRaw} ->> '영업담당자'), '')`,
-        paymentDate: sql<string | null>`substring(${LA.sourceRaw} ->> '입금일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}')`,
-        paymentMemo: sql<string | null>`nullif(btrim(${LA.sourceRaw} ->> '입금내역'), '')`,
-        opportunity: sql<string | null>`nullif(btrim(${LA.sourceRaw} ->> '영업기회명'), '')`,
-        // 내부 영업담당자 이름이 고객명 칸에 들어간 경우는 고객 담당자로 쓰지 않는다
-        customerContact: sql<string | null>`case when ${custSq.dn} = 1 and replace(${custSq.oneName}, ' ', '') <> replace(coalesce(${LA.sourceRaw} ->> '영업담당자', ''), ' ', '') then ${custSq.oneName} when ${custSq.dn} > 1 then '확인 필요' else null end`,
-        reviewNeeded: sql<boolean>`${LA.id} IN (SELECT rr.entity_id FROM import_row_sources rr JOIN import_batches rb ON rb.id = rr.batch_id AND rb.is_current AND rb.module = ${RESTORE_MODULE}
-          WHERE rr.module = ${RESTORE_MODULE} AND rr.status = 'review')`,
-        // 판매관리 고객 담당자 보완 연결(legacy_master_mappings 'sale_contact', 판매번호 기준 — 원본 불변)
-        supplementContact: sql<string | null>`(SELECT c.name FROM legacy_master_mappings m JOIN contacts c ON c.id = m.entity_id AND c.deleted_at IS NULL
-          WHERE m.source_system = 'old_crm' AND m.entity_type = 'sale_contact' AND m.status = 'active' AND m.legacy_id = ${LA.sourceRaw} ->> '판매번호')`,
-      }).from(LA).leftJoin(custSq, eq(custSq.saleRowId, LA.id)).where(where).orderBy(sql`${LEGACY_SALE_DATE} desc nulls last`, desc(LA.id)).limit(LEGACY_FETCH_CAP);
-      legacyRows = fetched.map(mapLegacyRow);
-      const truncated = legacyTotal > fetched.length;
-      sources.legacy = { ok: true, count: legacyTotal, truncated };
-    } catch (e: any) {
-      sources.legacy = { ok: false, error: "과거 CRM 자료 조회 실패" };
-    }
-  }
+  // ③ 현재 페이지 행만 상세 조회 — 과거 CRM 표시 컬럼 ∥ current 청구정보·상품 요약·담당PM(서로 독립)
+  const curPage = pageItems.filter(x => x.row).map(x => x.row!);
+  const legacyIds = pageItems.filter(x => x.legacyId != null).map(x => x.legacyId!);
+  const legacyById = new Map<number, SalesHistoryRow>();
+  await Promise.all([
+    legacyIds.length ? loadLegacyDetailRows(dbx, legacyIds)
+      .then(rs => { for (const r of rs) legacyById.set(Number(r.id), mapLegacyRow(r)); })
+      .catch(() => { sources.legacy = { ok: false, error: "과거 CRM 자료 조회 실패" }; }) : null,
+    // 실패해도 목록은 표시(해당 칸 '-')
+    fillBillingInfo(dbx, curPage).catch(e => console.error("sales-history 청구정보 조회 실패", e)),
+    (async () => {
+      try { await fillProductNames(dbx, curPage, quoteIdByProject); } catch (e) { console.error("sales-history 상품 요약 조회 실패", e); }
+      try { await fillCancelledOriginalAmounts(dbx, curPage); } catch (e) { console.error("sales-history 취소 판매 원 계약금액 조회 실패", e); }
+    })(),
+    fillPmNames(dbx, curPage).catch(e => console.error("sales-history 담당PM 조회 실패", e)),
+  ]);
+  const pageRows = pageItems.map(x => x.row ?? legacyById.get(x.legacyId!)).filter((r): r is SalesHistoryRow => !!r);
 
-  const degraded = (effRange !== "legacy" && !sources.current.ok) || (effRange !== "current" && !sources.legacy.ok) || !!sources.legacy.truncated;
-
-  const merged = sortRows([...currentRows, ...legacyRows]);
-  const total = (sources.current.ok ? (sources.current.count ?? 0) : 0) + (sources.legacy.ok ? (sources.legacy.count ?? 0) : 0);
-  const pageRows = merged.slice((page - 1) * pageSize, page * pageSize);
-  // 현재 페이지의 current 판매만 청구정보(발행일·입금) 조회 — 실패해도 목록은 표시(해당 칸 '-')
-  try { await fillBillingInfo(dbx, pageRows.filter(r => r.source === "current")); } catch (e) { console.error("sales-history 청구정보 조회 실패", e); }
-  try { await fillProductNames(dbx, pageRows.filter(r => r.source === "current"), quoteIdByProject); } catch (e) { console.error("sales-history 상품 요약 조회 실패", e); }
-  try { await fillCancelledOriginalAmounts(dbx, pageRows); } catch (e) { console.error("sales-history 취소 판매 원 계약금액 조회 실패", e); }
-
+  const degraded = (effRange !== "legacy" && !sources.current.ok) || (effRange !== "current" && !sources.legacy.ok);
+  // 건수 = 조회에 성공한 자료원 기준(실패한 쪽의 가짜 total 을 만들지 않는다 — 기존 규칙)
+  const finalTotal = (sources.current.ok ? nC : 0) + (sources.legacy.ok ? legacyTotal : 0);
   return {
     rows: pageRows,
-    pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) },
+    pagination: { page, pageSize, total: finalTotal, totalPages: Math.max(1, Math.ceil(finalTotal / pageSize)) },
     sources, degraded, range: effRange, forcedCurrentOnly,
   };
 }

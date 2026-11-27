@@ -17,7 +17,7 @@ import {
 // 레거시 프로젝트 정산의 기본 원천징수 세율(%) — 신규 정산 엔진과 동일한 단일 출처(기본 3.3%).
 //  · 향후 기본값을 domestic_2_2 로 바꾸면 레거시 정산도 함께 2.2% 로 반영된다(과거 저장 정산건은 불변).
 const DEFAULT_WITHHOLDING_RATE = WITHHOLDING_RATE_BY_TREATMENT[DEFAULT_DOMESTIC_WITHHOLDING_TREATMENT] ?? 3.3;
-import { eq, and, ne, ilike, or, gte, lte, inArray, sql, desc, isNull } from "drizzle-orm";
+import { eq, and, ne, ilike, or, gte, lte, inArray, sql, desc, isNull, type SQL } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission, requireStaffPermission } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
 import { getSettings, invalidateSettingsCache } from "../lib/getSettings";
@@ -59,7 +59,7 @@ import { validateItemStatuses } from "../services/quoteItemStatus";
 import { loadPerformanceAnnotations } from "../services/legacyPayoutStatus";
 import { legacyOriginOfProject, customerNoteOf, customerMemoOf } from "../services/customerDocText";
 import { captureIfMissing, recaptureRecipient, freezeProjectQuotes, liveRecipientOf, hasSnapshot } from "../services/quoteRecipientSnapshot";
-import { restoredCustomerNameOfProject, linkedContactNameOfSaleNo } from "../services/legacyContactRestore";
+import { restoredCustomerNameOfProject, restoredCustomerNameOfSaleRow, linkedContactNameOfSaleNo } from "../services/legacyContactRestore";
 import { loadRemittanceSummaries } from "../services/performanceRemittance";
 import { parseSaleDateFilter, projectIdsInPeriod } from "../services/saleDateSearch";
 
@@ -81,6 +81,16 @@ router.use(adminNotesRouter);
 // ─── 프로젝트 목록 (검색/필터) ────────────────────────────────────────────
 // 필터 로직 공유 헬퍼 — GET /admin/projects 와 GET /admin/projects/export 가 동일 필터를 쓰도록 추출.
 //  (§18: Excel export 는 화면과 동일한 검색/필터 조건 전체를 반영해야 한다. 로직 복제 대신 단일 SSOT.)
+// 판매목록 통합검색 조건(판매명·고객 이메일·담당자·복원 고객명·거래처) — buildFilteredSalesProjectList·sales-history 공용(같은 규칙).
+export function projectMatchesSearch(p: { title: string; customerEmail: string | null; contactName: string | null; legacyCustomerName: string | null; companyName: string | null }, search: string): boolean {
+  const s = search.trim().toLowerCase();
+  return p.title.toLowerCase().includes(s) ||
+    (p.customerEmail ?? "").toLowerCase().includes(s) ||
+    (p.contactName ?? "").toLowerCase().includes(s) ||
+    (p.legacyCustomerName ?? "").toLowerCase().includes(s) ||   // 과거 CRM 전환 판매의 복원 고객명
+    (p.companyName ?? "").toLowerCase().includes(s);
+}
+
 export async function buildFilteredSalesProjectList(query: Record<string, string | undefined>) {
     const {
       search, status, financialStatus: financialStatusFilter, dateFrom, dateTo, assignedAdminId, companyName, contactName,
@@ -103,8 +113,19 @@ export async function buildFilteredSalesProjectList(query: Record<string, string
       .select({ id: companiesTable.id, name: companiesTable.name })
       .from(companiesTable).as("proj_company");
 
-    // 메인 프로젝트 쿼리
-    const rows = await db
+    // ── 상태 조건은 SQL 단계에서 먼저 적용(아래 JS 필터와 같은 규칙 — 결과 동일, 불필요한 행·서브쿼리 계산 감소) ──
+    //   · 판매관리(salesOnly, 상태 필터 없음): 견적 단계(created/quoted) 제외
+    //   · 취소(cancelled): includeCancelled 또는 상태 필터로 명시 요청한 경우만 포함
+    //   · 상태 필터: 지정 상태만
+    const statusList = status?.trim() ? status.split(",").map(s => s.trim()).filter(Boolean) : [];
+    const includeCancelledQ = (query.includeCancelled as string) === "true";
+    const statusConds: SQL[] = [];
+    if (salesOnly === "true" && !status?.trim()) statusConds.push(sql`${projectsTable.status} NOT IN ('created', 'quoted')`);
+    if (!includeCancelledQ && !statusList.includes("cancelled")) statusConds.push(sql`${projectsTable.status} <> 'cancelled'`);
+    if (statusList.length) statusConds.push(inArray(projectsTable.status, statusList as any));
+
+    // 메인 프로젝트 쿼리 + 집계 조회 — 서로 독립이라 병렬 실행(왕복 횟수 감소, 동시 7건 이하)
+    const rowsQ = db
       .select({
         id: projectsTable.id, title: projectsTable.title, status: projectsTable.status,
         financialStatus: projectsTable.financialStatus,
@@ -120,8 +141,8 @@ export async function buildFilteredSalesProjectList(query: Record<string, string
         payerDivisionId: projectsTable.payerDivisionId,
         // 표시명 = 거래 당시 Snapshot 우선 → 없으면 현재 Master명 fallback(§Phase3)
         contactName: sql<string | null>`COALESCE(${projectsTable.contactNameSnapshot}, ${contactAlias.name})`,
-        // 과거 CRM 전환 판매의 복원 고객명(담당자 Master 미연결일 때 표시용, additive)
-        legacyCustomerName: restoredCustomerNameOfProject(projectsTable.id),
+        // 과거 CRM 전환 판매의 복원 고객명 — 자리(응답 필드 순서) 유지용. 값은 아래 일괄 조회(restoredQ)로 채운다.
+        legacyCustomerName: sql<string | null>`NULL::text`,
         companyName: sql<string | null>`COALESCE(${projectsTable.companyNameSnapshot}, ${companyAlias.name})`,
         divisionName: sql<string | null>`(SELECT name FROM divisions WHERE id = ${projectsTable.requestingDivisionId})`,
         billingCompanyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.billingCompanyId})`,
@@ -137,17 +158,43 @@ export async function buildFilteredSalesProjectList(query: Record<string, string
       .leftJoin(usersTable, eq(projectsTable.userId, usersTable.id))
       .leftJoin(contactAlias, eq(projectsTable.contactId, contactAlias.id))
       .leftJoin(companyAlias, eq(projectsTable.companyId, companyAlias.id))
+      .where(statusConds.length ? and(...statusConds) : undefined)
       .orderBy(projectsTable.createdAt);
+
+    // 과거 CRM 전환 판매의 복원 고객명(담당자 Master 미연결일 때 표시용, additive) — 행마다 서브쿼리 대신 전환 판매 전체를 한 번에 조회.
+    //   값 규칙은 restoredCustomerNameOfProject 와 동일(활성 판매 매핑 → 원본 판매행 → 진행관리표 고객명). 판매 1건에 매핑 1건.
+    const restoredQ = db.execute(sql`SELECT DISTINCT ON (rm.entity_id) rm.entity_id AS project_id, ${restoredCustomerNameOfSaleRow(sql`rs.id`)} AS name
+      FROM legacy_master_mappings rm
+      JOIN legacy_archive_rows rs ON rs.source_type = 'sales_list' AND rs.is_effective AND rs.source_raw->>'판매번호' = rm.legacy_id
+      WHERE rm.source_system = 'old_crm' AND rm.entity_type = 'sale' AND rm.status = 'active'
+      ORDER BY rm.entity_id, rm.id, rs.id`);
 
     // 프로젝트별 '유효 대표 견적' 매핑 — 견적 엔진 SSOT: is_current=true·미삭제·파생 아님만 후보.
     //  (revision 도입 시 과거본/삭제본이 대표 견적으로 오표시되지 않도록 함. 현행 데이터는 전부 통과 → 동작 불변)
-    const quoteRows = await db
+    const quoteRowsQ = db
       .select({
         projectId: quotesTable.projectId, id: quotesTable.id,
         quoteType: quotesTable.quoteType, billingType: quotesTable.billingType,
         paymentDueDate: quotesTable.paymentDueDate, price: quotesTable.price, status: quotesTable.status,
       })
       .from(quotesTable).where(and(...effectiveQuoteConditions())).orderBy(desc(quotesTable.id));
+    const paidQ = db.select({ projectId: paymentsTable.projectId }).from(paymentsTable).where(eq(paymentsTable.status, "paid"));
+    const taskCountQ = db.select({ projectId: tasksTable.projectId, cnt: sql<number>`count(*)::int` }).from(tasksTable).groupBy(tasksTable.projectId);
+    const doneTaskCountQ = db.select({ projectId: tasksTable.projectId, cnt: sql<number>`count(*)::int` }).from(tasksTable).where(eq(tasksTable.status, "done")).groupBy(tasksTable.projectId);
+    // 수행정보(performance_assignments) 기준 배정 집계 — 신규 판매·과거 CRM 전환 공통.
+    //   수행자 행(개인·외주, 삭제·취소 제외) 중 통번역사/외주업체 Master 가 연결된 행만 '배정'으로 본다
+    //   (이름만 입력된 미연결 행은 배정 아님). 수행자 행이 있고 전부 배정이면 배정 완료.
+    const perfQ = db.execute(sql`SELECT project_id,
+        count(*)::int AS performers,
+        count(*) FILTER (WHERE individual_user_id IS NOT NULL OR vendor_company_id IS NOT NULL)::int AS assigned,
+        count(*) FILTER (WHERE (individual_user_id IS NOT NULL OR vendor_company_id IS NOT NULL) AND NOT delivery_confirmed)::int AS undelivered
+      FROM performance_assignments
+      WHERE deleted_at IS NULL AND status <> 'cancelled' AND performer_category IN ('individual', 'vendor')
+      GROUP BY project_id`);
+    const [rowsRaw, restoredRows, quoteRows, paidRows, taskCountRows, doneTaskCountRows, perfRows] =
+      await Promise.all([rowsQ, restoredQ, quoteRowsQ, paidQ, taskCountQ, doneTaskCountQ, perfQ]);
+    const restoredByProject = new Map((restoredRows.rows as any[]).map(r => [Number(r.project_id), (r.name ?? null) as string | null]));
+    const rows = rowsRaw.map(p => ({ ...p, legacyCustomerName: restoredByProject.get(p.id) ?? null }));
     const latestQuoteByProject = new Map<number, typeof quoteRows[0]>();
     for (const q of quoteRows) {
       if (q.projectId != null && !latestQuoteByProject.has(q.projectId)) {
@@ -156,34 +203,10 @@ export async function buildFilteredSalesProjectList(query: Record<string, string
     }
 
     // 결제 완료 프로젝트 ID 세트
-    const paidRows = await db.select({ projectId: paymentsTable.projectId })
-      .from(paymentsTable).where(eq(paymentsTable.status, "paid"));
     const paidProjectIds = new Set(paidRows.map(p => p.projectId));
-
-    // 프로젝트별 작업 수 집계
-    const taskCountRows = await db.select({
-      projectId: tasksTable.projectId,
-      cnt: sql<number>`count(*)::int`,
-    }).from(tasksTable).groupBy(tasksTable.projectId);
+    // 프로젝트별 작업 수 / 완료 작업 수(납품 필터용)
     const taskCountByProject = new Map(taskCountRows.map(r => [r.projectId, r.cnt]));
-
-    // 프로젝트별 완료 작업 수 집계 (납품 필터용)
-    const doneTaskCountRows = await db.select({
-      projectId: tasksTable.projectId,
-      cnt: sql<number>`count(*)::int`,
-    }).from(tasksTable).where(eq(tasksTable.status, "done")).groupBy(tasksTable.projectId);
     const doneTaskCountByProject = new Map(doneTaskCountRows.map(r => [r.projectId, r.cnt]));
-
-    // 수행정보(performance_assignments) 기준 배정 집계 — 신규 판매·과거 CRM 전환 공통.
-    //   수행자 행(개인·외주, 삭제·취소 제외) 중 통번역사/외주업체 Master 가 연결된 행만 '배정'으로 본다
-    //   (이름만 입력된 미연결 행은 배정 아님). 수행자 행이 있고 전부 배정이면 배정 완료.
-    const perfRows = await db.execute(sql`SELECT project_id,
-        count(*)::int AS performers,
-        count(*) FILTER (WHERE individual_user_id IS NOT NULL OR vendor_company_id IS NOT NULL)::int AS assigned,
-        count(*) FILTER (WHERE (individual_user_id IS NOT NULL OR vendor_company_id IS NOT NULL) AND NOT delivery_confirmed)::int AS undelivered
-      FROM performance_assignments
-      WHERE deleted_at IS NULL AND status <> 'cancelled' AND performer_category IN ('individual', 'vendor')
-      GROUP BY project_id`);
     const perfByProject = new Map((perfRows.rows as any[]).map(r => [Number(r.project_id), { performers: Number(r.performers), assigned: Number(r.assigned), undelivered: Number(r.undelivered) }]));
     const isPerfAssigned = (id: number) => { const x = perfByProject.get(id); return !!x && x.performers > 0 && x.assigned === x.performers; };
     // 배정 완료 = 기존 작업(task) 존재 또는 수행정보 수행자 전원 배정
@@ -225,14 +248,7 @@ export async function buildFilteredSalesProjectList(query: Record<string, string
 
     // ── 기존 필터 ──
     if (search?.trim()) {
-      const s = search.trim().toLowerCase();
-      result = result.filter(p =>
-        p.title.toLowerCase().includes(s) ||
-        (p.customerEmail ?? "").toLowerCase().includes(s) ||
-        (p.contactName ?? "").toLowerCase().includes(s) ||
-        (p.legacyCustomerName ?? "").toLowerCase().includes(s) ||   // 과거 CRM 전환 판매의 복원 고객명
-        (p.companyName ?? "").toLowerCase().includes(s)
-      );
+      result = result.filter(p => projectMatchesSearch(p, search));
     }
     if (companyName?.trim()) {
       const cn = companyName.trim().toLowerCase();
