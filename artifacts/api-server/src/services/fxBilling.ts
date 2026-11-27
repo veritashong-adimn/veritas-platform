@@ -146,6 +146,11 @@ export async function loadFxSummaries(dbx: any, paymentIds: number[]): Promise<M
   const fxList = sql.join(bills.map((b) => sql`${b.id}`), sql`, `);
   const txns = (await dbx.execute(sql`SELECT project_payment_id, txn_type, currency, foreign_amount, fx_rate, krw_amount, fee_amount, offset_source_payment_id, paid_date::text
     FROM payment_transactions WHERE project_payment_id IN (${fxList}) OR offset_source_payment_id IN (${fxList})`)).rows as any[];
+  return summarizeFxBills(bills, txns);
+}
+// 외화 청구회차 + 관련 입금거래(해당 회차 거래 · 해당 회차를 상계 원천으로 쓴 거래) → 요약. 거래 목록은 더 많아도 된다(회차별로 골라 씀).
+export function summarizeFxBills(bills: FxBillRow[], txns: any[]): Map<number, FxSummary> {
+  const out = new Map<number, FxSummary>();
   for (const b of bills) {
     out.set(Number(b.id), summarizeFxRow(b, txns.filter((t) => Number(t.project_payment_id) === Number(b.id)),
       txns.filter((t) => t.txn_type === "offset" && Number(t.offset_source_payment_id) === Number(b.id))));

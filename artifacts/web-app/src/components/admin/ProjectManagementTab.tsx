@@ -11,6 +11,7 @@ import { DraggableModal } from './DraggableModal';
 import { renderQuoteTitle } from '../../lib/quoteTitle';
 import { exportSales } from '../../lib/salesExcel';
 import { UnifiedSalesHistoryView } from './UnifiedSalesHistoryView';
+import { salesCacheKey, getSalesCache, setSalesCache, salesCacheGeneration, cacheStateText } from '../../lib/salesListCache';
 import { DateField } from './DatePickerShared';
 import { SaleDateSearchBar, EMPTY_SALE_PERIOD, appendSalePeriod, hasSalePeriod, type SalePeriod } from './SaleDateSearchBar';
 import './readTableView.css';
@@ -248,6 +249,9 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
 
   // ── 선택 기반 일괄 관리 + 판매취소 모달 ────────────────────────────────────
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  // [현재] 목록 메모리 캐시 표시 상태(UnifiedSalesHistoryView 와 같은 규칙)
+  const [projectsCache, setProjectsCache] = useState<{ refreshing: boolean; shownAt: number | null; failedAt: number | null }>({ refreshing: false, shownAt: null, failedAt: null });
+  const projectsStale = salesRange === "current" && (projectsCache.refreshing || projectsCache.failedAt != null);
   const [bulkCancelOpen, setBulkCancelOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
   const [cancelling, setCancelling] = useState(false);
@@ -388,9 +392,10 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
   //  silent: 상세에서 복귀 시 재조회 — '불러오는 중' 으로 표를 비우지 않아 페이지·스크롤 유지, 선택도 유지
   const fetchProjects = useCallback(async (opts?: { silent?: boolean }) => {
     const silent = opts?.silent === true;
+    let ckey = ""; let cached: { data: any[]; at: number } | null = null;
     const seq = ++projectReqSeq.current;          // 최신 요청 번호 — 늦게 도착한 이전 응답은 버린다
     appliedProjectSearch.current = projectSearch;
-    if (!silent) { setLoading(true); setSelectedIds(new Set()); } // 재조회(필터/작업 후) 시 선택 초기화
+    if (!silent) setSelectedIds(new Set()); // 재조회(필터/작업 후) 시 선택 초기화
     try {
       const params = new URLSearchParams();
       params.set("salesOnly", "true");
@@ -406,11 +411,27 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
       if (projectPaymentDueDateTo) params.set("paymentDueDateTo", projectPaymentDueDateTo);
       if (projectCompanyIdFilter) params.set("companyId", projectCompanyIdFilter);
       appendSalePeriod(params, salePeriod);
-      const res = await fetch(api(`/api/admin/projects${params.toString() ? "?" + params.toString() : ""}`), { headers: authHeaders });
+      const path = `/api/admin/projects${params.toString() ? "?" + params.toString() : ""}`;
+      // 같은 조건의 직전 결과(메모리)가 있으면 즉시 표시하고 최신 자료를 이어서 조회. 최신 조회가 끝나기 전에는 일괄 작업 버튼을 막는다.
+      ckey = salesCacheKey(authHeaders, path);
+      cached = silent ? null : getSalesCache<any[]>(ckey);
+      const gen = salesCacheGeneration();
+      if (cached) { setProjects(cached.data); setLoading(false); setProjectsCache({ refreshing: true, shownAt: cached.at, failedAt: null }); }
+      else { if (!silent) setLoading(true); setProjectsCache({ refreshing: false, shownAt: null, failedAt: null }); }
+      const res = await fetch(api(path), { headers: authHeaders });
       const data = await res.json();
       if (seq !== projectReqSeq.current) return;  // 더 최근 요청이 있음
-      if (res.ok) setProjects(Array.isArray(data) ? data : []);
-    } catch { if (seq === projectReqSeq.current) setToast("오류: 판매 조회 실패"); }
+      if (!res.ok) throw new Error(data?.error);
+      setProjects(Array.isArray(data) ? data : []);
+      if (cached) setSelectedIds(new Set());       // 캐시 행 기준으로 고른 선택은 최신 목록에서 다시 고르게 한다
+      setProjectsCache({ refreshing: false, shownAt: null, failedAt: null });
+      if (Array.isArray(data)) setSalesCache(ckey, data, gen);
+    } catch {
+      if (seq === projectReqSeq.current) {
+        setToast("오류: 판매 조회 실패");
+        if (cached) setProjectsCache({ refreshing: false, shownAt: cached.at, failedAt: Date.now() });
+      }
+    }
     finally { if (!silent && seq === projectReqSeq.current) setLoading(false); }
   }, [token, projectSearch, projectFilter, dateFrom, dateTo, assignedAdminFilter, projectFinancialFilter, projectQuickFilter, projectBillingTypeFilter, projectPaymentDueDateFrom, projectPaymentDueDateTo, projectCompanyIdFilter, salePeriod]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -636,8 +657,9 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
   // ── 선택 파생값 & 핸들러 (선택은 현재 페이지 기준 — 페이지 이동 시 초기화) ──
   const selectedProjects = projects.filter(p => selectedIds.has(p.id));
   const selectedCount = selectedProjects.length;
-  const canAssignSelected = selectedCount === 1 && SALE_ACTIONABLE.has(selectedProjects[0]?.status ?? "");
-  const canCancelSelected = selectedCount >= 1 && selectedProjects.every(p => SALE_ACTIONABLE.has(p.status));
+  // 이전 조회 결과(캐시)를 보여 주는 동안·최신 조회 실패 시에는 일괄 배정·판매취소를 막는다(오래된 상태로 작업 방지 — 서버도 재검증)
+  const canAssignSelected = !projectsStale && selectedCount === 1 && SALE_ACTIONABLE.has(selectedProjects[0]?.status ?? "");
+  const canCancelSelected = !projectsStale && selectedCount >= 1 && selectedProjects.every(p => SALE_ACTIONABLE.has(p.status));
   const assignBlockedReason = selectedCount >= 2 ? "배정은 하나의 판매만 선택 가능합니다." : undefined;
   const toggleSelectProject = (id: number) => setSelectedIds(prev => {
     const next = new Set(prev);
@@ -882,6 +904,12 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
       {/* 본문 제목 — 목록 공통 '○○ 목록 (건수)'. 건수 = 현재 자료범위의 조회 결과 전체 */}
       <h2 data-testid="sales-list-title" style={{ margin: "0 0 14px", fontSize: 16, fontWeight: 800, color: "#111827" }}>
         판매 목록{(() => { const n = salesRange === "current" ? projects.length : unifiedTotal; return n != null ? ` (${n.toLocaleString()})` : ""; })()}
+        {salesRange === "current" && cacheStateText(projectsCache) && (
+          <span data-testid="projects-cache-state" role="status" aria-live="polite"
+                style={{ marginLeft: 10, fontSize: 12, fontWeight: projectsCache.failedAt ? 700 : 400, color: projectsCache.failedAt ? "#b91c1c" : "#6b7280" }}>
+            {cacheStateText(projectsCache)}
+          </span>
+        )}
       </h2>
       {/* ── 자료범위 (C-4C): 현재 + 과거 CRM 통합조회 ── */}
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>

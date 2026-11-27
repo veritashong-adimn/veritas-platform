@@ -1,3 +1,4 @@
+import { clearSalesCache } from "./salesListCache";
 export const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 export const api = (path: string) => `${BASE}${path}`;
 
@@ -525,6 +526,7 @@ export function saveSession(token: string, user: User, permissions?: string[]) {
   if (permissions) localStorage.setItem(PERM_KEY, JSON.stringify(permissions));
 }
 export function clearSession() {
+  clearSalesCache();   // 로그아웃·세션 만료·사용자 변경 — 이전 사용자의 판매목록 메모리 캐시 제거
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
   localStorage.removeItem(PERM_KEY);

@@ -9,6 +9,7 @@ import { ContactReviewListModal } from './ContactReviewListModal';
 import { LegacyPartyManager } from './LegacyPartyManager';
 import { SaleDateSearchBar, appendSalePeriod, hasSalePeriod, EMPTY_SALE_PERIOD, type SalePeriod } from './SaleDateSearchBar';
 import { listSearchBar, listGroup, listInput, listBtnPrimary, listBtnGray } from '../../lib/listSearchUi';
+import { salesCacheKey, getSalesCache, setSalesCache, salesCacheGeneration, cacheStateText } from '../../lib/salesListCache';
 
 type AdminUser = { id: number; name?: string | null; email?: string | null };
 type Row = {
@@ -73,6 +74,8 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
   const [rows, setRows] = useState<Row[]>([]);
   const [result, setResult] = useState<Result | null>(null);
   const [loading, setLoading] = useState(false);
+  // 메모리 캐시 표시 상태 — refreshing: 캐시 결과를 보여 주며 최신 조회 중 / failedAt: 최신 조회 실패(캐시 결과는 shownAt 시점 자료)
+  const [cacheState, setCacheState] = useState<{ refreshing: boolean; shownAt: number | null; failedAt: number | null }>({ refreshing: false, shownAt: null, failedAt: null });
   const [pageSize, setPageSize] = useState(PAGE_SIZE);   // 기본 50(기존 유지). 공통 Pagination 의 페이지당 선택과 연동.
   // 과거 CRM 판매건(미전환·전환) 고객 담당자 보완 창
   const [contactEdit, setContactEdit] = useState<{ source: 'legacy' | 'current'; id: number } | null>(null);
@@ -91,19 +94,32 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
     if (debounce.current) { clearTimeout(debounce.current); debounce.current = null; }
     lastLoad.current = { page, keyword, size };
     const seq = ++reqSeq.current;
-    setLoading(true);
+    const p = new URLSearchParams();
+    p.set('range', range);
+    if (keyword.trim()) p.set('search', keyword.trim());
+    appendSalePeriod(p, period);
+    p.set('page', String(page)); p.set('pageSize', String(size));
+    const path = `/api/admin/sales-history?${p.toString()}`;
+    // 같은 조건의 직전 결과(메모리)가 있으면 즉시 표시하고 최신 자료를 이어서 조회(사용자·조건별 키, 저장 작업 시 무효화)
+    const ckey = salesCacheKey(authHeaders, path);
+    const cached = getSalesCache<Result>(ckey);
+    const gen = salesCacheGeneration();
+    if (cached) { setResult(cached.data); setRows(cached.data.rows); setLoading(false); setCacheState({ refreshing: true, shownAt: cached.at, failedAt: null }); }
+    else { setLoading(true); setCacheState({ refreshing: false, shownAt: null, failedAt: null }); }
     try {
-      const p = new URLSearchParams();
-      p.set('range', range);
-      if (keyword.trim()) p.set('search', keyword.trim());
-      appendSalePeriod(p, period);
-      p.set('page', String(page)); p.set('pageSize', String(size));
-      const res = await fetch(api(`/api/admin/sales-history?${p.toString()}`), { headers: authHeaders });
+      const res = await fetch(api(path), { headers: authHeaders });
       const data = await res.json();
       if (seq !== reqSeq.current) return;                      // 더 최근 요청이 있음 — 이 응답은 반영하지 않음
       if (!res.ok) throw new Error(data?.error || '조회 실패');
       setResult(data); setRows(data.rows);
-    } catch (e: any) { if (seq === reqSeq.current) setToast(e?.message || '판매이력 조회 실패'); }
+      setCacheState({ refreshing: false, shownAt: null, failedAt: null });
+      setSalesCache(ckey, data, gen);
+    } catch (e: any) {
+      if (seq !== reqSeq.current) return;
+      setToast(e?.message || '판매이력 조회 실패');
+      // 최신 조회 실패 — 캐시 결과를 보여 주고 있었다면 최신 자료가 아님을 화면에 표시(오인 방지)
+      if (cached) setCacheState({ refreshing: false, shownAt: cached.at, failedAt: Date.now() });
+    }
     finally { if (seq === reqSeq.current) setLoading(false); }
   }, [range, pageSize, authHeaders, period]);
   // 검색 실행(자동 검색·[검색]·Enter 공통) — 항상 첫 페이지부터. 빈 검색어 = 전체 목록.
@@ -147,6 +163,12 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
         <button type="button" style={listBtnGray(loading)} disabled={loading} data-testid="sales-history-reset" aria-label="검색 초기화"
           onClick={() => { setQ(''); lastLoad.current = { ...lastLoad.current, keyword: '' }; if (hasSalePeriod(period)) onPeriodChange(EMPTY_SALE_PERIOD); else load(1, ''); }}>초기화</button>
         <span style={{ fontSize: 12, color: '#6b7280' }} data-testid="sales-history-total">{hasSalePeriod(period) ? '검색 결과 ' : '총 '}{(p?.total ?? 0).toLocaleString()}건{range === 'all' ? ' (현재+과거)' : ' (과거 CRM)'}</span>
+        {cacheStateText(cacheState) && (
+          <span data-testid="sales-history-cache-state" role="status" aria-live="polite"
+                style={{ fontSize: 12, fontWeight: cacheState.failedAt ? 700 : 400, color: cacheState.failedAt ? '#b91c1c' : '#6b7280' }}>
+            {cacheStateText(cacheState)}
+          </span>
+        )}
         <div style={{ ...listGroup, marginLeft: 'auto' }}>
           <button style={{ ...listBtnGray(false), background: '#fef2f2', color: '#b91c1c' }} onClick={() => setShowParty(true)} data-testid="btn-legacy-party-manager" aria-label="미연결 관리">미연결 관리</button>
           <button style={listBtnGray(false)} onClick={() => setShowReview(true)} data-testid="btn-contact-review-open" aria-label="고객 담당자 확인 필요 목록">고객 담당자 확인 필요 목록</button>

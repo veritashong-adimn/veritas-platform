@@ -91,6 +91,21 @@ export function projectMatchesSearch(p: { title: string; customerEmail: string |
     (p.companyName ?? "").toLowerCase().includes(s);
 }
 
+// 판매 목록 후보(프로젝트) SQL 상태 조건 — buildFilteredSalesProjectList 의 SQL 단계 조건과 같은 규칙.
+//   판매관리 통합조회(sales-history)가 같은 후보 집합의 판매 식별정보를 목록 조회와 같은 단계에서 미리 조회할 때도 쓴다(후보 ⊇ 최종 목록).
+//   · 판매관리(salesOnly, 상태 필터 없음): 견적 단계(created/quoted) 제외
+//   · 취소(cancelled): includeCancelled 또는 상태 필터로 명시 요청한 경우만 포함
+//   · 상태 필터: 지정 상태만
+export function salesProjectStatusConds(query: Record<string, string | undefined>): SQL[] {
+  const status = query.status;
+  const statusList = status?.trim() ? status.split(",").map(s => s.trim()).filter(Boolean) : [];
+  const statusConds: SQL[] = [];
+  if (query.salesOnly === "true" && !status?.trim()) statusConds.push(sql`${projectsTable.status} NOT IN ('created', 'quoted')`);
+  if (query.includeCancelled !== "true" && !statusList.includes("cancelled")) statusConds.push(sql`${projectsTable.status} <> 'cancelled'`);
+  if (statusList.length) statusConds.push(inArray(projectsTable.status, statusList as any));
+  return statusConds;
+}
+
 export async function buildFilteredSalesProjectList(query: Record<string, string | undefined>) {
     const {
       search, status, financialStatus: financialStatusFilter, dateFrom, dateTo, assignedAdminId, companyName, contactName,
@@ -117,14 +132,9 @@ export async function buildFilteredSalesProjectList(query: Record<string, string
     //   · 판매관리(salesOnly, 상태 필터 없음): 견적 단계(created/quoted) 제외
     //   · 취소(cancelled): includeCancelled 또는 상태 필터로 명시 요청한 경우만 포함
     //   · 상태 필터: 지정 상태만
-    const statusList = status?.trim() ? status.split(",").map(s => s.trim()).filter(Boolean) : [];
-    const includeCancelledQ = (query.includeCancelled as string) === "true";
-    const statusConds: SQL[] = [];
-    if (salesOnly === "true" && !status?.trim()) statusConds.push(sql`${projectsTable.status} NOT IN ('created', 'quoted')`);
-    if (!includeCancelledQ && !statusList.includes("cancelled")) statusConds.push(sql`${projectsTable.status} <> 'cancelled'`);
-    if (statusList.length) statusConds.push(inArray(projectsTable.status, statusList as any));
+    const statusConds = salesProjectStatusConds(query);
 
-    // 메인 프로젝트 쿼리 + 집계 조회 — 서로 독립이라 병렬 실행(왕복 횟수 감소, 동시 7건 이하)
+    // 메인 프로젝트 쿼리 + 집계 조회 — 서로 독립이라 병렬 실행(왕복 횟수 감소, 동시 6건 이하)
     const rowsQ = db
       .select({
         id: projectsTable.id, title: projectsTable.title, status: projectsTable.status,
@@ -179,8 +189,9 @@ export async function buildFilteredSalesProjectList(query: Record<string, string
       })
       .from(quotesTable).where(and(...effectiveQuoteConditions())).orderBy(desc(quotesTable.id));
     const paidQ = db.select({ projectId: paymentsTable.projectId }).from(paymentsTable).where(eq(paymentsTable.status, "paid"));
-    const taskCountQ = db.select({ projectId: tasksTable.projectId, cnt: sql<number>`count(*)::int` }).from(tasksTable).groupBy(tasksTable.projectId);
-    const doneTaskCountQ = db.select({ projectId: tasksTable.projectId, cnt: sql<number>`count(*)::int` }).from(tasksTable).where(eq(tasksTable.status, "done")).groupBy(tasksTable.projectId);
+    // 프로젝트별 작업 수 · 완료 작업 수 — 한 번에 집계(완료 0건은 0 — 사용처는 모두 '없으면 0')
+    const taskCountQ = db.select({ projectId: tasksTable.projectId, cnt: sql<number>`count(*)::int`, done: sql<number>`(count(*) FILTER (WHERE ${tasksTable.status} = 'done'))::int` })
+      .from(tasksTable).groupBy(tasksTable.projectId);
     // 수행정보(performance_assignments) 기준 배정 집계 — 신규 판매·과거 CRM 전환 공통.
     //   수행자 행(개인·외주, 삭제·취소 제외) 중 통번역사/외주업체 Master 가 연결된 행만 '배정'으로 본다
     //   (이름만 입력된 미연결 행은 배정 아님). 수행자 행이 있고 전부 배정이면 배정 완료.
@@ -191,8 +202,8 @@ export async function buildFilteredSalesProjectList(query: Record<string, string
       FROM performance_assignments
       WHERE deleted_at IS NULL AND status <> 'cancelled' AND performer_category IN ('individual', 'vendor')
       GROUP BY project_id`);
-    const [rowsRaw, restoredRows, quoteRows, paidRows, taskCountRows, doneTaskCountRows, perfRows] =
-      await Promise.all([rowsQ, restoredQ, quoteRowsQ, paidQ, taskCountQ, doneTaskCountQ, perfQ]);
+    const [rowsRaw, restoredRows, quoteRows, paidRows, taskCountRows, perfRows] =
+      await Promise.all([rowsQ, restoredQ, quoteRowsQ, paidQ, taskCountQ, perfQ]);
     const restoredByProject = new Map((restoredRows.rows as any[]).map(r => [Number(r.project_id), (r.name ?? null) as string | null]));
     const rows = rowsRaw.map(p => ({ ...p, legacyCustomerName: restoredByProject.get(p.id) ?? null }));
     const latestQuoteByProject = new Map<number, typeof quoteRows[0]>();
@@ -206,7 +217,7 @@ export async function buildFilteredSalesProjectList(query: Record<string, string
     const paidProjectIds = new Set(paidRows.map(p => p.projectId));
     // 프로젝트별 작업 수 / 완료 작업 수(납품 필터용)
     const taskCountByProject = new Map(taskCountRows.map(r => [r.projectId, r.cnt]));
-    const doneTaskCountByProject = new Map(doneTaskCountRows.map(r => [r.projectId, r.cnt]));
+    const doneTaskCountByProject = new Map(taskCountRows.map(r => [r.projectId, r.done]));
     const perfByProject = new Map((perfRows.rows as any[]).map(r => [Number(r.project_id), { performers: Number(r.performers), assigned: Number(r.assigned), undelivered: Number(r.undelivered) }]));
     const isPerfAssigned = (id: number) => { const x = perfByProject.get(id); return !!x && x.performers > 0 && x.assigned === x.performers; };
     // 배정 완료 = 기존 작업(task) 존재 또는 수행정보 수행자 전원 배정

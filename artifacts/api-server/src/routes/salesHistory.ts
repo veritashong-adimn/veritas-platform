@@ -11,13 +11,13 @@
 import { Router, type IRouter } from "express";
 import { convertedSaleExists, supersededCancelledConvertedSaleIds } from "../services/legacyActivationLineage";
 import { RESTORE_MODULE, restoredCustomerNameOfProject } from "../services/legacyContactRestore";
-import { db, legacyArchiveRowsTable, legacySalesProgressLinksTable } from "@workspace/db";
+import { db, legacyArchiveRowsTable, legacySalesProgressLinksTable, projectsTable } from "@workspace/db";
 import { eq, and, or, ilike, gte, lte, count, desc, inArray, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { requireAuth, requireRole } from "../middlewares/auth";
-import { buildFilteredSalesProjectList, projectMatchesSearch } from "./admin";
+import { buildFilteredSalesProjectList, projectMatchesSearch, salesProjectStatusConds } from "./admin";
 import { loadSaleIdentities, saleIdentityMatches, type SaleIdentity } from "../services/saleIdentity";
-import { loadFxSummaries, fmtForeign, fmtForeignWithKrw, type FxSummary } from "../services/fxBilling";
+import { summarizeFxBills, fmtForeign, fmtForeignWithKrw, type FxSummary, type FxBillRow } from "../services/fxBilling";
 import { minusSumBySource } from "../lib/minusIssue";
 import { parseSaleDateFilter, legacyPeriodCond } from "../services/saleDateSearch";
 
@@ -124,17 +124,23 @@ function mapCurrentRow(p: any): SalesHistoryRow {
 // 판매취소된 과거 CRM 전환 판매 — 최초 계약금액(원본 CRM 판매목록 총액) 보존 표시.
 //   취소 후 승인대기 견적이 수정(재견적)되어 현재 견적 합계가 원본 총액과 달라진 경우에만 원본 총액으로 표시한다
 //   (같으면 견적 품목의 공급가·부가세 구분을 그대로 유지). 원본·견적 데이터는 변경하지 않는다(조회 표시만).
-async function fillCancelledOriginalAmounts(dbx: any, list: SalesHistoryRow[]) {
-  const targets = list.filter(r => r.source === "current" && r.workflowStatus === "cancelled" && r.origin === "legacy_crm" && r.saleNumber);
-  if (!targets.length) return;
+//  조회(loadCancelledOriginalTotals)와 적용(applyCancelledOriginalAmounts)을 나눠, 조회는 상품 요약 조회와 같은 단계에서 병렬 실행하고
+//  적용은 기존과 같이 상품 요약(견적 합계) 반영 뒤에 한다(같은 결과).
+const cancelledOriginalTargets = (list: SalesHistoryRow[]) =>
+  list.filter(r => r.source === "current" && r.workflowStatus === "cancelled" && r.origin === "legacy_crm" && r.saleNumber);
+async function loadCancelledOriginalTotals(dbx: any, list: SalesHistoryRow[]): Promise<Map<string, number | null>> {
+  const targets = cancelledOriginalTargets(list);
+  if (!targets.length) return new Map();
   const nos = [...new Set(targets.map(r => String(r.saleNumber)))];
   const rows = (await dbx.execute(sql`SELECT DISTINCT ON (source_raw->>'판매번호') source_raw->>'판매번호' AS no,
       coalesce(total_amount, nullif(regexp_replace(coalesce(source_raw->>'총액', ''), '[^0-9.-]', '', 'g'), '')::numeric) AS total
     FROM legacy_archive_rows WHERE source_type = 'sales_list' AND is_effective = true
       AND source_raw->>'판매번호' IN (${sql.join(nos.map(n => sql`${n}`), sql`, `)})
     ORDER BY source_raw->>'판매번호', id DESC`)).rows as any[];
-  const byNo = new Map(rows.map(x => [String(x.no), toNum(x.total)]));
-  for (const r of targets) {
+  return new Map(rows.map(x => [String(x.no), toNum(x.total)]));
+}
+function applyCancelledOriginalAmounts(list: SalesHistoryRow[], byNo: Map<string, number | null>) {
+  for (const r of cancelledOriginalTargets(list)) {
     const orig = byNo.get(String(r.saleNumber));
     if (orig == null) continue;
     const cur = r.totalAmount ?? r.amount;
@@ -179,9 +185,9 @@ function fillSaleDates(list: SalesHistoryRow[], idMap: Map<number, SaleIdentity>
 
 // current 판매의 상품 요약 — 판매 상세 '상품명'과 같은 규칙(대표 견적 품목 id 순 첫 품목명 + ' 외 N건').
 //  표시 전용 집계(판매당 1행 유지·금액 합산 없음). 현재 페이지 행만 조회.
-async function fillProductNames(dbx: any, list: SalesHistoryRow[], quoteIdByProject: Map<number, number>) {
+async function loadProductSummaries(dbx: any, list: SalesHistoryRow[], quoteIdByProject: Map<number, number>): Promise<Map<number, any>> {
   const qids = [...new Set(list.map(r => quoteIdByProject.get(Number(r.id))).filter((v): v is number => v != null))];
-  if (!qids.length) return;
+  if (!qids.length) return new Map();
   // 금액(공급가액·부가세·합계)과 부가세 유형도 같은 품목에서 판정 — 판매 상세(deriveVatMode)·세금유형 확인 절차와 같은 규칙:
   //   할인 행 제외, 과세인데 공급가액이 있고 부가세 0원인 품목이 있거나 유형이 섞이면 '확인 필요'(unknown).
   const agg = (await dbx.execute(sql`SELECT quote_id, count(*)::int AS n,
@@ -192,7 +198,9 @@ async function fillProductNames(dbx: any, list: SalesHistoryRow[], quoteIdByProj
       array_agg(DISTINCT CASE WHEN tax_type IN ('zero_rate', 'exempt') THEN tax_type ELSE 'taxable' END)
         FILTER (WHERE coalesce(item_type, '') <> 'discount') AS kinds
     FROM quote_items WHERE quote_id IN (${sql.join(qids.map(i => sql`${i}`), sql`, `)}) GROUP BY quote_id`)).rows as any[];
-  const byQuote = new Map(agg.map(a => [Number(a.quote_id), a]));
+  return new Map(agg.map(a => [Number(a.quote_id), a]));
+}
+function applyProductSummaries(list: SalesHistoryRow[], quoteIdByProject: Map<number, number>, byQuote: Map<number, any>) {
   for (const r of list) {
     const a = byQuote.get(quoteIdByProject.get(Number(r.id)) ?? -1);
     if (!a || !a.n) continue;
@@ -208,10 +216,12 @@ async function fillProductNames(dbx: any, list: SalesHistoryRow[], quoteIdByProj
 
 // 과거 CRM 전환 판매건 — 판매일은 전환일(createdAt)이 아니라 원본 판매번호의 판매일로 표시·정렬(원본 불변).
 //  활성 판매 매핑(판매 id → 원본 판매번호) 조회 — 정렬 전 전체 current 후보에 대해 1회.
-async function loadLegacyOriginMap(dbx: any, ids: number[]): Promise<Map<number, string>> {
-  if (!ids.length) return new Map();
+//  ids: 판매 id 목록 또는 후보 판매 id SQL 하위 조회(후보 ⊇ 목록 — 목록 행만 사용하므로 결과 동일).
+async function loadLegacyOriginMap(dbx: any, ids: number[] | SQL): Promise<Map<number, string>> {
+  if (Array.isArray(ids) && !ids.length) return new Map();
+  const idCond = Array.isArray(ids) ? sql.join(ids.map(i => sql`${i}`), sql`, `) : ids;
   const maps = (await dbx.execute(sql`SELECT entity_id, legacy_id FROM legacy_master_mappings
-    WHERE source_system = 'old_crm' AND entity_type = 'sale' AND status = 'active' AND entity_id IN (${sql.join(ids.map(i => sql`${i}`), sql`, `)})`)).rows as any[];
+    WHERE source_system = 'old_crm' AND entity_type = 'sale' AND status = 'active' AND entity_id IN (${idCond})`)).rows as any[];
   return new Map(maps.map(m => [Number(m.entity_id), String(m.legacy_id)]));
 }
 //  restoredById: 판매 id → { contact_id, name } — buildFilteredSalesProjectList 결과(projects.contact_id · 복원 고객명)를 그대로 사용
@@ -294,16 +304,22 @@ async function fillBillingInfo(dbx: any, list: SalesHistoryRow[]) {
       nullif(btrim(source_raw ->> '입금내역'), '') AS pay_memo
     FROM legacy_archive_rows WHERE source_type = 'sales_list' AND is_effective AND source_raw ->> '판매번호' IN (${sql.join(conv.map(r => sql`${r.saleNumber}`), sql`, `)})
     ORDER BY source_raw ->> '판매번호', id DESC`) : Promise.resolve({ rows: [] });
-  const paysQ = dbx.execute(sql`SELECT id, project_id, sequence, issue_date::text, amount, paid_date::text, deposit_status, deposit_confirmed, deposit_item
+  // 청구회차(외화 청구 칸 포함) · 입금거래 · 외화 회차 관련 거래 — 모두 판매 id 기준 하위 조회라 한 단계에서 병렬(왕복 1회).
+  //   값·규칙은 기존과 동일: 입금거래 = 이 판매들의 청구회차 거래(날짜·id 순), 외화 요약 = 외화 청구회차(loadFxSummaries 와 같은 조건·같은 요약 함수).
+  const payIdsSq = sql`SELECT id FROM project_payments WHERE project_id IN (${ids})`;
+  const fxIdsSq = sql`SELECT id FROM project_payments WHERE project_id IN (${ids}) AND billing_currency IS NOT NULL AND upper(billing_currency) <> 'KRW'`;
+  const paysQ = dbx.execute(sql`SELECT id, project_id, sequence, issue_date::text, amount, paid_date::text, deposit_status, deposit_confirmed, deposit_item,
+      billing_currency, foreign_amount, invoice_fx_rate, invoice_fx_date::text AS invoice_fx_date
     FROM project_payments WHERE project_id IN (${ids}) ORDER BY project_id, sequence, id`);
-  const [paysRes, rawRes] = await Promise.all([paysQ, rawQ]);
+  const txQ = dbx.execute(sql`SELECT t.project_payment_id, t.paid_date::text, t.bank_account, t.customer_paid_amount, t.settled_amount, t.fee_amount, t.method, t.txn_type, t.currency, t.foreign_amount, t.fx_rate, t.krw_amount
+      FROM payment_transactions t WHERE t.project_payment_id IN (${payIdsSq}) ORDER BY t.paid_date, t.id`);
+  const fxTxQ = dbx.execute(sql`SELECT project_payment_id, txn_type, currency, foreign_amount, fx_rate, krw_amount, fee_amount, offset_source_payment_id, paid_date::text
+    FROM payment_transactions WHERE project_payment_id IN (${fxIdsSq}) OR offset_source_payment_id IN (${fxIdsSq})`);
+  const [paysRes, rawRes, txRes, fxTxRes] = await Promise.all([paysQ, rawQ, txQ, fxTxQ]);
   const pays = paysRes.rows as any[];
-  // 외화 요약·입금거래 — 청구행 id 에만 의존, 서로 독립이라 병렬
-  const [fxMap, txRes] = await Promise.all([
-    loadFxSummaries(dbx, pays.map(p => Number(p.id))),
-    pays.length ? dbx.execute(sql`SELECT t.project_payment_id, t.paid_date::text, t.bank_account, t.customer_paid_amount, t.settled_amount, t.fee_amount, t.method, t.txn_type, t.currency, t.foreign_amount, t.fx_rate, t.krw_amount
-      FROM payment_transactions t WHERE t.project_payment_id IN (${sql.join(pays.map(p => sql`${Number(p.id)}`), sql`, `)}) ORDER BY t.paid_date, t.id`) : Promise.resolve({ rows: [] }),
-  ]);
+  const fxBills: FxBillRow[] = pays.filter(p => p.billing_currency != null && String(p.billing_currency).toUpperCase() !== "KRW")
+    .map(p => ({ id: p.id, amount: p.amount, billing_currency: p.billing_currency, foreign_amount: p.foreign_amount, invoice_fx_rate: p.invoice_fx_rate, invoice_fx_date: p.invoice_fx_date }));
+  const fxMap = fxBills.length ? summarizeFxBills(fxBills, fxTxRes.rows as any[]) : new Map<number, FxSummary>();
   const txns = txRes.rows as any[];
   const raw = new Map((rawRes.rows as any[]).map(x => [String(x.sale_no), x]));
   const byProj = new Map<number, any[]>();
@@ -462,9 +478,15 @@ async function loadCurrentSalesRows(dbx: any, q: Record<string, string | undefin
   // 판매번호 검색 — 기존 검색(판매명=프로젝트명·거래처·담당자 등) 결과에 판매번호/견적번호/원본 판매번호 일치 판매를 더한다(전체 대상, 페이지 분할 전).
   //  검색어가 있으면 목록을 한 번만 만들고(검색 제외) 검색 일치/불일치를 나눈다 — 기존 2회 조회와 같은 결과(검색은 search 값 기준).
   const term = (q.search || q.q || "").trim();
-  const [superseded, base] = await Promise.all([
+  //  판매 식별(판매일·판매번호)·과거 CRM 전환 매핑은 목록 확정을 기다리지 않고 같은 상태 조건의 후보 판매 전체로 같은 단계에서 조회
+  //  (후보 ⊇ 목록, 목록 행 값만 사용 → 결과 동일. 왕복 1단계 감소).
+  const conds = salesProjectStatusConds(q);
+  const candSq = sql`SELECT ${projectsTable.id} FROM ${projectsTable}${conds.length ? sql` WHERE ${and(...conds)}` : sql``}`;
+  const [superseded, base, idMap, originMap] = await Promise.all([
     showCancelled ? supersededCancelledConvertedSaleIds(dbx) : Promise.resolve(new Set<number>()),
     buildFilteredSalesProjectList(term ? { ...q, search: undefined, q: undefined } : q) as Promise<any[]>,
+    loadSaleIdentities(dbx, candSq),
+    loadLegacyOriginMap(dbx, candSq),
   ]);
   const keepRow = (p: any) => !showCancelled || p.status !== "cancelled"
     || (p.quoteStatus != null && !superseded.has(Number(p.id)));
@@ -476,9 +498,6 @@ async function loadCurrentSalesRows(dbx: any, q: Record<string, string | undefin
     const seen = new Set(currentRows.map(r => Number(r.id)));
     extra = base.filter(keepRow).filter((p: any) => !seen.has(Number(p.id))).map(mapCurrentRow);
   }
-  // 판매 식별(판매일·판매번호)·과거 CRM 전환 매핑 — 서로 독립이라 병렬
-  const allIds = [...currentRows, ...extra].map(r => Number(r.id));
-  const [idMap, originMap] = await Promise.all([loadSaleIdentities(dbx, allIds), loadLegacyOriginMap(dbx, allIds)]);
   if (extra.length) currentRows = [...currentRows, ...extra.filter(r => saleIdentityMatches(idMap.get(Number(r.id)), term))];
   const quoteIdByProject = fillSaleDates(currentRows, idMap);
   const restoredById = new Map(base.map((p: any) => [Number(p.id), { contact_id: p.contactId ?? null, name: p.legacyCustomerName ?? null }]));
@@ -511,15 +530,29 @@ export async function getSalesHistory(dbx: any, q: Record<string, string | undef
   const wantLegacy = effRange === "all" || effRange === "legacy";
   const where = wantLegacy ? legacyWhere(q) : null;
 
-  // ① Current 전체(수백 건) ∥ 과거 CRM 건수 — 서로 독립(부분 실패 격리)
+  // ① 한 단계(왕복 1회)에서 병렬: Current 전체(수백 건) ∥ 과거 CRM 정렬 구간(id·판매일) + 건수.
+  //   과거 CRM 구간은 current 건수(nC)를 모르는 상태에서 미리 가져온다 — current 는 판매(projects) 행이라 nC ≤ projects 전체 건수(Nup).
+  //   통합 순서에서 [off, off+pageSize) 에 들어올 수 있는 과거 CRM 순위는 [off − nC, off + pageSize) ⊆ [off − Nup, off + pageSize) 이므로
+  //   시작 순위 L0 = max(0, off − Nup) 부터 가져오면 항상 충분하다(가벼운 id·판매일만, 최대 Nup + pageSize 행).
+  //   건수는 같은 조회의 count(*) OVER() (조건 동일). 구간이 비어 건수를 못 받은 경우(마지막 페이지 이후)만 별도 count.
   let current: SalesHistoryRow[] = [];
   let quoteIdByProject = new Map<number, number>();
   let legacyTotal = 0;
+  let lights: { key: string; recordDate: string | null; legacyId: number }[] = [];
+  let L0 = 0;
   await Promise.all([
     wantCurrent ? loadCurrentSalesRows(dbx, q, effRange, forcedCurrentOnly)
       .then(r => { current = r.rows; quoteIdByProject = r.quoteIdByProject; sources.current = { ok: true, count: current.length }; })
       .catch(() => { sources.current = { ok: false, error: "현재 판매자료 조회 실패" }; }) : null,
-    wantLegacy ? (async () => { const t = await dbx.select({ n: count() }).from(LA).where(where!); legacyTotal = Number(t[0]?.n ?? 0); })()
+    wantLegacy ? (async () => {
+      const l0 = sql`greatest(0, ${off}::bigint - (SELECT count(*) FROM ${projectsTable}))`;
+      const lw = (await dbx.execute(sql`SELECT ${LA.id} AS id, ${LEGACY_SALE_DATE} AS sd, count(*) OVER () AS n, ${l0} AS l0
+        FROM ${LA} WHERE ${where!} ORDER BY ${sql.join(LEGACY_ORDER, sql`, `)}
+        OFFSET ${l0} LIMIT (${off + pageSize}::bigint - ${l0})`)).rows as any[];
+      if (lw.length) { legacyTotal = Number(lw[0].n); L0 = Number(lw[0].l0); }
+      else { const t = await dbx.select({ n: count() }).from(LA).where(where!); legacyTotal = Number(t[0]?.n ?? 0); L0 = legacyTotal; }
+      lights = lw.map((x: any) => ({ key: `legacy:${x.id}`, recordDate: x.sd ?? null, legacyId: Number(x.id) }));
+    })()
       .then(() => { sources.legacy = { ok: true, count: legacyTotal, truncated: false }; })
       .catch(() => { sources.legacy = { ok: false, error: "과거 CRM 자료 조회 실패" }; }) : null,
   ]);
@@ -527,35 +560,21 @@ export async function getSalesHistory(dbx: any, q: Record<string, string | undef
   const nC = sources.current.ok ? current.length : 0;
   const total = nC + (legacyOk ? legacyTotal : 0);
 
-  // ② 현재 페이지 구간 결정 — 통합 순서(cmpRows)에서 [off, off+pageSize) 위치의 행.
-  //   과거 CRM 은 정렬 순서대로 필요한 구간(id·판매일만)만 SQL 로 가져와 current 와 병합한다.
-  //   current 는 최대 nC 건이 과거 CRM 사이에 끼므로, 구간에 들어올 수 있는 과거 CRM 순위는 [off − nC, off + pageSize).
+  // ② 현재 페이지 구간 — 통합 순서(cmpRows)에서 [off, off+pageSize) 위치의 행(과거 CRM 구간과 current 병합).
   let pageItems: { key: string; recordDate: string | null; legacyId?: number; row?: SalesHistoryRow }[] = [];
   if (!legacyOk || legacyTotal === 0) {
     pageItems = current.slice(off, off + pageSize).map(r => ({ key: r.key, recordDate: r.recordDate, row: r }));
   } else {
-    const L0 = Math.max(0, off - nC);
-    const lim = off + pageSize - L0;
-    let lights: { key: string; recordDate: string | null; legacyId: number }[] = [];
-    if (L0 < legacyTotal) {
-      try {
-        const lw = await dbx.select({ id: LA.id, sd: LEGACY_SALE_DATE }).from(LA).where(where!).orderBy(...LEGACY_ORDER).offset(L0).limit(lim);
-        lights = lw.map((x: any) => ({ key: `legacy:${x.id}`, recordDate: x.sd ?? null, legacyId: Number(x.id) }));
-      } catch { sources.legacy = { ok: false, error: "과거 CRM 자료 조회 실패" }; }
-    }
-    if (sources.legacy.ok) {
-      // 병합 시작점: L0 = 0 이면 처음부터, 아니면 첫 과거 CRM 행(순위 L0)의 통합 위치 = L0 + (그보다 앞선 current 수)
-      let i = 0, j = 0, g = 0;
-      if (L0 > 0 && lights.length) { const k = current.filter(c => cmpRows(c, lights[0]) < 0).length; i = k; g = L0 + k; }
-      else if (L0 > 0) { i = nC; g = total; }   // 과거 CRM 구간 밖(off ≥ total) — 빈 페이지
-      while (pageItems.length < pageSize && (i < nC || j < lights.length)) {
-        const takeLegacy = j < lights.length && (i >= nC || cmpRows(lights[j], current[i]) < 0);
-        const it = takeLegacy ? lights[j++] : { key: current[i].key, recordDate: current[i].recordDate, row: current[i++] };
-        if (g >= off) pageItems.push(it);
-        g++;
-      }
-    } else {
-      pageItems = current.slice(off, off + pageSize).map(r => ({ key: r.key, recordDate: r.recordDate, row: r }));
+    // 병합 시작점: L0 = 0 이면 처음부터, 아니면 첫 과거 CRM 행(순위 L0)의 통합 위치 = L0 + (그보다 앞선 current 수)
+    let i = 0, j = 0, g = 0;
+    if (L0 > 0 && lights.length) { const k = current.filter(c => cmpRows(c, lights[0]) < 0).length; i = k; g = L0 + k; }
+    // 구간이 비었는데 L0 > 0: L0 = max(0, off − Nup) ≥ 과거 CRM 건수 ⇒ off ≥ 과거 CRM 건수 + Nup ≥ total — 빈 페이지(기존과 동일)
+    else if (L0 > 0) { i = nC; g = total; }
+    while (pageItems.length < pageSize && (i < nC || j < lights.length)) {
+      const takeLegacy = j < lights.length && (i >= nC || cmpRows(lights[j], current[i]) < 0);
+      const it = takeLegacy ? lights[j++] : { key: current[i].key, recordDate: current[i].recordDate, row: current[i++] };
+      if (g >= off) pageItems.push(it);
+      g++;
     }
   }
 
@@ -570,8 +589,10 @@ export async function getSalesHistory(dbx: any, q: Record<string, string | undef
     // 실패해도 목록은 표시(해당 칸 '-')
     fillBillingInfo(dbx, curPage).catch(e => console.error("sales-history 청구정보 조회 실패", e)),
     (async () => {
-      try { await fillProductNames(dbx, curPage, quoteIdByProject); } catch (e) { console.error("sales-history 상품 요약 조회 실패", e); }
-      try { await fillCancelledOriginalAmounts(dbx, curPage); } catch (e) { console.error("sales-history 취소 판매 원 계약금액 조회 실패", e); }
+      // 상품 요약 ∥ 취소 판매 원 계약금액 조회는 병렬, 적용 순서는 기존과 동일(상품 요약 → 원 계약금액). 한쪽 실패는 해당 칸만 영향.
+      const [prod, orig] = await Promise.allSettled([loadProductSummaries(dbx, curPage, quoteIdByProject), loadCancelledOriginalTotals(dbx, curPage)]);
+      if (prod.status === "fulfilled") applyProductSummaries(curPage, quoteIdByProject, prod.value); else console.error("sales-history 상품 요약 조회 실패", prod.reason);
+      if (orig.status === "fulfilled") applyCancelledOriginalAmounts(curPage, orig.value); else console.error("sales-history 취소 판매 원 계약금액 조회 실패", orig.reason);
     })(),
     fillPmNames(dbx, curPage).catch(e => console.error("sales-history 담당PM 조회 실패", e)),
   ]);

@@ -8,7 +8,7 @@
 //                  실제 프로젝트명이 아니므로 대체값(projectNameFallback=true)으로 구분한다.
 //   · 과거 CRM 원본(미전환) : salesHistory 의 legacy 조회에서 원본 '판매번호' · '영업기회명' 을 그대로 사용.
 // 대표 견적 = 유효본(is_current)·미삭제 중 원견적(relation_type 없음) 우선 → 가장 작은 id (판매 1건당 1개, 행 중복 없음).
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 
 export interface SaleIdentity {
   projectId: number;
@@ -31,10 +31,12 @@ export function formatSaleQuoteNumber(quoteNumber: string | null | undefined, is
   return `${m[1] || "Q"}${ymd}-${String(Number(m[2])).padStart(3, "0")}${m[3] ?? ""}`;
 }
 
-export async function loadSaleIdentities(dbx: any, projectIds: number[]): Promise<Map<number, SaleIdentity>> {
+// projectIds: 판매 id 목록 또는 판매 id 를 돌려주는 SQL 하위 조회(목록 확정 전 후보 전체를 같은 단계에서 조회할 때 — 판매관리 목록).
+export async function loadSaleIdentities(dbx: any, projectIds: number[] | SQL): Promise<Map<number, SaleIdentity>> {
   const out = new Map<number, SaleIdentity>();
-  const ids = [...new Set(projectIds.filter((v) => Number.isFinite(v)))];
-  if (!ids.length) return out;
+  const ids = Array.isArray(projectIds) ? [...new Set(projectIds.filter((v) => Number.isFinite(v)))] : null;
+  if (ids && !ids.length) return out;
+  const idCond = ids ? sql.join(ids.map((i) => sql`${i}`), sql`, `) : projectIds as SQL;
   const rows = (await dbx.execute(sql`
     SELECT p.id AS project_id, p.title, q.id AS quote_id, q.quote_number, q.issue_date::text AS issue_date,
       m.legacy_id, la.opportunity, la.raw_product
@@ -55,7 +57,7 @@ export async function loadSaleIdentities(dbx: any, projectIds: number[]): Promis
       WHERE m.legacy_id IS NOT NULL AND l.source_type = 'sales_list' AND l.is_effective AND l.source_raw ->> '판매번호' = m.legacy_id
       ORDER BY l.id DESC LIMIT 1
     ) la ON true
-    WHERE p.id IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})`)).rows as any[];
+    WHERE p.id IN (${idCond})`)).rows as any[];
   for (const r of rows) {
     const title = (r.title ?? "").trim() || null;
     const legacy = r.legacy_id ? String(r.legacy_id) : null;
