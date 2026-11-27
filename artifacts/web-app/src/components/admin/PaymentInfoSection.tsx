@@ -44,6 +44,9 @@ export interface PayTxn {
 // 입금예정 내역 — 실제 입금(입금일·입금액)이 없는 거래. 미수금·입금액·입금상태 계산에서 0으로 처리된다(서버 집계와 동일).
 const isScheduledTxn = (t: PayTxn) => !t.paidDate && Number(t.customerPaidAmount ?? 0) === 0 && Number(t.foreignAmount ?? 0) === 0
   && t.txnType !== 'offset' && t.txnType !== 'refund';
+// 수정모드에서 정정 가능한 입금내역 — 일반 원화 실제 입금(환불·상계·입금예정·외화·카드 수수료 내역 제외, 서버 depositEdits 와 같은 조건)
+const isEditableDeposit = (t: PayTxn) => t.id != null && !!t.paidDate && !isScheduledTxn(t) && t.txnType !== 'refund' && t.txnType !== 'offset'
+  && !isForeignCur(t.currency) && !(Number(t.foreignAmount ?? 0) > 0) && !(Number(t.feeAmount ?? 0) !== 0 || t.settledAmount != null);
 const TXN_PAY_TYPE_OPTS = [
   { value: 'lump_sum', label: '일괄결제' }, { value: 'advance', label: '선금' }, { value: 'interim', label: '중도금' }, { value: 'balance', label: '잔금' },
 ];
@@ -93,6 +96,8 @@ interface PayRow {
   _schedTxn?: boolean;    // 입금예정 내역 1건뿐인 원화 회차 — 첫 입금 직접 입력 대상. 입금확인 후 저장 시 그 입금예정 내역(_txnId)을 실제 입금으로 전환
   _legacyPaid?: boolean;  // 입금기록 없이 기존 방식으로 입금완료 확정된 회차 — 입금액=청구금액이면 그대로 유지, 정정하면 저장 시 입금기록 1건 생성
   _customType?: boolean;  // 결제구분 '직접입력' 선택(명칭 입력 중)
+  // 입금내역 정정(입금내역 여러 건 회차, 수정모드) — 거래 id → 정정값(입금일·입금액·삭제). 저장 시 depositEdits 로 전송(변경분만)
+  _depEdits?: Record<number, { paidDate?: string | null; amount?: string; del?: boolean }>;
   _advRate?: string;      // 결제구분 비율(%) 입력값(일반결제 선금·중도금·잔금·부분결제 행) — 저장 시 deposit_item '{구분}비율:N'
   _cardFee?: string; _cardRate?: string;   // 카드결제 첫 입금: 카드사 수수료·수수료율 입력(실제 입금액은 _paidAmt)   // 첫 외화 입금: 적용환율(입력 단위)·은행확인 원화액·수수료·실제 입금일
 }
@@ -749,6 +754,33 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     const removing = rows.map((r, idx) => ({ r, idx })).filter(({ idx }) => deposits[idx] === null);
     if (removing.length && !(await confirmDialog({ title: '입금기록 삭제', variant: 'danger', confirmLabel: '삭제 후 저장',
       message: `입금확인을 해제한 회차의 입금기록이 삭제됩니다.\n${removing.map(({ r, idx }) => `· ${idx + 1}회차 ${won(num(r.transactions?.[0]?.customerPaidAmount))}원 (${formatDisplayDate(r.transactions?.[0]?.paidDate) || '입금일 없음'})`).join('\n')}` }))) return;
+    // 입금내역 정정(입금내역 여러 건 회차) — 변경분만 전송. 저장 전 변경 내용을 모두 보여 주고 확인받는다(자동 정정 없음).
+    type DepEdit = { id: number; paidDate?: string | null; customerPaidAmount?: number; delete?: boolean };
+    const depEdits: (DepEdit[] | undefined)[] = rows.map(r => {
+      if (!r._depEdits || isFxRow(r) || firstPayEditable(r)) return undefined;
+      const out: DepEdit[] = [];
+      for (const t of r.transactions ?? []) {
+        const e = t.id != null ? r._depEdits[t.id] : undefined;
+        if (!e || !isEditableDeposit(t)) continue;
+        if (e.del) { out.push({ id: t.id as number, delete: true }); continue; }
+        const d = e.paidDate !== undefined && dateVal(e.paidDate) !== dateVal(t.paidDate) ? (e.paidDate || null) : undefined;
+        const a = e.amount !== undefined && num(e.amount) !== num(t.customerPaidAmount) ? num(e.amount) : undefined;
+        if (d !== undefined || a !== undefined) out.push({ id: t.id as number, ...(d !== undefined ? { paidDate: d } : {}), ...(a !== undefined ? { customerPaidAmount: a } : {}) });
+      }
+      return out.length ? out : undefined;
+    });
+    const badDep = depEdits.findIndex(es => es?.some(e => !e.delete && ((e.customerPaidAmount !== undefined && !(e.customerPaidAmount > 0)) || (e.paidDate !== undefined && !e.paidDate))));
+    if (badDep >= 0) { onToast(`${badDep + 1}회차: 정정할 입금내역의 입금일과 입금액(0보다 큼)을 입력하세요. 입금내역을 없애려면 삭제로 표시하세요.`); return; }
+    const allDel = rows.findIndex((r, idx) => !!depEdits[idx] && !liveTxns(r).some(t => !isScheduledTxn(t) && t.txnType !== 'refund' && t.txnType !== 'offset'));
+    if (allDel >= 0) { onToast(`${allDel + 1}회차: 입금내역을 모두 삭제할 수는 없습니다. 실제 입금 1건 이상을 남기세요.`); return; }
+    const depLines = rows.flatMap((r, idx) => (depEdits[idx] ?? []).map(e => {
+      const t = (r.transactions ?? []).find(x => x.id === e.id);
+      const was = `${formatDisplayDate(t?.paidDate) || '입금일 없음'} ${won(num(t?.customerPaidAmount))}원`;
+      return e.delete ? `· ${idx + 1}회차 ${was} → 삭제`
+        : `· ${idx + 1}회차 ${was} → ${formatDisplayDate(e.paidDate !== undefined ? e.paidDate : t?.paidDate)} ${won(e.customerPaidAmount ?? num(t?.customerPaidAmount))}원`;
+    }));
+    if (depLines.length && !(await confirmDialog({ title: '입금내역 정정', variant: 'warning', confirmLabel: '정정 후 저장',
+      message: `아래 입금내역을 정정합니다. 변경 전 값은 저장 이력에 남습니다.\n${depLines.join('\n')}` }))) return;
     setBusy(true);
     try {
       const isVoucherSave = category === CAT_VOUCHER;
@@ -779,6 +811,8 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
             depositBankConfirmed: !isMinusRow(r) && !!r._bankOk && !!(r._bank ?? '').trim(),
             // 첫 입금 — 청구회차와 같은 트랜잭션(생략 시 입금기록 변경 없음)
             ...(deposits[idx] !== undefined ? { firstDeposit: deposits[idx] } : {}),
+            // 입금내역 정정(입금내역 여러 건 회차) — 청구회차와 같은 트랜잭션
+            ...(depEdits[idx] ? { depositEdits: depEdits[idx] } : {}),
           };
         }),
         deletedIds,
@@ -815,7 +849,11 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   // 수금 SSOT(§G) — 신규 수금거래(transactions)가 1건 이상이면 그 합계를 고객결제액으로 사용(레거시 depositConfirmed 무시, 이중합산 금지).
   //  거래가 없으면 기존 depositConfirmed/depositStatus/paidDate 로직을 fallback 으로 유지.
   const hasTxn = (r: PayRow) => (r.transactions?.length ?? 0) > 0;
-  const txnPaid = (r: PayRow) => (r.transactions ?? []).reduce((s, t) => s + num(t.customerPaidAmount), 0);
+  // 입금내역 정정 미리보기(수정모드) — 삭제 표시 제외, 입금일·입금액은 정정값. 정정이 없으면(조회 모드 포함) 저장값 그대로.
+  const liveTxns = (r: PayRow): PayTxn[] => !r._depEdits ? (r.transactions ?? []) : (r.transactions ?? [])
+    .filter(t => !(t.id != null && r._depEdits?.[t.id]?.del))
+    .map(t => { const e = t.id != null ? r._depEdits?.[t.id] : undefined; return e ? { ...t, ...(e.paidDate !== undefined ? { paidDate: e.paidDate } : {}), ...(e.amount !== undefined ? { customerPaidAmount: e.amount } : {}) } : t; });
+  const txnPaid = (r: PayRow) => liveTxns(r).reduce((s, t) => s + num(t.customerPaidAmount), 0);
   // 수정모드 미리보기 — 첫 입금 정정 대상(입금기록 0~1건·원화) 회차는 편집 중인 입금액·입금확인 체크 기준(저장 시 firstDeposit 과 같은 값).
   //  다중입금·환불·입금예정·외화 회차와 조회 모드는 기존 계산(입금내역 합계 / 입금확정 3필드) 그대로. 취소하면 rows 를 비워 저장값 기준으로 복귀.
   const previewPaid = (r: PayRow): number | null => (editMode && !isFxRow(r) && firstPayEditable(r))
@@ -824,7 +862,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   const minusOf = (r: PayRow) => (r.id == null ? 0 : data.reduce((s, x) => s + (minusSrcOf(x) === r.id ? haap(x) : 0), 0));
   const dueOf = (r: PayRow) => haap(r) + minusOf(r);
   const paidOf = (r: PayRow) => isMinusRow(r) ? 0 : previewPaid(r) ?? (isFxRow(r) ? (r.fx?.paidKrwForSale ?? 0) : hasTxn(r) ? txnPaid(r) : (isRowPaid(r) ? Math.max(dueOf(r), 0) : 0));
-  const lastTxn = (r: PayRow): PayTxn | null => { const ts = (r.transactions ?? []).filter(t => !isScheduledTxn(t)); return ts.length ? ts[ts.length - 1] : null; };  // 최근(마지막) 실제 입금거래(입금예정 제외)
+  const lastTxn = (r: PayRow): PayTxn | null => { const ts = liveTxns(r).filter(t => !isScheduledTxn(t)); return ts.length ? ts[ts.length - 1] : null; };  // 최근(마지막) 실제 입금거래(입금예정 제외)
   const dispPaidDate = (r: PayRow): string => { const t = lastTxn(r); return (t?.paidDate ? formatDisplayDate(t.paidDate) : (formatDisplayDate(r.paidDate) || '—')); };  // §11 입금일: 최종 입금일
   // 입금은행 — 청구 회차 저장값 우선, 없으면(기존 행) 최근 입금거래 은행
   //  둘 다 없으면 기본 은행(국민은행, 외화입금 회차는 기업은행외화)을 미확인(붉은색)으로 표시 — 저장값은 바꾸지 않는다.
@@ -1260,6 +1298,49 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
             : (r.note || '—')}
         </td>
       </tr>
+      {/* 입금내역 정정(수정모드, 입금내역 여러 건 원화 회차) — 일반 입금의 입금일·입금액 정정·삭제. 저장 버튼으로 청구정보와 함께 저장 */}
+      {editable && !minusRow && !isFxRow(r) && !firstPayMode && pid != null && txns.length > 0 && (
+        <tr data-testid={`dep-edit-row-${i}`}>
+          <td colSpan={cols} style={{ ...tdBase, background: '#f8fafc', whiteSpace: 'normal', overflow: 'visible' }}>
+            <div style={{ paddingLeft: 28, display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12 }}>
+              <span style={{ fontWeight: 700, color: C.textSecondary }}>└ 입금내역 정정 <span style={{ fontWeight: 400 }}>(입금일·입금액 수정 또는 삭제 후 저장 — 환불·입금예정·카드 수수료 내역은 저장 후 입금내역에서 관리)</span></span>
+              {txns.map((t, ti) => {
+                const ok = isEditableDeposit(t);
+                const e = t.id != null ? r._depEdits?.[t.id] : undefined;
+                const del = !!e?.del;
+                const setE = (p: { paidDate?: string | null; amount?: string; del?: boolean }) => t.id != null &&
+                  patchRow(i, { _depEdits: { ...(r._depEdits ?? {}), [t.id]: { ...(r._depEdits?.[t.id] ?? {}), ...p } } });
+                const changed = !!e && (del || (e.paidDate !== undefined && dateVal(e.paidDate) !== dateVal(t.paidDate)) || (e.amount !== undefined && num(e.amount) !== num(t.customerPaidAmount)));
+                return (
+                  <div key={t.id ?? ti} data-testid={`dep-edit-${i}-${ti}`} style={{ display: 'flex', alignItems: 'center', gap: 8, opacity: del ? 0.5 : 1 }}>
+                    <span style={{ width: 36, fontWeight: 700, color: C.primaryText }}>{ti + 1}차</span>
+                    {ok ? (
+                      <>
+                        <div style={{ textDecoration: del ? 'line-through' : undefined }}>
+                          {dateCell(e?.paidDate !== undefined ? e.paidDate : t.paidDate, v => setE({ paidDate: v || null }), `dep-edit-date-${i}-${ti}`, `${ti + 1}차 입금일`, { disabled: del })}
+                        </div>
+                        <input type="text" inputMode="numeric" data-testid={`dep-edit-amt-${i}-${ti}`} aria-label={`${ti + 1}차 입금액`} disabled={del}
+                          style={{ ...inp, width: 130, textAlign: 'right', fontWeight: 700, ...(changed && !del ? { borderColor: C.primary } : {}) }}
+                          value={commafy(e?.amount !== undefined ? e.amount : String(Math.round(num(t.customerPaidAmount))))}
+                          onChange={ev => setE({ amount: ev.target.value.replace(/[^\d]/g, '') })} />
+                        <span style={{ color: C.textSecondary }}>원</span>
+                        <button type="button" onClick={() => setE({ del: !del })} data-testid={`dep-edit-del-${i}-${ti}`} aria-label={del ? `${ti + 1}차 입금내역 삭제 취소` : `${ti + 1}차 입금내역 삭제`}
+                          style={{ border: `1px solid ${del ? C.g300 : '#fca5a5'}`, borderRadius: 5, background: '#fff', color: del ? C.textSecondary : C.danger, cursor: 'pointer', padding: '2px 9px', fontSize: 11 }}>{del ? '삭제 취소' : '삭제'}</button>
+                        {changed && <span data-testid={`dep-edit-changed-${i}-${ti}`} style={{ color: del ? C.danger : C.primaryText, fontSize: 11 }}>
+                          {del ? '저장 시 삭제' : `기존 ${formatDisplayDate(t.paidDate)} ${won(num(t.customerPaidAmount))}원`}</span>}
+                      </>
+                    ) : (
+                      <span style={{ color: C.textSecondary }}>
+                        {formatDisplayDate(t.paidDate || t.expectedDate) || '—'} · {t.txnType === 'refund' ? `환불 −${won(Math.abs(num(t.customerPaidAmount)))}원` : isScheduledTxn(t) ? `입금예정 ${won(num(t.expectedAmount))}원` : `${won(num(t.customerPaidAmount))}원`} <span style={{ fontSize: 11 }}>(입금내역에서 관리)</span>
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </td>
+        </tr>
+      )}
       {/* 카드결제 회차(편집·첫 입금) — 청구금액·실제 입금액·카드사 수수료·수수료율·미수금 */}
       {editable && !voucher && cardRow && firstPayMode && (
         <tr data-testid={`card-panel-row-${i}`}><td colSpan={cols} style={{ ...tdBase, whiteSpace: 'normal', overflow: 'visible', background: '#f8fafc' }}>

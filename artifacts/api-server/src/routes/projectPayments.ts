@@ -249,6 +249,15 @@ const rowSchema = z.object({
   //  · 생략(undefined): 입금내역 변경 없음(구버전 호환). · 객체: 입금내역 0건이면 신규, 1건(id 일치)이면 그 거래 수정.
   //  · null: 입금확인 해제 — 일반 입금 1건만 있는 회차의 그 입금을 삭제하고 회차를 미입금으로 정리.
   firstDeposit: txnRowSchema.nullable().optional(),
+  // 입금내역 정정(입금내역 여러 건 회차) — 청구정보 수정 화면에서 일반 원화 입금의 입금일·입금액 정정 또는 삭제.
+  //  · 생략: 입금내역 변경 없음. 환불·상계·입금예정·외화·카드(수수료) 내역은 대상 아님(입금내역에서 관리).
+  //  · 청구회차와 같은 트랜잭션에서 저장, 변경 전후 값은 저장 로그(depositOps)에 남는다. 자동 정정 없음(사용자 입력만).
+  depositEdits: z.array(z.object({
+    id: z.number().int(),
+    paidDate: z.string().nullable().optional(),
+    customerPaidAmount: z.coerce.number().optional(),
+    delete: z.boolean().optional(),
+  })).optional(),
 });
 const batchSchema = z.object({
   rows: z.array(rowSchema),
@@ -360,6 +369,35 @@ router.put("/admin/projects/:id/payment-records", ...adminGuard, requireRolePerm
       depFx.set(i, c);
     }
   }
+  // 입금내역 정정(depositEdits) 검증 — 이 회차의 일반 원화 입금만, 정정 후에도 실제 입금 1건 이상·순입금액 0 이상.
+  for (const [i, r] of rows.entries()) {
+    const edits = r.depositEdits ?? [];
+    if (!edits.length) continue;
+    const L = `${i + 1}회차`;
+    if (r.id == null || !beforeById.has(r.id) || deletedIds.includes(r.id)) { res.status(400).json({ error: `${L}: 저장된 청구회차에서만 입금내역을 정정할 수 있습니다.` }); return; }
+    if (r.firstDeposit !== undefined) { res.status(400).json({ error: `${L}: 첫 입금과 입금내역 정정을 함께 저장할 수 없습니다.` }); return; }
+    if (normCur(r.billingCurrency !== undefined ? r.billingCurrency : beforeById.get(r.id)?.billingCurrency)) { res.status(400).json({ error: `${L}: 외화 청구회차의 입금은 입금내역에서 정정하세요.` }); return; }
+    const own = txByPay.get(r.id) ?? [];
+    const ownById = new Map(own.map(t => [t.id, t]));
+    const seen = new Set<number>();
+    for (const e of edits) {
+      const t = ownById.get(e.id);
+      if (!t || seen.has(e.id)) { res.status(400).json({ error: `${L}: 이 회차의 입금내역이 아닙니다(id ${e.id}).` }); return; }
+      seen.add(e.id);
+      const card = Number(t.feeAmount ?? 0) !== 0 || t.settledAmount != null;
+      if (!isPlainDeposit(t) || !t.paidDate || normCur(t.currency) || Number(t.foreignAmount ?? 0) !== 0 || card) {
+        res.status(409).json({ error: `${L}: 환불·상계·입금예정·외화·카드 입금은 입금내역에서 정정하세요(id ${e.id}).` }); return;
+      }
+      if (e.delete) continue;
+      if (e.customerPaidAmount !== undefined && !(Number.isFinite(e.customerPaidAmount) && e.customerPaidAmount > 0)) { res.status(400).json({ error: `${L}: 입금액은 0보다 커야 합니다(삭제는 삭제로 표시).` }); return; }
+      if (e.paidDate !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(String(e.paidDate ?? ""))) { res.status(400).json({ error: `${L}: 입금일을 입력하세요.` }); return; }
+    }
+    const editById = new Map(edits.map(e => [e.id, e]));
+    const after = own.filter(t => !editById.get(t.id)?.delete)
+      .map(t => ({ t, amt: editById.get(t.id)?.customerPaidAmount ?? Number(t.customerPaidAmount ?? 0) }));
+    if (!after.some(x => isPlainDeposit(x.t))) { res.status(409).json({ error: `${L}: 입금내역을 모두 삭제할 수는 없습니다. 마지막 입금은 입금확인 해제 또는 입금내역에서 정리하세요.` }); return; }
+    if (after.reduce((s, x) => s + x.amt, 0) < -0.005) { res.status(400).json({ error: `${L}: 정정 후 환불금액이 순입금액을 초과합니다.` }); return; }
+  }
   // 입금·상계 거래가 있는 회차의 청구통화 변경 금지(기존 입금기록의 통화 의미 보호)
   for (const [i, r] of rows.entries()) {
     const b = r.id ? beforeById.get(r.id) : undefined;
@@ -458,6 +496,21 @@ router.put("/admin/projects/:id/payment-records", ...adminGuard, requireRolePerm
             await tx.insert(paymentTransactionsTable).values({ projectPaymentId: rowId!, projectId, createdBy: userId, ...tv });
           }
           depositOps.push({ seq: i + 1, op: d.id != null ? "update" : "insert", txnId: d.id ?? null, amount: tv.customerPaidAmount, paidDate: tv.paidDate });
+        }
+        // 입금내역 정정 — 검증된 일반 원화 입금만 수정·삭제(이 회차 소속 조건 재확인). 변경 전 값은 beforeTx 로그에 남는다.
+        for (const e of r.depositEdits ?? []) {
+          const own = (txByPay.get(rowId!) ?? []).find(t => t.id === e.id);
+          if (e.delete) {
+            await tx.delete(paymentTransactionsTable).where(and(eq(paymentTransactionsTable.id, e.id), eq(paymentTransactionsTable.projectPaymentId, rowId!)));
+            depositOps.push({ seq: i + 1, op: "edit-delete", txnId: e.id, amount: own?.customerPaidAmount ?? null, paidDate: own?.paidDate ?? null });
+            continue;
+          }
+          const set: Record<string, unknown> = { updatedBy: userId, updatedAt: new Date() };
+          if (e.customerPaidAmount !== undefined) set.customerPaidAmount = String(e.customerPaidAmount);
+          if (e.paidDate !== undefined) set.paidDate = e.paidDate;
+          await tx.update(paymentTransactionsTable).set(set)
+            .where(and(eq(paymentTransactionsTable.id, e.id), eq(paymentTransactionsTable.projectPaymentId, rowId!)));
+          depositOps.push({ seq: i + 1, op: "edit-update", txnId: e.id, amount: set.customerPaidAmount ?? own?.customerPaidAmount ?? null, paidDate: set.paidDate ?? own?.paidDate ?? null });
         }
       }
     });
