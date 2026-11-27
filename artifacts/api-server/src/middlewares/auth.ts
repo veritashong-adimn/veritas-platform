@@ -1,10 +1,15 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { getPermissionsForRole } from "../lib/rbac";
-import { db, usersTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { db, usersTable, rolesTable, userSessionsTable } from "@workspace/db";
+import { and, eq, isNull, sql } from "drizzle-orm";
+import { idleTimeoutMinutes, checkSession } from "../lib/idlePolicy";
 
-const JWT_SECRET = process.env.JWT_SECRET ?? "translation-platform-jwt-secret-dev";
+// 서명 키 — 운영(NODE_ENV=production)에서는 환경변수 JWT_SECRET 만 사용한다. 없으면 공개된 개발용 기본키로 동작하지 않고
+//   토큰 발급·인증을 모두 거부한다(fail-closed: 개발용 키로 만든 토큰이 운영 인증을 통과하는 일을 원천 차단).
+const DEV_JWT_SECRET = "translation-platform-jwt-secret-dev";
+const JWT_SECRET: string | null = process.env.JWT_SECRET || (process.env.NODE_ENV === "production" ? null : DEV_JWT_SECRET);
+if (!JWT_SECRET) console.error("[auth] FATAL: 운영환경에 JWT_SECRET 이 설정되지 않아 로그인·인증을 모두 거부합니다.");
 
 export type UserRole = "admin" | "staff" | "client" | "linguist" | "customer" | "translator";
 
@@ -16,22 +21,46 @@ export interface JwtPayload {
   sessionId?: string;
 }
 
-export function signToken(payload: JwtPayload): string {
+export const authConfigured = (): boolean => !!JWT_SECRET;
+
+// 로그인 세션 토큰 발급 — sessionId(user_sessions 행)가 반드시 있어야 한다. 세션 없는 토큰은 발급하지 않는다.
+export function signToken(payload: JwtPayload & { sessionId: string }): string {
+  if (!JWT_SECRET) throw new Error("JWT_SECRET is not configured");
+  if (!payload.sessionId) throw new Error("signToken: sessionId required");
   return jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
 }
 
 // 계정 상태 검증 — 삭제(휴지통)·비활성·영구 비식별 처리된 계정은 이미 발급된 JWT 로도 API 접근을 차단한다.
 //   캐시를 두지 않는다: 차단 직후 첫 요청부터 거부되어야 하며(다중 인스턴스 포함), PK 조회 1회라 비용이 작다.
 //   영구 비식별 처리 계정은 deletedAt·isActive=false 가 함께 설정되므로 이 조건으로 함께 차단된다.
-async function loadAccountState(userId: number) {
+//   세션(로그인 1회 = user_sessions 1행)도 같은 조회에서 함께 읽는다(추가 DB 왕복 없음): 로그아웃·미사용 만료 세션의 토큰 차단.
+async function loadAccountState(userId: number, sessionId: string | undefined) {
   const [row] = await db
     .select({ isActive: usersTable.isActive, deletedAt: usersTable.deletedAt, role: usersTable.role, roleId: usersTable.roleId, email: usersTable.email,
-      passwordChangedAt: usersTable.passwordChangedAt, mustChangePassword: usersTable.mustChangePassword })
+      passwordChangedAt: usersTable.passwordChangedAt, mustChangePassword: usersTable.mustChangePassword,
+      roleName: rolesTable.name,
+      sessionRowId: userSessionsTable.id, sessionLogoutAt: userSessionsTable.logoutAt, sessionLastActivityAt: userSessionsTable.lastActivityAt })
     .from(usersTable)
+    .leftJoin(rolesTable, eq(rolesTable.id, usersTable.roleId))
+    .leftJoin(userSessionsTable, sessionId
+      ? and(eq(userSessionsTable.sessionId, sessionId), eq(userSessionsTable.userId, usersTable.id))
+      : sql`false`)
     .where(eq(usersTable.id, userId))
     .limit(1);
   return row;
 }
+
+// 미사용 만료 세션 종료 기록(1회) — 이미 종료된 세션은 건드리지 않는다. 실패해도 요청은 이미 거부된다.
+async function closeExpiredSession(userId: number, sessionId: string) {
+  await db.update(userSessionsTable).set({ logoutAt: new Date(), isOnline: false })
+    .where(and(eq(userSessionsTable.userId, userId), eq(userSessionsTable.sessionId, sessionId), isNull(userSessionsTable.logoutAt)));
+}
+
+const SESSION_ERRORS = {
+  missing: { error: "로그인 세션을 확인할 수 없습니다. 다시 로그인해 주세요.", code: "SESSION_INVALID" },
+  logged_out: { error: "로그아웃된 세션입니다. 다시 로그인해 주세요.", code: "SESSION_ENDED" },
+  expired: { error: "장시간 사용하지 않아 자동 로그아웃되었습니다. 다시 로그인해 주세요.", code: "SESSION_EXPIRED" },
+} as const;
 
 const PASSWORD_CHANGE_ALLOWED = ["/api/auth/change-password", "/api/auth/permissions", "/api/auth/logout", "/api/auth/heartbeat"];
 
@@ -45,6 +74,10 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     return;
   }
 
+  if (!JWT_SECRET) {
+    res.status(503).json({ error: "인증 설정 오류로 로그인할 수 없습니다. 관리자에게 문의하세요." });
+    return;
+  }
   let payload: JwtPayload & { iat?: number };
   try {
     payload = jwt.verify(raw, JWT_SECRET) as JwtPayload & { iat?: number };
@@ -52,10 +85,16 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     res.status(401).json({ error: "토큰이 유효하지 않거나 만료되었습니다." });
     return;
   }
+  // 로그인 세션 필수 — 모든 인증 토큰은 user_sessions 행과 연결된 sessionId 를 가져야 한다(내부·외부 계정 공통, 예외 없음).
+  //   세션 없는 토큰(구 회원가입 토큰·서명키로 직접 만든 토큰)은 DB 조회 전에 거부한다.
+  if (typeof payload.sessionId !== "string" || !payload.sessionId || !Number.isInteger(payload.id)) {
+    res.status(401).json({ error: "로그인 세션이 없는 인증입니다. 다시 로그인해 주세요.", code: "SESSION_REQUIRED" });
+    return;
+  }
 
   let account: Awaited<ReturnType<typeof loadAccountState>>;
   try {
-    account = await loadAccountState(payload.id);
+    account = await loadAccountState(payload.id, payload.sessionId);
   } catch (err) {
     // 상태를 확인할 수 없으면 허용하지 않는다(fail-closed).
     req.log?.error?.({ err }, "requireAuth: account state lookup failed");
@@ -73,6 +112,20 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     res.status(401).json({ error: "비밀번호가 변경되어 다시 로그인해야 합니다.", code: "TOKEN_REVOKED" });
     return;
   }
+  // 로그인 세션 검증 — 로그인 토큰은 모두 sessionId 를 가진다(로그인 시 user_sessions 기록 후 발급).
+  //   · 로그아웃(또는 비밀번호 변경·계정 정리로 종료)된 세션의 토큰 → 거부
+  //   · 관리자 60분·직원 30분 동안 실제 사용자 활동(heartbeat 보고)이 없으면 만료 → 세션 종료 기록 후 거부(연장으로 복구 불가)
+  const idleMin = idleTimeoutMinutes(account.role, account.roleName);
+  {
+    const state = checkSession({ exists: account.sessionRowId != null, logoutAt: account.sessionLogoutAt ?? null, lastActivityAt: account.sessionLastActivityAt ?? null }, idleMin, Date.now());
+    if (state !== "active") {
+      if (state === "expired") await closeExpiredSession(payload.id, payload.sessionId).catch(err => req.log?.error?.({ err }, "requireAuth: close expired session failed"));
+      res.status(401).json(SESSION_ERRORS[state]);
+      return;
+    }
+  }
+  // 인증 API 응답은 브라우저·중간 캐시에 저장하지 않는다(로그아웃 후 뒤로가기·캐시로 업무자료 노출 방지)
+  res.setHeader("Cache-Control", "no-store");
   // 임시 비밀번호 계정 — 비밀번호 변경 전에는 변경·권한 조회·로그아웃·활동 기록 외 API 사용 불가(서버 강제)
   if (account.mustChangePassword && !PASSWORD_CHANGE_ALLOWED.some(p => (req.originalUrl ?? "").split("?")[0] === p)) {
     res.status(403).json({ error: "임시 비밀번호로 로그인했습니다. 비밀번호를 먼저 변경해 주세요.", code: "PASSWORD_CHANGE_REQUIRED" });
@@ -81,7 +134,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
 
   // 역할·RBAC 역할(roleId)·이메일은 토큰 발급 시점 값이 아니라 현재 DB 값을 쓴다.
   //   로그인 이후 관리자가 역할을 지정·변경해도 재로그인 없이 다음 요청부터 화면(/auth/permissions)과 API 권한에 함께 반영된다.
-  req.user = { id: payload.id, email: account.email, role: account.role as UserRole, roleId: account.roleId ?? null, sessionId: payload.sessionId };
+  req.user = { id: payload.id, email: account.email, role: account.role as UserRole, roleId: account.roleId ?? null, sessionId: payload.sessionId, idleTimeoutMinutes: idleMin };
   next();
 }
 

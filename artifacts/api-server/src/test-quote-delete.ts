@@ -1,12 +1,12 @@
 // @ts-nocheck — 격리 테스트(복제 DB veritas_inq_scratch + 테스트 서버 :8098). 견적서 삭제(논리 삭제) + 의뢰건·프로젝트 원복 A~J.
 //   운영 DB 에서는 실행되지 않는다(DATABASE_URL 이 복제 DB 가 아니면 즉시 종료).
-import jwt from "jsonwebtoken";
 import { db } from "@workspace/db";
+import { testSessionToken } from "./testing/sessionToken";
 import { sql } from "drizzle-orm";
 
 if (!/\/veritas_inq_scratch(\?|$)/.test(process.env.DATABASE_URL ?? "")) { console.error("복제 DB(veritas_inq_scratch) 전용 테스트입니다."); process.exit(1); }
 const B = process.env.TEST_API ?? "http://localhost:8098/api";
-const T = jwt.sign({ id: 10, email: "admin@test", role: "admin" }, process.env.JWT_SECRET ?? "translation-platform-jwt-secret-dev", { expiresIn: "30m" });
+const T = await testSessionToken(db, 10);   // 정상 로그인 세션(user_sessions)으로 발급 — 세션 없는 토큰은 서버가 거부
 const call = async (m: string, p: string, b?: any) => { const r = await fetch(B + p, { method: m, headers: { Authorization: `Bearer ${T}`, "Content-Type": "application/json" }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, body: await r.json().catch(() => null) }; };
 const one = async (q: any) => ((await db.execute(q)).rows as any[])[0];
 const all = async (q: any) => (await db.execute(q)).rows as any[];

@@ -1,9 +1,9 @@
 // 판매관리 '미연결 관리' API 검증 — 개발 DB 전용. 임시 fixture 를 만들고 HTTP 로 호출한 뒤 모두 삭제한다.
 import { db } from "@workspace/db";
+import { testSessionToken } from "./testing/sessionToken";
 import { sql } from "drizzle-orm";
 import express from "express";
 import type { AddressInfo } from "node:net";
-import { signToken } from "./middlewares/auth";
 import manageRouter from "./routes/legacyPartyManage";
 
 let pass = 0, fail = 0;
@@ -18,7 +18,7 @@ async function main() {
   app.use((req: any, _r, next) => { req.log = { error: (...a: unknown[]) => console.error(...a), warn: () => {}, info: () => {} }; next(); });
   app.use("/api", manageRouter);
   const server = app.listen(0); const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
-  const token = signToken({ id: admin.id, email: admin.email, role: "admin" });
+  const token = await testSessionToken(db, admin.id);   // 정상 로그인 세션으로 발급
   const call = async (method: string, p: string, body?: unknown) => { const r = await fetch(base + p, { method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined }); return { status: r.status, body: await r.json().catch(() => ({})) as any }; };
   const tag = `__TLM${Date.now() % 1e8}`; const T = (s: string) => `${tag}${s}`;
   const made = { companies: [] as number[], legacy: [] as number[], saleNos: [] as string[], projects: [] as number[] };

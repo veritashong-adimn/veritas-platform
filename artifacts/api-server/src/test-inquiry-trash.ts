@@ -1,13 +1,14 @@
 // @ts-nocheck — 격리 테스트(복제 DB veritas_inq_scratch + 테스트 서버 :8098). 통합 휴지통 의뢰건: 목록·복원·완전삭제·권한.
 //   운영 DB 에서는 실행되지 않는다(DATABASE_URL 이 복제 DB 가 아니면 즉시 종료).
-import jwt from "jsonwebtoken";
 import { db } from "@workspace/db";
+import { testSessionToken } from "./testing/sessionToken";
 import { sql } from "drizzle-orm";
 
 if (!/\/veritas_inq_scratch(\?|$)/.test(process.env.DATABASE_URL ?? "")) { console.error("복제 DB(veritas_inq_scratch) 전용 테스트입니다."); process.exit(1); }
 const B = process.env.TEST_API ?? "http://localhost:8098/api";
-const sign = (role: string, id: number) => jwt.sign({ id, email: `${role}@test`, role }, process.env.JWT_SECRET ?? "translation-platform-jwt-secret-dev", { expiresIn: "30m" });
-const T = sign("admin", 10);
+// 정상 로그인 세션으로 발급. 역할별 검증은 실제 그 역할의 테스트 계정 세션(서버는 DB 의 역할로 권한 판정)
+const T = await testSessionToken(db, 10);
+const CUSTOMER = await testSessionToken(db, { role: "customer" });
 const call = async (m: string, p: string, b?: any, tok = T) => { const r = await fetch(B + p, { method: m, headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, body: await r.json().catch(() => null) }; };
 const one = async (q: any) => ((await db.execute(q)).rows as any[])[0];
 let pass = 0, fail = 0; const check = (n: string, ok: boolean, d: any = "") => { ok ? pass++ : fail++; console.log(`  ${ok ? "✅" : "❌"} ${n}${ok ? "" : " — " + JSON.stringify(d)}`); };
@@ -80,10 +81,10 @@ check("C 연결 유지 상태로 상세 조회", (await call("GET", `/admin/inqu
 
 console.log("\n[D] 완전삭제");
 const d = await mk("D"); await del(d.id, "완전삭제 대상");
-const staff = sign("staff", 10);
+const staff = await testSessionToken(db, { role: "staff" });
 check("D 직원 완전삭제 403", (await call("DELETE", `/admin/inquiries/${d.id}/permanent`, undefined, staff)).status === 403);
-check("D 고객 휴지통 조회 403", (await call("GET", "/admin/inquiries-trash", undefined, sign("customer", 10))).status === 403);
-check("D 고객 복원 403", (await call("POST", `/admin/inquiries/${d.id}/restore`, undefined, sign("customer", 10))).status === 403);
+check("D 고객 휴지통 조회 403", (await call("GET", "/admin/inquiries-trash", undefined, CUSTOMER)).status === 403);
+check("D 고객 복원 403", (await call("POST", `/admin/inquiries/${d.id}/restore`, undefined, CUSTOMER)).status === 403);
 const sig2 = await counts();
 const p = await call("DELETE", `/admin/inquiries/${d.id}/permanent`, { reason: "테스트 완전삭제" });
 check("D 관리자 완전삭제 성공", p.status === 200 && p.body.success === true, p);

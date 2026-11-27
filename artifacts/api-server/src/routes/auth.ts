@@ -2,9 +2,10 @@ import { isReservedEmail } from "../lib/userPurge";
 import { Router, type IRouter } from "express";
 import bcrypt from "bcryptjs";
 import { randomUUID, randomBytes } from "crypto";
-import { db, usersTable, userSessionsTable, invitationsTable, projectsTable } from "@workspace/db";
+import { db, usersTable, userSessionsTable, invitationsTable, projectsTable, rolesTable } from "@workspace/db";
 import { eq, and, gte, sql } from "drizzle-orm";
-import { signToken, requireAuth } from "../middlewares/auth";
+import { signToken, requireAuth, authConfigured } from "../middlewares/auth";
+import { idleTimeoutMinutes, activityTimeFromReport } from "../lib/idlePolicy";
 import { getPermissionsForRole, ALL_PERMISSIONS } from "../lib/rbac";
 
 /** 오늘 날짜 키 (YYYY-MM-DD, KST) */
@@ -27,7 +28,45 @@ async function resolvePermissions(user: { role: string; roleId?: number | null }
   return Array.from(perms);
 }
 
+// 로그인 세션 생성(user_sessions 1행) — 로그인·회원가입 공통. 토큰은 이 세션 ID 로만 발급한다(세션 없는 토큰 없음).
+//   토큰 발급 전에 기록을 완료한다(인증 미들웨어가 세션 행으로 로그아웃·미사용 만료를 검증). 실패하면 null.
+async function createLoginSession(req: any, user: { id: number; role: string }): Promise<string | null> {
+  const sessionId = randomUUID();
+  const now = new Date();
+  try {
+    await db.insert(userSessionsTable).values({
+      userId: user.id,
+      sessionId,
+      roleType: user.role,
+      loginAt: now,
+      lastActivityAt: now,
+      ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ?? req.socket.remoteAddress ?? null,
+      userAgent: req.headers["user-agent"] ?? null,
+      isOnline: true,
+      dateKey: todayKey(),
+    });
+  } catch (err) {
+    req.log.error({ err }, "Session record failed");
+    return null;
+  }
+  db.update(usersTable)
+    .set({ lastLoginAt: now, lastActivityAt: now })
+    .where(eq(usersTable.id, user.id))
+    .catch((err: unknown) => req.log.error({ err }, "Login time update failed"));
+  return sessionId;
+}
+
+// 화면 버전 확인 — 미사용 자동 로그아웃(실제 활동 보고)을 지원하는 화면은 로그인 요청에 이 헤더를 보낸다.
+//   내부 계정(관리자·직원)은 이 화면으로만 로그인할 수 있다: 이전 화면은 3분마다 자동 활동 보고를 보내며 자동 로그아웃이 없으므로,
+//   배포 전에 열어 둔 화면에서 다시 로그인하면 새로고침 안내로 거절한다(새로고침하면 최신 화면이 열린다).
+export const CLIENT_PROTOCOL_HEADER = "x-veritas-client";
+export const CLIENT_PROTOCOL = "idle-v1";
+const OUTDATED_CLIENT = { error: "새 버전이 배포되었습니다. 브라우저를 새로고침(F5)한 뒤 다시 로그인해 주세요.", code: "CLIENT_OUTDATED" } as const;
+
+const AUTH_NOT_CONFIGURED = { error: "인증 설정 오류로 로그인할 수 없습니다. 관리자에게 문의하세요." } as const;
+
 router.post("/auth/register", async (req, res) => {
+  if (!authConfigured()) { res.status(503).json(AUTH_NOT_CONFIGURED); return; }
   const { email: rawEmail, password, role, name } = req.body as {
     email?: string;
     password?: string;
@@ -67,9 +106,12 @@ router.post("/auth/register", async (req, res) => {
       .values({ email, password: hashed, role: userRole, name: name?.trim() || null })
       .returning({ id: usersTable.id, email: usersTable.email, role: usersTable.role, name: usersTable.name, roleId: usersTable.roleId });
 
-    const token = signToken({ id: user.id, email: user.email, role: user.role, roleId: user.roleId });
+    // 가입 직후 바로 로그인 — 로그인과 같은 세션을 만들어 발급(세션 없는 토큰 발급 없음). 가입 가능 역할은 외부 계정뿐(위 allowedRoles).
+    const sessionId = await createLoginSession(req, user);
+    if (!sessionId) { res.status(503).json({ error: "가입은 완료되었지만 로그인 세션을 만들지 못했습니다. 로그인 화면에서 다시 로그인해 주세요." }); return; }
+    const token = signToken({ id: user.id, email: user.email, role: user.role, roleId: user.roleId, sessionId });
     const permissions = await resolvePermissions(user);
-    res.status(201).json({ token, user: { ...user, permissions } });
+    res.status(201).json({ token, user: { ...user, permissions }, idleTimeoutMinutes: idleTimeoutMinutes(user.role, null) });
   } catch (err) {
     req.log.error({ err }, "Register failed");
     res.status(400).json({ error: "이미 사용 중인 이메일입니다." });
@@ -77,6 +119,7 @@ router.post("/auth/register", async (req, res) => {
 });
 
 router.post("/auth/login", async (req, res) => {
+  if (!authConfigured()) { res.status(503).json(AUTH_NOT_CONFIGURED); return; }
   const { email: rawEmail, password } = req.body as { email?: string; password?: string };
 
   if (!rawEmail || !password) {
@@ -130,35 +173,28 @@ router.post("/auth/login", async (req, res) => {
     return;
   }
 
+  // 내부 계정은 자동 로그아웃을 지원하는 최신 화면에서만 로그인(이전 화면 → 새로고침 안내). 고객·통번역사 계정은 기존과 같다.
+  if ((user.role === "admin" || user.role === "staff") && req.headers[CLIENT_PROTOCOL_HEADER] !== CLIENT_PROTOCOL) {
+    req.log.warn({ email, userId: user.id }, "Login rejected: outdated client");
+    res.status(409).json(OUTDATED_CLIENT);
+    return;
+  }
+
   req.log.info({ email, userId: user.id, role: user.role }, "Login success");
 
-  const sessionId = randomUUID();
-  const now = new Date();
-
-  // 세션 기록 저장 (비동기, 실패해도 로그인 차단 안 함)
-  Promise.all([
-    db.insert(userSessionsTable).values({
-      userId: user.id,
-      sessionId,
-      roleType: user.role,
-      loginAt: now,
-      lastActivityAt: now,
-      ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ?? req.socket.remoteAddress ?? null,
-      userAgent: req.headers["user-agent"] ?? null,
-      isOnline: true,
-      dateKey: todayKey(),
-    }),
-    db.update(usersTable)
-      .set({ lastLoginAt: now, lastActivityAt: now })
-      .where(eq(usersTable.id, user.id)),
-  ]).catch(err => req.log.error({ err }, "Session record failed"));
+  const sessionId = await createLoginSession(req, user);
+  if (!sessionId) { res.status(503).json({ error: "로그인 세션을 만들지 못했습니다. 잠시 후 다시 시도해 주세요." }); return; }
 
   const token = signToken({ id: user.id, email: user.email, role: user.role, roleId: user.roleId, sessionId });
-  const permissions = await resolvePermissions(user);
+  const [permissions, roleRow] = await Promise.all([
+    resolvePermissions(user),
+    user.roleId ? db.select({ name: rolesTable.name }).from(rolesTable).where(eq(rolesTable.id, user.roleId)).then(r => r[0]) : Promise.resolve(undefined),
+  ]);
 
   res.json({
     token,
     user: { id: user.id, email: user.email, role: user.role, name: user.name, roleId: user.roleId, permissions, mustChangePassword: user.mustChangePassword },
+    idleTimeoutMinutes: idleTimeoutMinutes(user.role, roleRow?.name),   // 미사용 자동 로그아웃(분) — 관리자 60·직원 30·그 외 null
   });
 });
 
@@ -168,7 +204,7 @@ router.get("/auth/permissions", requireAuth, async (req, res) => {
   const permissions = await resolvePermissions(user);
   const [flags] = await db.select({ mustChangePassword: usersTable.mustChangePassword }).from(usersTable).where(eq(usersTable.id, user.id));
   // 기존 응답(permissions) 유지 + 현재 역할 정보 추가 — 화면이 저장된 사용자 정보(role/roleId)를 최신으로 맞춘다.
-  res.json({ permissions, role: user.role, roleId: user.roleId ?? null, mustChangePassword: !!flags?.mustChangePassword });
+  res.json({ permissions, role: user.role, roleId: user.roleId ?? null, mustChangePassword: !!flags?.mustChangePassword, idleTimeoutMinutes: user.idleTimeoutMinutes ?? null });
 });
 
 // ─── 본인 비밀번호 변경 ──────────────────────────────────────────────────────
@@ -284,18 +320,28 @@ router.patch("/auth/change-password", requireAuth, async (req, res) => {
   res.json({ ok: true, reloginRequired: true });
 });
 
-/** Heartbeat: 마지막 활동 시간 갱신 (로그인 후 주기적으로 호출) */
+/** Heartbeat: 실제 사용자 활동 보고 — 마지막 활동 시간 갱신.
+ *  화면은 마우스·키보드·스크롤 등 실제 활동이 있을 때만(최대 2분 간격) 또는 '로그인 연장' 클릭 시 호출한다(백그라운드 조회는 보고하지 않음).
+ *  body.idleMs = 화면 기준 마지막 활동 이후 경과(ms) → 서버 시각 기준 활동 시각으로 환산(시계 차이 무관, 최대 10분). 생략 시 지금.
+ *  활동 시각은 앞당기지 않는다(GREATEST). 만료·로그아웃된 세션은 requireAuth 에서 이미 거부되므로 이 호출로 복구되지 않는다. */
 router.post("/auth/heartbeat", requireAuth, async (req, res) => {
   const user = req.user!;
-  const now = new Date();
+  const body = req.body as { activity?: unknown; idleMs?: unknown } | undefined;
+  // 실제 활동 보고만 인정 — 최신 화면은 { activity: true, idleMs } 형식으로만 보낸다.
+  //   이전 화면의 3분 주기 자동 호출(본문 없음)은 성공 응답만 하고 활동 시각을 갱신하지 않는다(자동 로그아웃 우회 차단).
+  if (body?.activity !== true || typeof body.idleMs !== "number") {
+    res.json({ ok: true, counted: false, idleTimeoutMinutes: user.idleTimeoutMinutes ?? null });
+    return;
+  }
+  const at = activityTimeFromReport(Date.now(), body.idleMs);
 
   await Promise.all([
     db.update(usersTable)
-      .set({ lastActivityAt: now })
+      .set({ lastActivityAt: sql`GREATEST(COALESCE(${usersTable.lastActivityAt}, ${at}), ${at})` })
       .where(eq(usersTable.id, user.id)),
     user.sessionId
       ? db.update(userSessionsTable)
-          .set({ lastActivityAt: now, isOnline: true })
+          .set({ lastActivityAt: sql`GREATEST(${userSessionsTable.lastActivityAt}, ${at})`, isOnline: true })
           .where(and(
             eq(userSessionsTable.userId, user.id),
             eq(userSessionsTable.sessionId, user.sessionId),
@@ -303,7 +349,7 @@ router.post("/auth/heartbeat", requireAuth, async (req, res) => {
       : Promise.resolve(),
   ]);
 
-  res.json({ ok: true, lastActivityAt: now });
+  res.json({ ok: true, counted: true, lastActivityAt: at, idleTimeoutMinutes: user.idleTimeoutMinutes ?? null });
 });
 
 /** Logout: 세션을 오프라인 처리 */

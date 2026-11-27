@@ -1,7 +1,7 @@
 // @ts-nocheck — 격리 통합 테스트(임시 복제 DB veritas_act_scratch + :8099 API 서버 전용). 과거 CRM 판매건 운영 전환 ①~⑯.
 import ExcelJS from "exceljs";
-import jwt from "jsonwebtoken";
 import { db } from "@workspace/db";
+import { testSessionToken } from "./testing/sessionToken";
 import { sql } from "drizzle-orm";
 import { buildSyncPreview, executeArchiveSync, cachePreview } from "./services/legacyArchiveSync";
 
@@ -12,8 +12,8 @@ let pass = 0, fail = 0;
 const check = (n: string, ok: boolean, d = "") => { ok ? pass++ : fail++; console.log(`${ok ? "PASS" : "FAIL"} ${n}${d ? ` — ${d}` : ""}`); };
 const q = async (s: any) => (await db.execute(s)).rows as any[];
 const one = async (s: any) => (await q(s))[0];
-const tok = (p: any) => jwt.sign(p, process.env.JWT_SECRET, { expiresIn: "30m" });
-const ADMIN = tok({ id: 10, email: "admin@test", role: "admin" });
+// 정상 로그인 세션으로 발급. 역할별 검증은 실제 그 역할의 테스트 계정 세션(서버는 DB 의 역할로 권한 판정)
+const ADMIN = await testSessionToken(db, 10);
 const call = async (t: string, m: string, path: string, body?: any) => {
   const r = await fetch(B + path, { method: m, headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
   const ct = r.headers.get("content-type") ?? ""; return { status: r.status, body: ct.includes("json") ? await r.json() : Buffer.from(await r.arrayBuffer()) };
@@ -25,11 +25,10 @@ const saleNoOf = async (id: number) => (await one(sql`SELECT source_raw->>'판�
 
 async function main() {
   // 권한 테스트 사용자(임시 DB 에만)
-  const roleId = async (n: string) => (await one(sql`SELECT id FROM roles WHERE name=${n}`))?.id;
-  const VIEWER = tok({ id: 10, email: "viewer@test", role: "staff", roleId: await roleId("viewer") });
-  const PM = tok({ id: 10, email: "pm@test", role: "staff", roleId: await roleId("pm") });
-  const FIN = tok({ id: 10, email: "fin@test", role: "staff", roleId: await roleId("finance") });
-  const NOROLE = tok({ id: 10, email: "norole@test", role: "staff" });
+  const VIEWER = await testSessionToken(db, { role: "staff", roleName: "viewer" });
+  const PM = await testSessionToken(db, { role: "staff", roleName: "pm" });
+  const FIN = await testSessionToken(db, { role: "staff", roleName: "finance" });
+  const NOROLE = await testSessionToken(db, { role: "staff" });
 
   const A0 = await archiveHash(), L0 = await linkHash(), O0 = await opsCount();
   const sh0 = (await call(ADMIN, "GET", "/admin/sales-history?range=all&pageSize=1")).body;

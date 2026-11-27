@@ -1,11 +1,11 @@
 // @ts-nocheck — 격리 테스트(임시 복제 DB veritas_inq_scratch + :8099). 의뢰건 서비스 유형 복수 선택 ①~⑫·⑮.
-import jwt from "jsonwebtoken";
 import { db } from "@workspace/db";
+import { testSessionToken } from "./testing/sessionToken";
 import { sql } from "drizzle-orm";
 
 if (!/\/veritas_inq_scratch(\?|$)/.test(process.env.DATABASE_URL ?? "")) { console.error("임시 복제 DB 전용"); process.exit(1); }
 const B = "http://localhost:8099/api";
-const T = jwt.sign({ id: 10, email: "admin@test", role: "admin" }, process.env.JWT_SECRET, { expiresIn: "20m" });
+const T = await testSessionToken(db, 10);   // 정상 로그인 세션(user_sessions)으로 발급 — 세션 없는 토큰은 서버가 거부
 const call = async (m: string, p: string, b?: any) => { const r = await fetch(B + p, { method: m, headers: { Authorization: `Bearer ${T}`, "Content-Type": "application/json" }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, body: await r.json().catch(() => null) }; };
 const one = async (s: any) => ((await db.execute(s)).rows as any[])[0];
 let pass = 0, fail = 0; const check = (n: string, ok: boolean, d = "") => { ok ? pass++ : fail++; console.log(`${ok ? "PASS" : "FAIL"} ${n}${d ? ` — ${d}` : ""}`); };

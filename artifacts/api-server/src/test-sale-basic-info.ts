@@ -3,10 +3,10 @@
 // 검증: 수정·저장·재조회 유지 / 이 판매건만 vs Master 동시 수정 / 다른 판매건 불변 / 다른 거래처 담당자 거부 / 사유 필수 /
 //       PM·견적서명·견적일 / 견적서 출력 API 값 / 수행·결제 정보 불변 / 감사 로그
 import { db } from "@workspace/db";
+import { testSessionToken } from "./testing/sessionToken";
 import { sql } from "drizzle-orm";
 import type { AddressInfo } from "node:net";
 import express from "express";
-import { signToken } from "./middlewares/auth";
 import saleBasicInfoRouter from "./routes/saleBasicInfo";
 import adminRouter from "./routes/admin";
 
@@ -26,7 +26,7 @@ async function main() {
   if (/neon\.tech/.test(process.env.DATABASE_URL ?? "")) throw new Error("운영 DB 로 보이는 연결에서는 실행하지 않습니다.");
   const [admin] = await rows(sql`SELECT id, email FROM users WHERE role = 'admin' AND role_id IS NULL AND deleted_at IS NULL AND is_active AND NOT coalesce(must_change_password, false) LIMIT 1`);
   if (!admin) throw new Error("개발 DB 에 관리자 계정이 없습니다.");
-  const token = signToken({ id: admin.id, email: admin.email, role: "admin" });
+  const token = await testSessionToken(db, admin.id);   // 정상 로그인 세션으로 발급
   const server = app.listen(0);
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
   const call = async (method: string, path: string, body?: unknown) => {

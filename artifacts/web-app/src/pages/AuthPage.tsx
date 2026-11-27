@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { api, User } from "../lib/constants";
 import { Card, PrimaryBtn } from "../components/ui";
 import { takeReloginNotice } from "../components/shared/MyAccount";
+import { CLIENT_PROTOCOL_HEADER, CLIENT_PROTOCOL } from "../lib/idleTimer";
 
 const inputStyle: React.CSSProperties = {
   width: "100%", padding: "9px 12px", borderRadius: 8,
@@ -25,7 +26,7 @@ const writeRememberedEmail = (value: string | null) => {
   } catch { /* 저장소 사용 불가 — 무시 */ }
 };
 
-export function AuthPage({ onAuth }: { onAuth: (token: string, user: User, permissions?: string[]) => void }) {
+export function AuthPage({ onAuth }: { onAuth: (token: string, user: User, permissions?: string[], idleTimeoutMinutes?: number | null) => void }) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState(readRememberedEmail);
   const [rememberEmail, setRememberEmail] = useState(() => readRememberedEmail() !== "");
@@ -44,14 +45,14 @@ export function AuthPage({ onAuth }: { onAuth: (token: string, user: User, permi
       const endpoint = mode === "login" ? "/api/auth/login" : "/api/auth/register";
       const body = mode === "login" ? { email, password } : { email, password, role };
       const res = await fetch(api(endpoint), {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json", [CLIENT_PROTOCOL_HEADER]: CLIENT_PROTOCOL },
         body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok) { setMsg(data.error ?? "오류가 발생했습니다."); return; }
       // 로그인 성공 시에만 저장/갱신(실패 시 저장하지 않음). 회원가입에는 적용하지 않는다.
       if (mode === "login" && rememberEmail) writeRememberedEmail(email.trim());
-      onAuth(data.token, data.user, data.user?.permissions ?? []);
+      onAuth(data.token, data.user, data.user?.permissions ?? [], data.idleTimeoutMinutes);
     } catch { setMsg("서버에 연결할 수 없습니다."); }
     finally { setLoading(false); }
   };

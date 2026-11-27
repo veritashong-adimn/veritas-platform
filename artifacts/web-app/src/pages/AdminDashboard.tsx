@@ -890,25 +890,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
   // [제거됨] 구식 엑셀 대량등록 모달 드래그 리스너 — 모달 자체가 공통 Engine으로 대체되어 삭제.
 
-  // ── Heartbeat: 3분마다 마지막 활동 시간 갱신 ────────────────────────────
-  useEffect(() => {
-    const sendHeartbeat = async () => {
-      if (!token) return;
-      try {
-        const res = await fetch(api("/api/auth/heartbeat"), {
-          method: "POST",
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (res.status === 401) {
-          setToast("세션이 만료되었습니다. 다시 로그인해 주세요.");
-          setTimeout(() => onLogout?.(), 1500);
-        }
-      } catch {}
-    };
-    sendHeartbeat();
-    const interval = setInterval(sendHeartbeat, 3 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, [token]);
+  // ── 활동 기록(heartbeat) — 실제 사용자 활동이 있을 때만 IdleLogoutGuard(App)가 보고한다.
+  //    (기존 3분 주기 무조건 호출은 미사용 중에도 활동으로 기록되어 자동 로그아웃 기준과 맞지 않아 제거)
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
   useEffect(() => { if (adminTab === "companies") fetchCompanies(); }, [adminTab, fetchCompanies]);

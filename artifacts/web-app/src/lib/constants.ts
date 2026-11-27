@@ -1,4 +1,5 @@
 import { clearSalesCache } from "./salesListCache";
+import { clearIdleKeys } from "./sessionGuard";
 export const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 export const api = (path: string) => `${BASE}${path}`;
 
@@ -525,11 +526,23 @@ export function saveSession(token: string, user: User, permissions?: string[]) {
   localStorage.setItem(USER_KEY, JSON.stringify(user));
   if (permissions) localStorage.setItem(PERM_KEY, JSON.stringify(permissions));
 }
+// 미사용 자동 로그아웃 시간(분) — 서버 값(로그인·권한 조회 응답). 새로고침 직후에도 서버와 같은 기준으로 만료를 판정하기 위해 보관.
+export const IDLE_MIN_KEY = "auth_idle_minutes";
+export function saveIdleMinutes(min: number | null | undefined) {
+  if (typeof min === "number" && min > 0) localStorage.setItem(IDLE_MIN_KEY, String(min));
+  else if (min === null) localStorage.removeItem(IDLE_MIN_KEY);
+}
+export function loadIdleMinutes(): number | null {
+  const v = Number(localStorage.getItem(IDLE_MIN_KEY));
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
 export function clearSession() {
   clearSalesCache();   // 로그아웃·세션 만료·사용자 변경 — 이전 사용자의 판매목록 메모리 캐시 제거
+  clearIdleKeys();     // 탭 간 공유 활동 기록 제거
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
   localStorage.removeItem(PERM_KEY);
+  localStorage.removeItem(IDLE_MIN_KEY);
 }
 export function loadSession(): { token: string; user: User; permissions: string[] } | null {
   const token = localStorage.getItem(TOKEN_KEY);
