@@ -86,6 +86,8 @@
    vz-sticky 목록에만 적용(상세/모달/밀집 표 등 미적용). 셀 가로 padding·정렬·너비는 기존 유지,
    세로 여백만 통일(행 높이 일관). 다중 줄 셀은 내용에 맞춰 높이가 늘어나며 잘리지 않는다. */
 .veritas-read-table.vz-sticky thead th { font-size: 13px !important; }
+/* 판매목록 [현재] 표 — 헤더 고정(sticky) 없이 글자 크기만 목록 공통 13px(견적목록·판매목록 통일) */
+.veritas-read-table.vz-list13 thead th { font-size: 13px !important; }
 .veritas-read-table.vz-sticky tbody td {
   font-size: 13px;
   padding-top: 9px;

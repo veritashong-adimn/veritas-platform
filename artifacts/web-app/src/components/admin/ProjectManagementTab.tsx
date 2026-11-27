@@ -15,6 +15,7 @@ import { DateField } from './DatePickerShared';
 import { SaleDateSearchBar, EMPTY_SALE_PERIOD, appendSalePeriod, hasSalePeriod, type SalePeriod } from './SaleDateSearchBar';
 import './readTableView.css';
 import { Pagination } from '../ui/Paginator';
+import { listSearchBar, listGroup, listInput, listBtnPrimary, listBtnGray, listBtnGhost, LIST_FS, LIST_TD_PAD } from '../../lib/listSearchUi';
 
 // ─── 인라인 스타일 ─────────────────────────────────────────────────────────────
 const inputStyle: React.CSSProperties = {
@@ -22,13 +23,14 @@ const inputStyle: React.CSSProperties = {
   border: '1px solid #d1d5db', fontSize: 14, color: '#111827',
   outline: 'none', boxSizing: 'border-box', background: '#fff',
 };
+// 목록 표 규격 — 견적목록·판매목록 공통(본문 13px · 셀 여백 9px 12px · 헤더는 readTableView.css 공통 12px/600)
 const tableTh: React.CSSProperties = {
-  padding: "8px 10px", textAlign: "left", fontSize: 11,
+  padding: LIST_TD_PAD, textAlign: "left", fontSize: 12,
   fontWeight: 600, color: "#6b7280", background: "#f9fafb",
   borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap",
 };
 const tableTd: React.CSSProperties = {
-  padding: "8px 10px", fontSize: 12, color: "#374151",
+  padding: LIST_TD_PAD, fontSize: LIST_FS, color: "#374151",
   borderBottom: "1px solid #edf0f3", verticalAlign: "middle",
 };
 
@@ -901,41 +903,42 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
       {salesRange === "current" && (
       <Section title={`전체 판매건 (${projects.length})`} action={
         <div style={{ display: "flex", gap: 8 }}>
-          <GhostBtn onClick={handleExportProjects} style={{ fontSize: 13, padding: "7px 14px" }}>⬇ CSV 내보내기</GhostBtn>
-          <GhostBtn onClick={handleExportSalesExcel} disabled={excelExporting}
+          <button type="button" onClick={handleExportProjects} style={listBtnGhost()} data-testid="sales-csv-export-btn" aria-label="판매 CSV 내보내기">⬇ CSV 내보내기</button>
+          <button type="button" onClick={handleExportSalesExcel} disabled={excelExporting}
             data-testid="sales-excel-export-btn" aria-label="판매 Excel 다운로드"
-            style={{ fontSize: 13, padding: "7px 14px" }}>
+            style={listBtnGhost(excelExporting)}>
             {excelExporting ? "내보내는 중…" : "⬇ Excel 다운로드"}
-          </GhostBtn>
+          </button>
         </div>
       }>
         {/* 필터 영역 (sticky) */}
         <div style={{ position: "sticky", top: 0, zIndex: 30, background: "#fff", paddingBottom: 8, marginBottom: 18 }}>
 
-          {/* 검색 바 */}
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
-            <input
-              value={projectSearch} onChange={e => setProjectSearch(e.target.value)}
-              placeholder="판매번호 · 판매명 · 거래처 · 고객명 · 담당PM 검색"
-              style={{ ...inputStyle, maxWidth: 320, flex: "1 1 180px", padding: "7px 11px", fontSize: 13 }}
-              onKeyDown={e => e.key === "Enter" && runProjectSearch()}
-              data-testid="project-search" aria-label="판매 검색"
-            />
-            <PrimaryBtn onClick={() => runProjectSearch()} disabled={loading} style={{ padding: "7px 14px", fontSize: 13 }} data-testid="project-search-btn" aria-label="판매 검색 실행">
-              {loading ? "검색 중..." : "검색"}
-            </PrimaryBtn>
-            <SaleDateSearchBar idPrefix="project" value={salePeriod} disabled={loading}
-              onApply={np => (np.basis === salePeriod.basis && np.from === salePeriod.from && np.to === salePeriod.to) ? runProjectSearch() : setSalePeriod(np)} />
-            {(hasSalePeriod(salePeriod) || projectSearch || dateFrom || dateTo || assignedAdminFilter !== "all" || projectFilter !== "all" || projectFinancialFilter !== "all" || projectQuickFilter !== "all" || projectBillingTypeFilter !== "all" || projectPaymentDueDateFrom || projectPaymentDueDateTo || projectCompanyIdFilter) && (
-              <button
-                onClick={() => { setProjectSearch(""); setSalePeriod(EMPTY_SALE_PERIOD); setDateFrom(""); setDateTo(""); setAssignedAdminFilter("all"); setProjectFilter("all"); setProjectFinancialFilter("all"); setProjectQuickFilter("all"); setProjectBillingTypeFilter("all"); setProjectPaymentDueDateFrom(""); setProjectPaymentDueDateTo(""); setProjectCompanyIdFilter(""); setProjectPage(1); }}
-                style={{ padding: "7px 12px", fontSize: 12, fontWeight: 700, background: "#fef2f2", color: "#dc2626", border: "1.5px solid #fca5a5", borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
-                ✕ 필터 초기화
+          {/* 검색 바 — [통합검색][검색]    [판매날짜][시작일]~[종료일][검색]    [초기화]   (상세필터는 우측 끝) — 목록 공통 규격 lib/listSearchUi */}
+          <div style={{ ...listSearchBar, marginBottom: 10 }}>
+            <div style={{ ...listGroup, flex: "1 1 380px", maxWidth: 480 }}>
+              <input
+                value={projectSearch} onChange={e => setProjectSearch(e.target.value)}
+                placeholder="판매번호 · 판매명 · 거래처 · 고객명 · 담당PM 검색"
+                style={{ ...listInput, flex: 1, minWidth: 0 }}
+                onKeyDown={e => e.key === "Enter" && runProjectSearch()}
+                data-testid="project-search" aria-label="판매 검색"
+              />
+              <button type="button" onClick={() => runProjectSearch()} disabled={loading} style={listBtnPrimary(loading)} data-testid="project-search-btn" aria-label="판매 검색 실행">
+                {loading ? "검색 중..." : "검색"}
               </button>
-            )}
-            <GhostBtn onClick={() => setShowAdvancedFilter(v => !v)} style={{ marginLeft: "auto", padding: "7px 12px", fontSize: 12 }}>
+            </div>
+            <SaleDateSearchBar idPrefix="project" value={salePeriod} disabled={loading} hideReset
+              onApply={np => (np.basis === salePeriod.basis && np.from === salePeriod.from && np.to === salePeriod.to) ? runProjectSearch() : setSalePeriod(np)} />
+            {/* 초기화 — 검색어·날짜·상세필터 모두 해제(기존 '필터 초기화'와 같은 동작, 항상 표시) */}
+            <button type="button" data-testid="project-filter-reset" aria-label="검색·필터 초기화"
+              onClick={() => { setProjectSearch(""); setSalePeriod(EMPTY_SALE_PERIOD); setDateFrom(""); setDateTo(""); setAssignedAdminFilter("all"); setProjectFilter("all"); setProjectFinancialFilter("all"); setProjectQuickFilter("all"); setProjectBillingTypeFilter("all"); setProjectPaymentDueDateFrom(""); setProjectPaymentDueDateTo(""); setProjectCompanyIdFilter(""); setProjectPage(1); }}
+              style={listBtnGray()}>
+              초기화
+            </button>
+            <button type="button" onClick={() => setShowAdvancedFilter(v => !v)} style={{ ...listBtnGhost(), marginLeft: "auto" }} data-testid="project-advanced-toggle" aria-label="상세필터">
               {showAdvancedFilter ? "상세필터 접기 ▲" : "⚙ 상세필터 ▼"}
-            </GhostBtn>
+            </button>
           </div>
 
           {/* 업무 흐름 기준 상태 필터 */}
@@ -1107,7 +1110,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
 
               <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, overflow: "hidden", background: "#fff" }}>
                 <div style={{ overflowX: "auto" }}>
-                  <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <table className="veritas-read-table vz-list13" style={{ width: "100%", borderCollapse: "collapse" }}>
                     <thead>
                       <tr style={{ background: "#f8fafc" }}>
                         <th style={{ ...tableTh, minWidth: 34, width: 34, textAlign: "center" }}>
@@ -1204,7 +1207,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
                             </td>
 
                             {/* 견적금액 */}
-                            <td style={{ ...tableTd, whiteSpace: "nowrap", fontWeight: 500, color: "#1e3a5f", fontSize: 12 }}>
+                            <td style={{ ...tableTd, whiteSpace: "nowrap", fontWeight: 500, color: "#1e3a5f" }}>
                               {fmtPrice(p.quotePrice)}
                             </td>
 

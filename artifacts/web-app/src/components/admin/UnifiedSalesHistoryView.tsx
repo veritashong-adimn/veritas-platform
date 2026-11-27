@@ -7,7 +7,8 @@ import { Pagination } from '../ui/Paginator';
 import { SaleContactPicker } from './SaleContactPicker';
 import { ContactReviewListModal } from './ContactReviewListModal';
 import { LegacyPartyManager } from './LegacyPartyManager';
-import { SaleDateSearchBar, appendSalePeriod, hasSalePeriod, type SalePeriod } from './SaleDateSearchBar';
+import { SaleDateSearchBar, appendSalePeriod, hasSalePeriod, EMPTY_SALE_PERIOD, type SalePeriod } from './SaleDateSearchBar';
+import { listSearchBar, listGroup, listInput, listBtnPrimary, listBtnGray } from '../../lib/listSearchUi';
 
 type AdminUser = { id: number; name?: string | null; email?: string | null };
 type Row = {
@@ -129,21 +130,27 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
   const srcCurrentFailed = result && !result.sources.current.ok && range !== 'legacy';
   const srcLegacyFailed = result && !result.sources.legacy.ok;
 
-  const btn = (disabled: boolean, primary?: boolean): React.CSSProperties => ({ padding: '7px 14px', borderRadius: 8, fontWeight: 700, fontSize: 13, border: 'none', cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.5 : 1, background: primary ? '#0ea5e9' : '#e5e7eb', color: primary ? '#fff' : '#374151' });
-
   return (
     <div data-testid="unified-sales-history">
       {/* 검색 */}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
-        <input value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') runSearch(q); }}
-               placeholder="판매번호 · 프로젝트명 · 거래처 · 담당자 · 상품 통합검색 (현재 + 과거 CRM)" aria-label="통합 판매이력 검색" data-testid="sales-history-search"
-               style={{ padding: '8px 11px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13, flex: '1 1 320px', maxWidth: 420 }} />
-        <button style={btn(loading, true)} disabled={loading} onClick={() => runSearch(q)} data-testid="sales-history-search-btn" aria-label="판매이력 검색">{loading ? '검색 중…' : '검색'}</button>
-        <SaleDateSearchBar idPrefix="sales-history" value={period} disabled={loading}
+      {/* 검색 — [통합검색][검색]    [판매날짜][시작일]~[종료일][검색]    [초기화] (목록 공통 규격 lib/listSearchUi) */}
+      <div style={{ ...listSearchBar, marginBottom: 12 }}>
+        <div style={{ ...listGroup, flex: '1 1 380px', maxWidth: 480 }}>
+          <input value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') runSearch(q); }}
+                 placeholder="판매번호 · 프로젝트명 · 거래처 · 담당자 · 상품 통합검색 (현재 + 과거 CRM)" aria-label="통합 판매이력 검색" data-testid="sales-history-search"
+                 style={{ ...listInput, flex: 1, minWidth: 0 }} />
+          <button style={listBtnPrimary(loading)} disabled={loading} onClick={() => runSearch(q)} data-testid="sales-history-search-btn" aria-label="판매이력 검색">{loading ? '검색 중…' : '검색'}</button>
+        </div>
+        <SaleDateSearchBar idPrefix="sales-history" value={period} disabled={loading} hideReset
           onApply={np => (np.basis === period.basis && np.from === period.from && np.to === period.to) ? load(1, lastLoad.current.keyword) : onPeriodChange(np)} />
+        {/* 초기화 — 검색어·날짜 검색 모두 해제(기존 날짜 초기화 + 검색어 비우기). 적용 검색어를 먼저 비워 자동 검색과 중복 조회하지 않는다. */}
+        <button type="button" style={listBtnGray(loading)} disabled={loading} data-testid="sales-history-reset" aria-label="검색 초기화"
+          onClick={() => { setQ(''); lastLoad.current = { ...lastLoad.current, keyword: '' }; if (hasSalePeriod(period)) onPeriodChange(EMPTY_SALE_PERIOD); else load(1, ''); }}>초기화</button>
         <span style={{ fontSize: 12, color: '#6b7280' }} data-testid="sales-history-total">{hasSalePeriod(period) ? '검색 결과 ' : '총 '}{(p?.total ?? 0).toLocaleString()}건{range === 'all' ? ' (현재+과거)' : ' (과거 CRM)'}</span>
-        <button style={{ ...btn(false), marginLeft: 'auto', background: '#fef2f2', color: '#b91c1c' }} onClick={() => setShowParty(true)} data-testid="btn-legacy-party-manager" aria-label="미연결 관리">미연결 관리</button>
-        <button style={btn(false)} onClick={() => setShowReview(true)} data-testid="btn-contact-review-open" aria-label="고객 담당자 확인 필요 목록">고객 담당자 확인 필요 목록</button>
+        <div style={{ ...listGroup, marginLeft: 'auto' }}>
+          <button style={{ ...listBtnGray(false), background: '#fef2f2', color: '#b91c1c' }} onClick={() => setShowParty(true)} data-testid="btn-legacy-party-manager" aria-label="미연결 관리">미연결 관리</button>
+          <button style={listBtnGray(false)} onClick={() => setShowReview(true)} data-testid="btn-contact-review-open" aria-label="고객 담당자 확인 필요 목록">고객 담당자 확인 필요 목록</button>
+        </div>
       </div>
 
       {/* 부분 실패 / degraded 배너 */}
@@ -158,7 +165,7 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
           <thead>
             <tr style={{ textAlign: 'left' }}>
               {COLUMNS.map(([h, w]) => (
-                <th key={h} style={{ width: w, padding: '10px 12px', textAlign: AMOUNT_COLS.has(h) ? 'right' : undefined, borderBottom: '1px solid #e5e7eb', whiteSpace: 'nowrap', position: 'sticky', top: 0, zIndex: 2, background: '#f3f4f6', fontSize: 12, fontWeight: 600, color: '#374151' }}>{h}</th>
+                <th key={h} style={{ width: w, padding: '9px 12px', textAlign: AMOUNT_COLS.has(h) ? 'right' : undefined, borderBottom: '1px solid #e5e7eb', whiteSpace: 'nowrap', position: 'sticky', top: 0, zIndex: 2, background: '#f3f4f6', fontSize: 13, fontWeight: 600, color: '#374151' }}>{h}</th>
               ))}
             </tr>
           </thead>

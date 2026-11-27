@@ -14,6 +14,7 @@ import { formatDisplayDate } from '../../lib/dateFormat';
 import { bulkBtnStyle } from './product/productShared';
 import { stickyBulkBarStyle } from './bulkListShared';
 import { DateField } from './DatePickerShared';
+import { listSearchBar, listGroup, listSubtitle, listLabel, listInput, listSelectTrigger, listDateField, listBtnPrimary, listBtnGray, listBtnGhost } from '../../lib/listSearchUi';
 import { Pagination } from '../ui/Paginator';
 import './readTableView.css';
 
@@ -124,6 +125,10 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
   const [pageSize, setPageSize]         = useState(50);
   const [dateFrom, setDateFrom]         = useState('');
   const [dateTo, setDateTo]             = useState('');
+  // 발행일 입력값(초안) — [검색]을 눌러야 적용(판매목록 날짜 검색과 같은 방식). 적용값(dateFrom/dateTo)이 바뀌면 동기화.
+  const [dateFromDraft, setDateFromDraft] = useState('');
+  const [dateToDraft, setDateToDraft]     = useState('');
+  useEffect(() => { setDateFromDraft(dateFrom); setDateToDraft(dateTo); }, [dateFrom, dateTo]);
   // 진입 모드에 따라 초기 화면 결정 — 신규작성/휴지통은 바로 해당 화면으로.
   const [showEditor, setShowEditor]     = useState(view === 'register');
   const [showTrash, setShowTrash]       = useState(view === 'trash');
@@ -582,103 +587,106 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
       <h2 data-testid="quote-list-title" style={{ margin: '0 0 14px', fontSize: 16, fontWeight: 800, color: '#111827' }}>견적서 목록 ({roots.length.toLocaleString()})</h2>
 
       {/* ── Card 1: 검색 및 필터 ────────────────────────────────────────────────── */}
-      <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: '10px 16px', marginBottom: 8 }}>
+      {/* 판매목록과 같은 목록 공통 규격(lib/listSearchUi): 높이 34 · 글자 13 · 소제목 14 굵게 · 그룹 간격 22 / 그룹 안 6 */}
+      <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: '12px 16px', marginBottom: 8 }}>
         {/* 카드 헤더 */}
         {/* 견적서 작성/휴지통은 사이드바 하위메뉴(견적서 등록 / 휴지통)로 분리됨 — 상단 버튼 제거(ERP 구조 통일). */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: '#6b7280', letterSpacing: '0.2px' }}>검색 및 필터</span>
-          <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+          <span style={listSubtitle}>검색 및 필터</span>
+          <div style={listGroup}>
             <button onClick={handleExportQuotes} disabled={exporting}
               data-testid="quote-excel-export-btn" aria-label="견적 Excel 다운로드"
-              style={{ fontSize: 12, padding: '6px 12px', borderRadius: 6, border: '1px solid #d1d5db', background: '#fff', color: '#374151', cursor: 'pointer', fontWeight: 600 }}>
+              style={listBtnGhost(exporting)}>
               {exporting ? '내보내는 중…' : 'Excel 다운로드'}
             </button>
             {onOpenBulkImport && (
               <button onClick={onOpenBulkImport}
                 data-testid="quote-bulk-import-btn" aria-label="견적 대량등록"
-                style={{ fontSize: 12, padding: '6px 12px', borderRadius: 6, border: '1px solid #0284c7', background: '#e0f2fe', color: '#0369a1', cursor: 'pointer', fontWeight: 700 }}>
+                style={{ ...listBtnGhost(), border: '1px solid #0284c7', background: '#e0f2fe', color: '#0369a1', fontWeight: 700 }}>
                 대량등록
               </button>
             )}
             {onOpenPastWorkImport && (
               <button onClick={onOpenPastWorkImport}
                 data-testid="quote-pastwork-import-btn" aria-label="과거자료 일괄등록"
-                style={{ fontSize: 12, padding: '6px 12px', borderRadius: 6, border: '1px solid #7c3aed', background: '#f5f3ff', color: '#6d28d9', cursor: 'pointer', fontWeight: 700 }}>
+                style={{ ...listBtnGhost(), border: '1px solid #7c3aed', background: '#f5f3ff', color: '#6d28d9', fontWeight: 700 }}>
                 과거자료 일괄등록
               </button>
             )}
           </div>
         </div>
 
-        {/* 통합검색 + 드롭다운 */}
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 6 }}>
-          <input
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="견적번호 · 견적서명 · 고객사 · 고객명 · 담당PM · 상품명 검색"
-            style={{ flex: '1 1 240px', maxWidth: 420, padding: '6px 10px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 6, outline: 'none' }}
-          />
-          <div style={{ width: 120 }}>
-            <ClickSelect
-              value={statusFilter}
-              onChange={setStatusFilter}
-              triggerStyle={{ fontSize: 12, padding: '6px 8px', width: '100%' }}
-              options={[
-                { value: 'all',      label: '전체 상태' },
-                { value: 'pending',  label: '대기' },
-                { value: 'approved', label: '판매' },
-              ]}
+        {/* [통합검색][검색]    [전체 상태][전체 유형]    [발행일][시작일]~[종료일][검색]    [초기화] — 좁으면 그룹 단위 줄바꿈 */}
+        <div style={listSearchBar} data-testid="quote-search-bar">
+          <div style={{ ...listGroup, flex: '1 1 340px', maxWidth: 460 }}>
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') setSearch(search.trim()); }}
+              placeholder="견적번호 · 견적서명 · 고객사 · 고객명 · 담당PM · 상품명 검색"
+              data-testid="quote-search" aria-label="견적 통합검색"
+              style={{ ...listInput, flex: 1, minWidth: 0 }}
             />
+            {/* 통합검색은 입력 즉시 목록에 반영(기존 동작) — [검색]·Enter 는 같은 검색어를 바로 적용 */}
+            <button type="button" onClick={() => setSearch(search.trim())} style={listBtnPrimary()} data-testid="quote-search-btn" aria-label="견적 검색">검색</button>
           </div>
-          <div style={{ width: 130 }}>
-            <ClickSelect
-              value={typeFilter}
-              onChange={setTypeFilter}
-              triggerStyle={{ fontSize: 12, padding: '6px 8px', width: '100%' }}
-              options={[
-                { value: 'all',               label: '전체 유형' },
-                { value: 'b2b_standard',      label: '일반 견적서' },
-                { value: 'b2c_prepaid',       label: '차감 견적서' },
-                { value: 'accumulated_batch', label: '누적 견적서' },
-              ]}
+          <div style={listGroup}>
+            <div style={{ width: 120 }}>
+              <ClickSelect
+                value={statusFilter}
+                onChange={setStatusFilter}
+                style={{ width: '100%' }} triggerStyle={listSelectTrigger}
+                aria-label="견적 상태" data-testid="quote-status-filter"
+                options={[
+                  { value: 'all',      label: '전체 상태' },
+                  { value: 'pending',  label: '대기' },
+                  { value: 'approved', label: '판매' },
+                ]}
+              />
+            </div>
+            <div style={{ width: 132 }}>
+              <ClickSelect
+                value={typeFilter}
+                onChange={setTypeFilter}
+                style={{ width: '100%' }} triggerStyle={listSelectTrigger}
+                aria-label="견적 유형" data-testid="quote-type-filter"
+                options={[
+                  { value: 'all',               label: '전체 유형' },
+                  { value: 'b2b_standard',      label: '일반 견적서' },
+                  { value: 'b2c_prepaid',       label: '차감 견적서' },
+                  { value: 'accumulated_batch', label: '누적 견적서' },
+                ]}
+              />
+            </div>
+          </div>
+          {/* 발행일 기간 — [검색]을 눌러야 적용 */}
+          <div style={listGroup} data-testid="quote-date-search">
+            <span style={listLabel}>발행일</span>
+            <DateField
+              value={dateFromDraft} onChange={v => setDateFromDraft(v)} ariaLabel="발행일 시작" testid="quote-date-from" placeholder="시작일"
+              style={{ ...listDateField, color: dateFromDraft ? '#111827' : '#9ca3af' }}
             />
+            <span style={{ fontSize: 13, color: '#9ca3af' }}>~</span>
+            <DateField
+              value={dateToDraft} onChange={v => setDateToDraft(v)} ariaLabel="발행일 종료" testid="quote-date-to" placeholder="종료일"
+              style={{ ...listDateField, color: dateToDraft ? '#111827' : '#9ca3af' }}
+            />
+            <button type="button" onClick={() => { setDateFrom(dateFromDraft); setDateTo(dateToDraft); }} style={listBtnPrimary()}
+              data-testid="quote-date-apply" aria-label="발행일 검색">검색</button>
           </div>
-          {hasAnyFilter && (
-            <button
-              onClick={() => { setSearch(''); setDateFrom(''); setDateTo(''); setStatusFilter('all'); setTypeFilter('all'); }}
-              style={{ fontSize: 11, fontWeight: 700, padding: '5px 9px', borderRadius: 6, border: '1px solid #fca5a5', background: '#fef2f2', color: '#dc2626', cursor: 'pointer' }}
-            >
-              ✕ 초기화
-            </button>
-          )}
-        </div>
-
-        {/* 발행일 기간 */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 11, color: '#6b7280', fontWeight: 600, whiteSpace: 'nowrap' }}>발행일</span>
-          <DateField
-            value={dateFrom} onChange={v => setDateFrom(v)} ariaLabel="발행일 시작"
-            style={{ padding: '4px 7px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 5, outline: 'none', color: dateFrom ? '#111827' : '#9ca3af' }}
-          />
-          <span style={{ fontSize: 11, color: '#d1d5db' }}>~</span>
-          <DateField
-            value={dateTo} onChange={v => setDateTo(v)} ariaLabel="발행일 종료"
-            style={{ padding: '4px 7px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 5, outline: 'none', color: dateTo ? '#111827' : '#9ca3af' }}
-          />
-          {(dateFrom || dateTo) && (
-            <button
-              onClick={() => { setDateFrom(''); setDateTo(''); }}
-              style={{ fontSize: 11, color: '#6b7280', background: '#f3f4f6', border: 'none', borderRadius: 4, padding: '3px 7px', cursor: 'pointer' }}
-            >
-              초기화
-            </button>
-          )}
+          {/* 초기화 — 검색어·상태·유형·발행일 모두 해제(기존 초기화와 같은 동작, 항상 표시) */}
+          <button type="button"
+            onClick={() => { setSearch(''); setDateFrom(''); setDateTo(''); setDateFromDraft(''); setDateToDraft(''); setStatusFilter('all'); setTypeFilter('all'); }}
+            style={listBtnGray()} data-testid="quote-filter-reset" aria-label="검색·필터 초기화"
+          >
+            초기화
+          </button>
         </div>
       </div>
 
       {/* ── Card 2: 견적 현황 ────────────────────────────────────────────────────── */}
       <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: '10px 16px', marginBottom: 8 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: '#6b7280', marginBottom: 8 }}>견적 현황</div>
+        <div style={{ ...listSubtitle, marginBottom: 10 }}>견적 현황</div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {kpiItems.map(item => {
             const isActive = statusFilter === item.value;
@@ -709,9 +717,9 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
 
       {/* ── Card 3: 견적 목록 ────────────────────────────────────────────────────── */}
       <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: '12px 16px' }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: '#6b7280', marginBottom: 10 }}>
+        <div style={{ ...listSubtitle, marginBottom: 10 }}>
           견적 목록
-          <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 500, color: '#9ca3af' }}>
+          <span style={{ marginLeft: 6, fontSize: 13, fontWeight: 500, color: '#9ca3af' }}>
             (원견적 {roots.length}{relatedCount > 0 ? ` · 관련견적 ${relatedCount}` : ''})
           </span>
         </div>
@@ -810,7 +818,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                             onClick={(e) => { e.stopPropagation(); handleEditQuote(q.id, q.title ?? q.quoteNumber ?? `견적 #${q.id}`, q.status); }}
                             disabled={editLoading === q.id}
                             style={{
-                              fontFamily: 'monospace', fontSize: 11, color: '#475569', fontWeight: depth === 0 ? 600 : 400,
+                              fontFamily: 'monospace', fontSize: 13, color: '#475569', fontWeight: depth === 0 ? 600 : 400,
                               background: 'none', border: 'none', padding: 0, cursor: 'pointer',
                               textDecoration: 'none', opacity: editLoading === q.id ? 0.5 : 1,
                             }}
@@ -841,7 +849,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                         </div>
                       </td>
                       {/* 발행일 */}
-                      <td style={{ padding: '9px 12px', fontSize: 12, color: '#6b7280', whiteSpace: 'nowrap', textAlign: 'center' }}>
+                      <td style={{ padding: '9px 12px', fontSize: 13, color: '#6b7280', whiteSpace: 'nowrap', textAlign: 'center' }}>
                         {q.issueDate ? formatDisplayDate(q.issueDate) : '—'}
                       </td>
                       {/* 견적서명 — 지정 범위(min 220 ~ max 420, 약 24vw ≈ 테이블 30~34% 이내)에서만 반응형, 좌측 정렬, 클릭 시 편집 */}
@@ -849,10 +857,12 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                         <button
                           onClick={(e) => { e.stopPropagation(); handleEditQuote(q.id, q.title ?? q.quoteNumber ?? `견적 #${q.id}`, q.status); }}
                           disabled={editLoading === q.id}
+                          title={q.title ?? q.projectTitle ?? undefined}
                           style={{
-                            fontSize: 12, fontWeight: 600, color: '#111827',
+                            fontSize: 13, fontWeight: 600, color: '#111827',
                             display: 'flex', alignItems: 'center', overflow: 'hidden',
-                            minWidth: 180, maxWidth: 340,   // 고정 24vw 제거 — 오른쪽 열(견적서) 잘림·과도한 여백 방지
+                            // 화면 너비 비례(1600px ≈ 270 · 1920px 이상 최대 340) — 1600px에서도 마지막 '견적서' 열까지 가로 스크롤 없이 표시. 긴 제목은 말줄임 + 툴팁
+                            minWidth: 180, maxWidth: 'clamp(200px, 17vw, 340px)',
                             background: 'none', border: 'none', padding: 0, cursor: 'pointer',
                             textAlign: 'left',
                           }}
@@ -860,16 +870,16 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                           {renderQuoteTitle(q.title ?? q.projectTitle ?? '(미입력)')}
                         </button>
                       </td>
-                      {/* 고객사 — 좌측 정렬, 약간 확대(min 130 ~ max 200) */}
-                      <td style={{ padding: '9px 12px', minWidth: 130, maxWidth: 200, textAlign: 'left' }}>
+                      {/* 고객사 — 좌측 정렬, 화면 너비 비례(min 130 ~ 1600px ≈ 176 ~ 최대 200), 긴 이름은 말줄임 + 툴팁 */}
+                      <td style={{ padding: '9px 12px', minWidth: 130, maxWidth: 'clamp(150px, 11vw, 200px)', textAlign: 'left' }}>
                         {q.companyName
-                          ? <span style={{ fontSize: 12, color: '#374151', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>{q.companyName}</span>
+                          ? <span title={q.companyName} style={{ fontSize: 13, color: '#374151', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>{q.companyName}</span>
                           : <span style={{ fontSize: 11, color: '#d1d5db' }}>—</span>}
                       </td>
                       {/* 고객명 — 가운데 정렬, 이름 표시 최소폭 확보 */}
                       <td style={{ padding: '9px 12px', minWidth: 80, maxWidth: 120, textAlign: 'center' }}>
                         {q.contactName
-                          ? <span style={{ fontSize: 12, color: '#374151', whiteSpace: 'nowrap' }}>{q.contactName}</span>
+                          ? <span style={{ fontSize: 13, color: '#374151', whiteSpace: 'nowrap' }}>{q.contactName}</span>
                           : <span style={{ fontSize: 11, color: '#d1d5db' }}>—</span>}
                       </td>
                       {/* 금액 — 우측 정렬, 한 줄 표시 최소폭 확보 */}
@@ -891,7 +901,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                       {/* 담당PM — 가운데 정렬 */}
                       <td style={{ padding: '9px 12px', minWidth: 72, maxWidth: 110, textAlign: 'center' }}>
                         {q.adminName
-                          ? <span style={{ fontSize: 12, color: '#374151', whiteSpace: 'nowrap' }}>{q.adminName}</span>
+                          ? <span style={{ fontSize: 13, color: '#374151', whiteSpace: 'nowrap' }}>{q.adminName}</span>
                           : <span style={{ fontSize: 11, color: '#d1d5db' }}>—</span>}
                       </td>
                       {/* 상태 — 가운데 정렬. 분할견적(derived)이 승인되면 '판매'가 아니라 '분할확정'으로 표시(표시만, DB status 불변). */}
@@ -925,7 +935,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                           onClick={(e) => { e.stopPropagation(); handlePdfPreview(q.id, q.title ?? q.quoteNumber ?? `견적 #${q.id}`); }}
                           disabled={pdfLoading === q.id}
                           style={{
-                            fontSize: 11, padding: '3px 9px', borderRadius: 5, cursor: 'pointer',
+                            fontSize: 11, padding: '1px 9px', borderRadius: 5, cursor: 'pointer',
                             background: '#eff6ff', color: '#2563eb',
                             border: '1px solid #bfdbfe', fontWeight: 600,
                             opacity: pdfLoading === q.id ? 0.5 : 1,
