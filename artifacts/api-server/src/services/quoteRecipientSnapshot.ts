@@ -48,6 +48,17 @@ export async function liveRecipientOf(dbx: Dbx, quoteId: number): Promise<Recipi
   return r[0] ?? null;
 }
 
+/** 판매 상세(판매 전용 조회) — 판매의 현재 견적(is_current)별 수신자 조회값을 한 번에.
+ *  live = liveRecipientOf 와 같은 식, contactPhone·contactEmail = 견적 상세 API(GET /admin/quotes/:id)의 contactPhone·contactEmail 과 같은 식. */
+export async function recipientInfoOfProjectQuotes(dbx: Dbx, projectId: number):
+  Promise<Map<number, { live: RecipientValues; contactPhone: string | null; contactEmail: string | null }>> {
+  const r = (await dbx.execute(sql`SELECT q.id AS "quoteId", ${liveSelect("effective")},
+      COALESCE(c.phone, c.mobile, c.office_phone) AS "contactPhone", c.email AS "contactEmail"
+    ${LIVE_FROM} WHERE q.project_id = ${projectId} AND q.is_current = true`)).rows as any[];
+  return new Map(r.map(({ quoteId, contactPhone, contactEmail, ...live }) =>
+    [Number(quoteId), { live: live as RecipientValues, contactPhone: contactPhone ?? null, contactEmail: contactEmail ?? null }]));
+}
+
 // 대상 견적들에 지금 출력되는 값을 고정. onlyMissing=true 면 고정값이 없는 견적만(기존 고정값은 건드리지 않음).
 async function capture(dbx: Dbx, where: any, onlyMissing: boolean, mode: Mode = "display"): Promise<number[]> {
   const r = (await dbx.execute(sql`UPDATE quotes t SET

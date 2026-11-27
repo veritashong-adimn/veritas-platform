@@ -10,7 +10,7 @@
 // PDF   : 견적서 = QuotePdfPreviewModal / 거래명세서 = TransactionStatementModal
 //        (둘 다 기존 견적관리·판매모달과 동일 파이프라인: buildQuotePdfData)
 // ─────────────────────────────────────────────────────────────────────────────
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, type Product } from '../lib/constants';
 import { Card, StatusBadge, Toast, GhostBtn, PrimaryBtn, confirmDialog, alertDialog, promptDialog } from '../components/ui';
 import { C, TYPO, SP, BD, dsInputStd } from '../lib/ds';
@@ -111,13 +111,10 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
   const [products,  setProducts]  = useState<Product[]>([]);
   const [saving,    setSaving]    = useState(false);
   const [isLegacyOrigin, setIsLegacyOrigin] = useState(false);   // 과거 CRM 에서 전환된 판매건(출처 배지)
-  // 견적 수신자 연락처·이메일 — 견적서에 실제 출력되는 값(발행 문서와 동일)
-  const [recipient, setRecipient] = useState<{ phone: string | null; email: string | null } | null>(null);
   // ── A. 기본정보 수정(담당자·연락처·이메일·PM·견적서명·견적일) ─────────────────
   const [basicView, setBasicView] = useState<BasicInfoView | null>(null);
   const [basicEdit, setBasicEdit] = useState(false);
-  const [recipientVer, setRecipientVer] = useState(0);
-  const [taxConfirmKey, setTaxConfirmKey] = useState(0);   // 부가세 유형 확인 후 확인 기록 다시 조회   // 바뀌면 견적서 출력 수신자·갱신 안내를 다시 조회
+  const [taxConfirmKey, setTaxConfirmKey] = useState(0);   // 부가세 유형 확인·품목 저장 후 확인 기록 다시 조회
   const loadBasic = useCallback(async () => {
     try {
       const r = await fetch(api(`/api/admin/sales/${saleId}/basic-info`), { headers: authH });
@@ -128,20 +125,20 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
   useEffect(() => { loadBasic(); }, [loadBasic]);
 
   // ── 판매 상세(=프로젝트 + 원본 견적) 조회 ─────────────────────────────────
+  // view=sale: 판매 상세 전용 조회(화면이 쓰는 자료만 병렬 조회 + 견적별 수신자 정보 포함 — 견적 상세 API 를 따로 부르지 않음).
   // silent=true: 저장 후 백그라운드 갱신(예: 수행정보 추가비용 저장). 로딩 오버레이로 화면을 비우지 않아
   //   상세페이지가 언마운트/리마운트되지 않고, 스크롤 위치·수정모드·필터·행 위치가 그대로 유지된다.
   const fetchDetail = useCallback(async (opts?: { silent?: boolean }) => {
     const silent = opts?.silent === true;
     if (!silent) setLoading(true);
     try {
-      const res = await fetch(api(`/api/admin/projects/${saleId}`), { headers: authH });
+      const res = await fetch(api(`/api/admin/projects/${saleId}?view=sale`), { headers: authH });
       if (!res.ok) {
         setToast(`판매건 조회 실패 (${res.status})`);
         if (!silent) setProject(null);   // 백그라운드 갱신 실패 시 현재 화면 유지(비우지 않음)
         return;
       }
       setProject(await res.json());
-      setRecipientVer(v => v + 1);
     } catch {
       setToast('판매 상세 조회 중 오류가 발생했습니다.');
     } finally {
@@ -155,19 +152,14 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
   // ── 연결된 현재 견적 ───────────────────────────────────────────────────────
   const quote = project?.quotes?.find((q: any) => q.isCurrent) ?? project?.quotes?.[0] ?? null;
   const items: any[] = quote?.items ?? [];
-  const quoteIdForRecipient: number | null = quote?.id ?? null;
-  useEffect(() => {
-    if (!quoteIdForRecipient) { setRecipient(null); return; }
-    fetch(api(`/api/admin/quotes/${quoteIdForRecipient}`), { headers: authH })
-      .then(r => r.ok ? r.json() : null)
-      .then(d => {
-        if (!d) return setRecipient(null);
-        // 견적서에 실제 출력되는 값과 같게: 고정값이 있으면 고정값, 없으면(기존 견적) 현재 출력 값 — 자동 결정 이메일은 '담당자 정보 갱신'으로 반영
-        setRecipient(d.customerSnapshotFixed
-          ? { phone: d.customerContactPhone ?? d.customerContactMobile ?? null, email: d.customerContactEmail ?? null }
-          : { phone: d.contactPhone ?? null, email: d.contactEmail ?? null });
-      }).catch(() => setRecipient(null));
-  }, [quoteIdForRecipient, project?.contactId, recipientVer]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 견적 수신자 연락처·이메일 — 견적서에 실제 출력되는 값(발행 문서와 동일). 판매 상세 조회(view=sale)의 견적별 recipient 사용
+  //  (견적 상세 API 와 같은 값: 고정값이 있으면 고정값, 없으면(기존 견적) 현재 출력 값). 상세를 다시 조회하면 함께 최신화된다.
+  const quoteRecipient: { customerSnapshotFixed: boolean; contactPhone: string | null; contactEmail: string | null; liveRecipient: any } | null = quote?.recipient ?? null;
+  const recipient = !quote || !quoteRecipient ? null : quoteRecipient.customerSnapshotFixed
+    ? { phone: quote.customerContactPhone ?? quote.customerContactMobile ?? null, email: quote.customerContactEmail ?? null }
+    : { phone: quoteRecipient.contactPhone ?? null, email: quoteRecipient.contactEmail ?? null };
+  // 수행정보 내용 서명 — 과거 CRM 출처(수행정보 지급상태 표시) 갱신 기준(상세 재조회로 내용이 바뀐 경우에만)
+  const perfSig = useMemo(() => JSON.stringify(project?.performances ?? []), [project?.performances]);
   const saleConfirmed = ['approved', 'paid', 'matched', 'in_progress', 'completed'].includes(project?.status);
 
   const quoteDocTitle = quote ? (quote.title ?? quote.quoteNumber ?? `견적 #${quote.id}`) : '';
@@ -251,7 +243,9 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
       if (!res.ok) { setToast(`판매정보 저장 실패: ${data.error ?? res.status}`); return; }
       setEditMode(false);
       setEditItems([]);
-      await fetchDetail();          // 서버 재계산 금액 반영
+      // 서버 재계산 금액 반영 — 화면을 로딩 상태로 바꾸지 않고 기존 화면을 유지한 채 최신 상세로 교체(수행정보·결제·선입금 포함)
+      await fetchDetail({ silent: true });
+      setTaxConfirmKey(k => k + 1);   // 품목(세금 유형) 변경 → 부가세 유형 확인 기록 다시 조회
       setToast('판매정보가 저장되었습니다.');
     } catch {
       setToast('판매정보 저장 중 오류가 발생했습니다. 다시 시도해 주세요.');
@@ -486,7 +480,8 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
           </Card>
 
           {/* 견적서 수신자 고정값 ≠ 현재 담당자일 때만 '담당자 정보 갱신' 안내(사용자 선택 시에만 변경) */}
-          <QuoteRecipientRefreshBar quoteId={quote.id} token={token} onToast={setToast} refreshKey={`${project.contactId ?? ''}:${recipientVer}`}
+          <QuoteRecipientRefreshBar quoteId={quote.id} token={token} onToast={setToast}
+            data={quoteRecipient ? { ...quote, customerSnapshotFixed: quoteRecipient.customerSnapshotFixed, liveRecipient: quoteRecipient.liveRecipient } : null}
             onRefreshed={() => { fetchDetail({ silent: true }); loadBasic(); }} />
 
           {/* ── B. 판매정보 ─────────────────────────────────────────────── */}
@@ -577,7 +572,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
           </Card>
 
           {/* ── F. 과거 CRM 원본정보(전환 판매건만 표시) ─────────────────────── */}
-          <LegacyOriginSection projectId={saleId} token={token} onToast={setToast}
+          <LegacyOriginSection projectId={saleId} token={token} onToast={setToast} refreshKey={perfSig}
             onChanged={() => fetchDetail({ silent: true })} onLoaded={setIsLegacyOrigin}
             onReverted={() => setTimeout(() => onBack(), 600)} />
         </>

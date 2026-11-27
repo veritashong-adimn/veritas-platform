@@ -55,11 +55,11 @@ export function LegacyArchiveDetailPage({ id, token, onBack, setToast, onOpenSal
   const [showActivate, setShowActivate] = useState(false);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
-  // 고객 담당자 연락처(출처 구분) — 담당자 보완 창과 같은 API(/admin/sales-contact/context)
+  // 고객 담당자 연락처(출처 구분) — 담당자 보완 창과 같은 API(/admin/sales-contact/context)의 상세 표시용 경량 조회(view=detail)
   const [contactCtx, setContactCtx] = useState<{ company: { name: string } | null; rawCompanyName: string | null; contactInfo: ContactInfo | null } | null>(null);
   useEffect(() => {
     if (row?.sourceType !== 'sales_list') return;
-    fetch(api(`/api/admin/sales-contact/context?source=legacy&id=${id}`), { headers: { Authorization: `Bearer ${token}` } })
+    fetch(api(`/api/admin/sales-contact/context?source=legacy&id=${id}&view=detail`), { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.ok ? r.json() : null).then(setContactCtx).catch(() => setContactCtx(null));
   }, [row?.sourceType, id, token]);
 

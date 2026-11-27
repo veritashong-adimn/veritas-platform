@@ -61,6 +61,7 @@ import { legacyOriginOfProject, customerNoteOf, customerMemoOf } from "../servic
 import { captureIfMissing, recaptureRecipient, freezeProjectQuotes, liveRecipientOf, hasSnapshot } from "../services/quoteRecipientSnapshot";
 import { restoredCustomerNameOfProject, restoredCustomerNameOfSaleRow, linkedContactNameOfSaleNo } from "../services/legacyContactRestore";
 import { loadRemittanceSummaries } from "../services/performanceRemittance";
+import { loadSaleDetailView } from "../services/saleDetailView";
 import { parseSaleDateFilter, projectIdsInPeriod } from "../services/saleDateSearch";
 
 const router: IRouter = Router();
@@ -538,7 +539,7 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
       .from(usersTable)
       .as("trans_user");
 
-    const [project] = await db
+    const projectQ = db
       .select({
         id: projectsTable.id,
         title: projectsTable.title,
@@ -574,6 +575,16 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
       .from(projectsTable)
       .leftJoin(usersTable, eq(projectsTable.userId, usersTable.id))
       .where(eq(projectsTable.id, projectId));
+
+    // 판매 상세화면 전용(?view=sale) — 화면이 쓰는 자료만 같은 규칙으로 병렬 조회(services/saleDetailView). 기본 조회는 아래 기존 그대로.
+    if (req.query.view === "sale") {
+      const view = await loadSaleDetailView(projectId, projectQ);
+      if (!view) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
+      res.json(view);
+      return;
+    }
+
+    const [project] = await projectQ;
 
     if (!project) {
       res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." });

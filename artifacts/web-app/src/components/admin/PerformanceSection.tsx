@@ -50,6 +50,18 @@ interface Props {
 
 type SortKey = 'deliveryDate' | 'expectedPaymentDate' | 'costTotal' | null;
 
+// 공휴일 목록(지급일 자동 계산용) — 공통 자료라 화면(탭) 세션 동안 1회만 조회해 공유. 실패하면 다음 진입 때 다시 조회.
+let holidayDatesP: Promise<string[] | null> | null = null;
+function loadHolidayDates(token: string): Promise<string[] | null> {
+  if (!holidayDatesP) {
+    holidayDatesP = fetch(api('/api/admin/holidays'), { headers: { Authorization: `Bearer ${token}` } })
+      .then(async res => { const j = res.ok ? await res.json().catch(() => null) : null; return Array.isArray(j?.dates) ? j.dates as string[] : null; })
+      .catch(() => null)
+      .then(d => { if (!d) holidayDatesP = null; return d; });
+  }
+  return holidayDatesP;
+}
+
 export default function PerformanceSection({ projectId, token, performances, onChanged, onToast, projectAdminId, saleMeta, saleCancelled = false }: Props) {
   const authH = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
   // 현재 사용자(납품확인 권한 판정 §9) — JWT payload 디코드(id·role). 서버가 최종 강제.
@@ -106,6 +118,8 @@ export default function PerformanceSection({ projectId, token, performances, onC
   // [수정 요청]·[정정 요청] 화면(2026-11) — 일반 저장과 분리된 요청 전용 모달
   const [corrModal, setCorrModal] = useState<{ row: Row; mode: CorrectionMode } | null>(null);
   // 수행정보별 최신 정정 요청 상태(배지 표시용) — 지급상태(지급완료 등)와 별도로 표시한다.
+  //  수행정보 내용이 실제로 바뀐 경우에만 다시 조회(상세 재조회로 배열만 새로 만들어진 경우 — 품목·결제 저장 등 — 은 재조회하지 않음)
+  const perfSig = useMemo(() => JSON.stringify(performances ?? []), [performances]);
   const [adjByAssign, setAdjByAssign] = useState<Map<number, any>>(new Map());
   useEffect(() => {
     let alive = true;
@@ -117,7 +131,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
         setAdjByAssign(m);
       }).catch(() => {});
     return () => { alive = false; };
-  }, [projectId, token, adjKey, performances]);
+  }, [projectId, token, adjKey, perfSig]);
   // 소형 팝업(§금액상세 / §조정항목) — 행 인덱스 기준
   const [amountPopup, setAmountPopup] = useState<number | null>(null);
   const [adjustPopup, setAdjustPopup] = useState<number | null>(null);
@@ -148,9 +162,8 @@ export default function PerformanceSection({ projectId, token, performances, onC
     let alive = true;
     (async () => {
       try {
-        const res = await fetch(api('/api/admin/holidays'), { headers: { Authorization: `Bearer ${token}` } });
-        const j = await res.json().catch(() => null);
-        if (alive && Array.isArray(j?.dates)) setHolidaySet(new Set(j.dates as string[]));
+        const dates = await loadHolidayDates(token);
+        if (alive && dates) setHolidaySet(new Set(dates));
       } catch { /* 미로드 시 주말만 조정(서버 저장 시 재검증) */ }
     })();
     return () => { alive = false; };

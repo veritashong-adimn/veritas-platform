@@ -1,6 +1,6 @@
 // 운영 판매 상세 — 과거 CRM 에서 전환된 판매건의 출처·확인 대상·CRM 원본정보(원본은 조회 전용).
 //   과거 지급 확인 필요 건은 여기서 관리자 확인(지급완료 확인 / 미지급 확인)으로만 처리한다(서버 settlement.pay 권한 검증).
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { LegacyPayoutReviewPanel, type PayoutReviewItem } from "./LegacyPayoutReviewPanel";
 import { api } from "../../lib/constants";
 import { Card, GhostBtn, promptDialog, confirmDialog, alertDialog } from "../ui";
@@ -23,9 +23,10 @@ const LEGACY_LABEL: Record<string, string> = {
   payout_review_paid: "확인: 지급완료", payout_review_unpaid: "확인: 미지급(지급대상)", unpaid: "미지급(금액 없음)",
 };
 
-export function LegacyOriginSection({ projectId, token, onChanged, onToast, onLoaded, onReverted }: {
+export function LegacyOriginSection({ projectId, token, onChanged, onToast, onLoaded, onReverted, refreshKey }: {
   projectId: number; token: string; onChanged: () => void; onToast: (m: string) => void; onLoaded?: (isLegacy: boolean) => void;
   onReverted?: () => void;   // 과거 CRM 원복 완료 — 판매 목록으로 복귀 등
+  refreshKey?: string;       // 바뀌면(수행정보 변경 등) 과거 CRM 전환 판매건만 다시 조회 — 최초 조회는 아래 load 효과
 }) {
   const [origin, setOrigin] = useState<Origin | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -44,6 +45,11 @@ export function LegacyOriginSection({ projectId, token, onChanged, onToast, onLo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, token]);
   useEffect(() => { load(); }, [load]);
+  const firstKey = useRef(true);
+  useEffect(() => {
+    if (firstKey.current) { firstKey.current = false; return; }
+    if (origin) load();   // 전환 판매건이 아니면(origin 없음) 다시 조회할 내용이 없다
+  }, [refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const resolve = async (assignmentId: number, decision: "paid" | "unpaid") => {
     const reason = await promptDialog({

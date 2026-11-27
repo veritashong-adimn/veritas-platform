@@ -14,11 +14,22 @@ const summary = (r: R) => RECIPIENT_FIELDS.map(f => norm(r[f.key])).filter(Boole
 
 type State = { kind: 'ok'; fixed: R; live: R | null } | { kind: 'error' } | null;
 
-export function QuoteRecipientRefreshBar({ quoteId, token, onToast, refreshKey, onRefreshed }: {
+// 견적 상세 응답(또는 같은 값) → 표시 상태
+const stateOf = (d: any): State => {
+  if (!d.customerSnapshotFixed) return null;   // 고정값 없는 견적은 현재 Master 를 그대로 출력 — 비교 대상 아님
+  const fixed = Object.fromEntries(RECIPIENT_FIELDS.map(f => [f.key, d[f.key] ?? null])) as R;
+  return { kind: 'ok', fixed, live: (d.liveRecipient ?? null) as R | null };
+};
+
+export function QuoteRecipientRefreshBar({ quoteId, token, onToast, refreshKey, onRefreshed, data }: {
   quoteId: number; token: string; onToast: (m: string) => void;
   refreshKey?: unknown;            // 바뀌면 다시 조회(견적 저장 직후 등)
   onRefreshed?: () => void;
+  // 공유 모드(판매 상세): 상위 화면이 이미 조회한 견적 수신자 값(customerSnapshotFixed·고정값·liveRecipient)을 넘기면 따로 조회하지 않는다.
+  //   null = 조회 실패(견적 없음). 갱신 후 최신값은 onRefreshed 로 상위가 다시 조회해 넘긴다. 생략(undefined)하면 기존처럼 직접 조회.
+  data?: Record<string, any> | null;
 }) {
+  const shared = data !== undefined;
   const [state, setState] = useState<State>(null);
   const [busy, setBusy] = useState(false);
   const reqSeq = useRef(0);        // 늦게 도착한 이전 견적 응답이 현재 화면을 덮지 않도록
@@ -32,32 +43,32 @@ export function QuoteRecipientRefreshBar({ quoteId, token, onToast, refreshKey, 
       if (!r.ok) { setState({ kind: 'error' }); return; }
       const d = await r.json();
       if (seq !== reqSeq.current) return;
-      if (!d.customerSnapshotFixed) { setState(null); return; }   // 고정값 없는 견적은 현재 Master 를 그대로 출력 — 비교 대상 아님
-      const fixed = Object.fromEntries(RECIPIENT_FIELDS.map(f => [f.key, d[f.key] ?? null])) as R;
-      setState({ kind: 'ok', fixed, live: (d.liveRecipient ?? null) as R | null });
+      setState(stateOf(d));
     } catch {
       if (seq === reqSeq.current) setState({ kind: 'error' });
     }
   };
-  useEffect(() => { setState(null); }, [quoteId]);   // 다른 견적으로 이동 시 이전 견적 결과 제거
-  useEffect(() => { if (refreshKey !== true) load(); }, [quoteId, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!shared) setState(null); }, [quoteId]);   // 다른 견적으로 이동 시 이전 견적 결과 제거
+  useEffect(() => { if (!shared && refreshKey !== true) load(); }, [quoteId, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!state) return null;
+  const view: State = shared ? (data ? stateOf(data) : { kind: 'error' }) : state;
+  const recheck = () => (shared ? onRefreshed?.() : load());
+  if (!view) return null;
 
   const barStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', marginBottom: 12,
     background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, fontSize: 13 };
 
-  if (state.kind === 'error') {
+  if (view.kind === 'error') {
     return (
       <div data-testid="quote-recipient-check-error" style={barStyle}>
         <div style={{ flex: 1, minWidth: 0, fontWeight: 700, color: '#92400e' }}>현재 담당자 정보를 조회하지 못해 견적서 수신자 정보 일치 여부를 확인할 수 없습니다.</div>
-        <GhostBtn onClick={load} data-testid="btn-quote-recipient-recheck" aria-label="수신자 정보 다시 확인"
+        <GhostBtn onClick={recheck} data-testid="btn-quote-recipient-recheck" aria-label="수신자 정보 다시 확인"
           style={{ whiteSpace: 'nowrap', fontSize: 12, padding: '6px 12px' }}>다시 확인</GhostBtn>
       </div>
     );
   }
 
-  const cmp = compareRecipient(state.fixed, state.live);
+  const cmp = compareRecipient(view.fixed, view.live);
   if (cmp.status === 'same') return null;
 
   if (cmp.status === 'no_live_contact') {
@@ -66,7 +77,7 @@ export function QuoteRecipientRefreshBar({ quoteId, token, onToast, refreshKey, 
       <div data-testid="quote-recipient-no-live" style={barStyle}>
         <div style={{ flex: 1, minWidth: 0, lineHeight: 1.6 }}>
           <div style={{ fontWeight: 700, color: '#92400e' }}>확인 필요 — 현재 연결된 담당자 정보를 확인할 수 없습니다</div>
-          <div style={{ color: '#374151' }}>견적서 출력(고정): <b data-testid="quote-recipient-fixed">{summary(state.fixed)}</b></div>
+          <div style={{ color: '#374151' }}>견적서 출력(고정): <b data-testid="quote-recipient-fixed">{summary(view.fixed)}</b></div>
         </div>
       </div>
     );
@@ -80,7 +91,8 @@ export function QuoteRecipientRefreshBar({ quoteId, token, onToast, refreshKey, 
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { onToast(d?.error || '담당자 정보 갱신 실패'); return; }
       onToast('견적서 수신자 정보를 현재 담당자 정보로 갱신했습니다.');
-      await load(); onRefreshed?.();
+      if (!shared) await load();
+      onRefreshed?.();   // 공유 모드: 상위가 상세를 다시 조회하면 새 수신자 값이 내려온다
     } finally { setBusy(false); }
   };
 
@@ -91,8 +103,8 @@ export function QuoteRecipientRefreshBar({ quoteId, token, onToast, refreshKey, 
     <div data-testid="quote-recipient-refresh" style={barStyle}>
       <div style={{ flex: 1, minWidth: 0, lineHeight: 1.6 }}>
         <div style={{ fontWeight: 700, color: '#92400e' }}>견적서 수신자 정보가 현재 담당자 정보와 다릅니다 ({cmp.diffs.map(d => d.label).join('·')})</div>
-        <div style={{ color: '#374151' }}>견적서 출력(고정): <b data-testid="quote-recipient-fixed">{summary(state.fixed)}</b></div>
-        <div style={{ color: '#374151' }}>현재 담당자: <b data-testid="quote-recipient-live">{summary(state.live!)}</b></div>
+        <div style={{ color: '#374151' }}>견적서 출력(고정): <b data-testid="quote-recipient-fixed">{summary(view.fixed)}</b></div>
+        <div style={{ color: '#374151' }}>현재 담당자: <b data-testid="quote-recipient-live">{summary(view.live!)}</b></div>
         {missing.length > 0 && (
           <div data-testid="quote-recipient-live-missing" style={{ color: '#6b7280', fontSize: 12 }}>
             현재 담당자 정보에 {missing.map(d => d.label).join('·')} 값이 없습니다 — 갱신해도 기존 값이 유지되므로 담당자 정보에서 보완해 주세요.

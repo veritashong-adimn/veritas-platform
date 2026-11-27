@@ -204,6 +204,13 @@ function sendError(res: any, req: any, err: any, fallback: string) {
 router.get("/admin/sales-contact/context", ...adminGuard, async (req, res) => {
   try {
     const sale = await resolveSale(db, String(req.query.source ?? ""), Number(req.query.id));
+    // 상세화면 표시용 경량 조회(?view=detail) — 거래처·연락처(출처 구분)만. 담당자 보완 창은 아래 전체 조회 그대로.
+    if (req.query.view === "detail") {
+      const contactInfo = sale.saleNo ? await saleContactInfo(db, sale.saleNo, { companyId: sale.company?.id ?? null, companyName: sale.rawCompanyName,
+        linkedContactId: sale.contact ? Number(sale.contact.id) : null, linkVia: sale.linkVia ?? null }) : null;
+      res.json({ ...sale, contact: contactSummary(sale.contact), restoredName: contactInfo?.restoredName ?? null, contactInfo });
+      return;
+    }
     const contacts = sale.company ? await rows(db, sql`SELECT ${CONTACT_COLS} FROM contacts c
       WHERE c.company_id = ${sale.company.id} AND c.deleted_at IS NULL AND c.is_active ORDER BY c.is_primary DESC, c.name`) : [];
     // 진행관리표 근거(확정 연결된 유효 진행행의 고객명·연락처) — 복원 고객명 확인·신규 등록 시 원본 값만 쓰기 위해
