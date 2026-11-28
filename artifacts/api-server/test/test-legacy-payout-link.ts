@@ -5,6 +5,7 @@
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { testSessionToken } from "../src/testing/sessionToken";
+import { LEGACY_PAID_BASIS, LEGACY_PAID_BY_ROUND_BASIS } from "../src/lib/legacyPayoutRule";
 
 let pass = 0, fail = 0;
 const check = (n: string, ok: boolean, d: unknown = "") => { ok ? pass++ : fail++; console.log(`  ${ok ? "✅" : "❌"} ${n}${ok ? "" : " — " + JSON.stringify(d)}`); };
@@ -77,7 +78,12 @@ async function main() {
     const st = (it: any) => it?.status;
     const uItems: any[] = u?.items ?? [];
     const uOf = (i: number) => uItems.find((x: any) => x.id === fx.archiveIds[i]);
-    check(`통합조회(지급일 ${YEST}): 확인 대기 건 = '지급확인 필요'(지급일 경과만으로 지급완료 아님)`, st(uOf(0)) === "deposit_unconfirmed" && uItems.filter(x => x.status === "paid").map((x: any) => x.id).join() === String(fx.archiveIds[35]), { s: st(uOf(0)), n: uItems.length });
+    // (2026-11-25 대표 확인 · e60e547) 전환 시 자동으로 붙은 '과거 지급 확인 필요' 보류(확인 전)는 지급 판단이 아니므로 통합조회·지급명세서는 CRM 원본 규칙을 따른다:
+    //   CRM 지급회차 지급일 경과 → '지급완료'(근거: 과거 CRM 지급회차 지급일 경과 — VERITAS OS 지급완료 확인 기록 아님). 판매관리 표시는 [1]에서 '확인 필요' 그대로 검증.
+    check(`통합조회(지급일 ${YEST}): 확인 전 전환 보류 건 = CRM 원본 규칙 '지급완료'(근거: CRM 지급일 경과 · VERITAS 확인 기록 아님)`,
+      st(uOf(0)) === "paid" && uOf(0)?.paidBasis === LEGACY_PAID_BY_ROUND_BASIS && uItems.length === 35 && uItems.every((x: any) => x.status === "paid")
+        && uItems.filter((x: any) => x.id !== fx.archiveIds[35]).every((x: any) => x.paidBasis === LEGACY_PAID_BY_ROUND_BASIS) && uOf(35)?.paidBasis === LEGACY_PAID_BASIS,
+      { s: st(uOf(0)), basis: uOf(0)?.paidBasis, n: uItems.length });
     check("통합조회: 기존 지급완료(대표 확인 cutoff) 원본 행은 '지급완료' 유지", st(uOf(35)) === "paid", uOf(35));
     const uT = await uni(TOMO);
     check("통합조회(내일): '지급예정'", (uT?.items ?? []).find((x: any) => x.id === fx.archiveIds[34])?.status === "scheduled");
@@ -89,8 +95,16 @@ async function main() {
     check("지급일·지급액 없이 지급완료 확인 → 400", single0.status === 400, single0.data);
     const fut = await call("POST", `/admin/performances/${fx.perfIds[0]}/legacy-payout-review`, { decision: "paid", reason: "근거", actualPaymentDate: TOMO, actualPaymentAmount: 725250 });
     check("미래 지급일 → 400(이미 지급된 건만)", fut.status === 400, fut.data);
-    const noEvid = await call("POST", `/admin/projects/${p.id}/legacy-payout-review/bulk`, { items: [{ assignmentId: fx.perfIds[0], actualPaymentDate: YEST, actualPaymentAmount: 725250 }] });
-    check("증빙(근거) 없이 일괄 확인 → 400", noEvid.status === 400);
+    // (2026-11-17 · 8063150) 지급완료 확인 증빙은 선택 — 미입력이면 확인은 처리되고 감사로그에 evidence: 'missing' 으로 남는다(확인자·일시·실제 지급일·지급액 필수 기록).
+    //   아래 일괄 확인 시나리오와 섞이지 않게 별도 행(#8)으로 검증한다.
+    const noEvid = await call("POST", `/admin/projects/${p.id}/legacy-payout-review/bulk`, { items: [{ assignmentId: fx.perfIds[8], actualPaymentDate: YEST, actualPaymentAmount: 725250 }] });
+    const lgNo = await one(sql`SELECT performed_by, metadata FROM logs WHERE entity_type = 'project' AND entity_id = ${p.id} AND action = 'legacy_payout_review_resolved' AND metadata LIKE ${`%"assignmentId":${fx.perfIds[8]},%`}`);
+    const mNo = JSON.parse(lgNo?.metadata ?? "{}");
+    const a8 = await one(sql`SELECT payment_status, to_char(actual_payment_date,'YYYY-MM-DD') ad, actual_payment_amount aa FROM performance_assignments WHERE id = ${fx.perfIds[8]}`);
+    check("증빙(근거) 없이 일괄 확인 → 처리 · 감사로그 evidence 'missing'(확인자·일시·실제 지급일·지급액 기록)",
+      noEvid.ok && noEvid.data?.succeeded === 1 && a8.payment_status === "paid" && a8.ad === YEST && Number(a8.aa) === 725250
+        && mNo.evidence === "missing" && mNo.reason == null && Number(lgNo?.performed_by) === Number(admin.id) && !!mNo.confirmedAt && mNo.actualPaymentDate === YEST && mNo.actualPaymentAmount === 725250,
+      { status: noEvid.status, data: noEvid.data, log: mNo });
     const bulkItems = [0, 1, 2].map(i => ({ assignmentId: fx.perfIds[i], actualPaymentDate: YEST, actualPaymentAmount: 725250 }));
     bulkItems.push({ assignmentId: fx.perfIds[34], actualPaymentDate: TOMO, actualPaymentAmount: 725250 });   // 부분 실패(미래 지급일)
     bulkItems.push({ assignmentId: fx.perfIds[35], actualPaymentDate: YEST, actualPaymentAmount: 725250 });   // 이미 지급완료(중복 확정)
@@ -120,7 +134,9 @@ async function main() {
     u = await uni(YEST);
     const u0 = (u?.items ?? []).find((x: any) => x.id === fx.archiveIds[0]);
     check("지급회차 통합조회·지급명세서: 같은 건 '지급완료' · 근거 'VERITAS OS 지급완료 확인'", u0?.status === "paid" && String(u0?.paidBasis).includes("지급완료 확인"), u0);
-    check("미확인 건은 계속 '지급확인 필요'", (u?.items ?? []).find((x: any) => x.id === fx.archiveIds[6])?.status === "deposit_unconfirmed");
+    // 미확인 건: VERITAS OS 지급완료 확인 기록 없이 CRM 원본 규칙 판정 그대로(2026-11-25) — 확인 건(근거 '지급완료 확인')과 근거가 구분된다
+    const u6 = (u?.items ?? []).find((x: any) => x.id === fx.archiveIds[6]);
+    check("미확인 건은 확인 기록 없이 CRM 원본 규칙 판정 유지(근거: CRM 지급일 경과 · '지급완료 확인' 아님)", u6?.status === "paid" && u6?.paidBasis === LEGACY_PAID_BY_ROUND_BASIS && !String(u6?.paidBasis).includes("지급완료 확인"), u6);
     const rnd = (await call("GET", `/admin/payout-unified/rounds?dateFrom=${YEST}&dateTo=${YEST}&translator=${encodeURIComponent(tag)}`)).data;
     const r0 = (rnd?.rounds ?? rnd?.rows ?? []).find((x: any) => x.payoutDate === YEST || x.date === YEST);
     check("지급회차 집계: 지급완료 4건(확인 4) 반영", !r0 || (r0.paidCount ?? r0.paid_cnt ?? 4) >= 4, r0);
