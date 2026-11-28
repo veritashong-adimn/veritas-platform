@@ -8,7 +8,7 @@
 //  · 계산·저장 로직 없음. 서버가 내려준 값만 표시·합산한다.
 // ─────────────────────────────────────────────────────────────────────────────
 import { canExport as canExportData } from '../../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../lib/constants';
 import { sortByPayoutOrder, unifiedPayoutOrderKey } from '../../lib/payoutItemOrder';   // 건별 금액자료 공통 정렬 원칙
 import { exportReproStatementExcel, exportReproStatementPdf, reproPayeeLanguages } from '../../lib/payoutReproStatement';
@@ -141,6 +141,33 @@ export function PayoutRoundDetail({ token, onToast, payoutDate, opRounds, reload
   const [loading, setLoading] = useState(false);
   const [selPayee, setSelPayee] = useState<string>('__all__');   // 건별 상세 — 통번역사 선택('__all__' = 전체)
   const [itemStatus, setItemStatus] = useState('all');           // 건별 상세 — 지급상태 필터(화면 내 필터)
+  // 지급대상별 요약에서 지급대상(통번역사·외주업체)을 눌러 건별 상세내역으로 온 경우 — 좌측 상단 버튼 = '뒤로가기'(요약으로 복귀).
+  //   탭을 직접 누르면 해제(기존 '지급회차 목록' 동작). 복귀 시 요약 화면의 스크롤 위치(페이지·표 가로 스크롤)를 되돌린다.
+  const [fromPayee, setFromPayee] = useState(false);
+  const payeeScrollRef = useRef<{ list: { el: Element; top: number; left: number }[]; panelLeft: number } | null>(null);
+  const restorePayeeScroll = useRef(false);
+  const capturePayeeScroll = () => {
+    const panel = document.querySelector('[data-testid="pu-payee-panel"]');
+    const saved: { el: Element; top: number; left: number }[] = [];
+    for (let el: Element | null = panel?.parentElement ?? null; el; el = el.parentElement) {
+      if (el.scrollTop > 0 || el.scrollLeft > 0) saved.push({ el, top: el.scrollTop, left: el.scrollLeft });
+    }
+    const root = document.scrollingElement;
+    if (root && !saved.some(x => x.el === root)) saved.push({ el: root, top: root.scrollTop, left: root.scrollLeft });
+    payeeScrollRef.current = { list: saved, panelLeft: panel ? (panel as HTMLElement).scrollLeft : 0 };
+  };
+  const backToPayees = () => { setFromPayee(false); restorePayeeScroll.current = true; setTab('payees'); };
+  useEffect(() => {
+    if (tab !== 'payees' || !restorePayeeScroll.current) return;
+    restorePayeeScroll.current = false;
+    const { list: saved, panelLeft } = payeeScrollRef.current ?? { list: [], panelLeft: 0 };
+    // 요약 표가 다시 그려진 뒤(레이아웃 확정 후) 복원
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      for (const s of saved) { s.el.scrollTop = s.top; s.el.scrollLeft = s.left; }
+      const panel = document.querySelector('[data-testid="pu-payee-panel"]') as HTMLElement | null;
+      if (panel) panel.scrollLeft = panelLeft;
+    }));
+  }, [tab]);
 
   // 선택 지급일 전체(목록 필터 미적용) — 통합 조회 상세 API 를 지급일만으로 호출.
   const load = useCallback(async () => {
@@ -176,7 +203,9 @@ export function PayoutRoundDetail({ token, onToast, payoutDate, opRounds, reload
   return (
     <div data-testid="payout-round-detail">
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
-        <BackToListButton variant="subtle" label="지급회차 목록" ariaLabel="지급회차 목록으로 돌아가기" testId="pd-back" onClick={onBack} />
+        {tab === 'items' && fromPayee
+          ? <BackToListButton variant="subtle" label="뒤로가기" ariaLabel="지급대상별 요약으로 돌아가기" testId="pd-back" onClick={backToPayees} />
+          : <BackToListButton variant="subtle" label="지급회차 목록" ariaLabel="지급회차 목록으로 돌아가기" testId="pd-back" onClick={onBack} />}
         <h1 style={{ fontSize: 19, fontWeight: 800, color: '#111827', margin: 0 }} data-testid="pd-title">{label}</h1>
         {opRounds.length > 0 && (
           <span style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
@@ -199,14 +228,14 @@ export function PayoutRoundDetail({ token, onToast, payoutDate, opRounds, reload
 
       <div role="tablist" aria-label="지급회차 상세 탭" style={{ display: 'flex', gap: 2, borderBottom: '1px solid #e5e7eb', marginBottom: 12 }}>
         {tabs.map(t => (
-          <button key={t.key} type="button" role="tab" aria-selected={tab === t.key} aria-label={t.label} data-testid={`pd-tab-${t.key}`} onClick={() => setTab(t.key)}
+          <button key={t.key} type="button" role="tab" aria-selected={tab === t.key} aria-label={t.label} data-testid={`pd-tab-${t.key}`} onClick={() => { setFromPayee(false); setTab(t.key); }}
             style={{ padding: '8px 16px', fontSize: 13, fontWeight: 700, borderWidth: '0 0 2px 0', borderStyle: 'solid', borderColor: tab === t.key ? '#0369a1' : 'transparent', marginBottom: -1, background: 'transparent', color: tab === t.key ? '#0369a1' : '#6b7280', cursor: 'pointer' }}>{t.label}</button>
         ))}
       </div>
 
       {tab === 'readiness' && <PayoutReadinessPanel token={token} payoutDate={payoutDate} onToast={onToast} defaultOpen />}
       {tab === 'payees' && <PayeeTable payees={payees} items={items} payoutDate={payoutDate} loading={loading} onToast={onToast}
-        onPick={(k) => { setSelPayee(k); setItemStatus('all'); setTab('items'); }} />}
+        onPick={(k) => { capturePayeeScroll(); setSelPayee(k); setItemStatus('all'); setFromPayee(true); setTab('items'); }} />}
       {tab === 'items' && <ItemTable token={token} onToast={onToast} items={items} payees={payees} loading={loading} selPayee={selPayee} setSelPayee={setSelPayee}
         status={itemStatus} setStatus={setItemStatus} onChanged={load} payoutDate={payoutDate} />}
       {tab === 'operational' && canOps && <OperationalTab token={token} onToast={onToast} payoutDate={payoutDate} opRounds={opRounds} reloadOpRounds={reloadOpRounds}
