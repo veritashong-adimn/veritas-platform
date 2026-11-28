@@ -457,6 +457,9 @@ function OperationalTab({ token, onToast, payoutDate, opRounds, reloadOpRounds, 
     if (selId == null || !opRounds.some(r => r.id === selId)) setSelId(defaultId());
   }, [opRounds]);   // eslint-disable-line react-hooks/exhaustive-deps
   const hasActive = opRounds.some(r => ACTIVE_OP.includes(r.status));
+  // 작성중·검토중 회차가 없으면(확정·지급완료 회차만 있어도) 이 지급일의 미배정 수집 대상을 조회 — 선택 지급확정에서 제외된 지급대상 등.
+  //   확정 회차가 있을 때는 수집 대상이 있을 때만 [지급회차 생성](같은 지급일 추가 회차)을 보인다(서버도 수집 대상 없으면 거부).
+  const hasOpen = opRounds.some(r => r.status === 'draft' || r.status === 'reviewing');
   // 판매 id → 판매번호(통합 조회 자료) — 운영 회차 건별 상세내역을 건별 상세내역 탭과 같은 판매번호순으로 정렬하는 데만 사용.
   const saleNoByProject = useMemo(() => { const m = new Map<number, string>(); for (const it of unifiedItems) if (it.projectId != null && it.saleNo && !m.has(Number(it.projectId))) m.set(Number(it.projectId), it.saleNo); return m; }, [unifiedItems]);
   const [showCreate, setShowCreate] = useState(false);
@@ -473,7 +476,7 @@ function OperationalTab({ token, onToast, payoutDate, opRounds, reloadOpRounds, 
           const r = await fetch(api(`/api/admin/payout-rounds/${selId}`), { headers: authH }); const d = await r.json();
           if (alive && r.ok) setRoundDetail(d);
         } else setRoundDetail(null);
-        if (!hasActive && payoutDate) {
+        if (!hasOpen && payoutDate) {
           const r = await fetch(api('/api/admin/payout-rounds/overview?scope=unassigned'), { headers: authH }); const d = await r.json();
           // 서버 수집 조건과 같은 기준: 최종 지급예정일(수동 지정 → 자동 산정, 서버 expectedPaymentDate) = 지급일. 납품일로 대체하지 않는다.
           const list = r.ok ? (d.summary ?? []).flatMap((g: any) => g.items ?? []).filter((it: any) => String(it.expectedPaymentDate ?? '').slice(0, 10) === payoutDate) : [];
@@ -482,7 +485,7 @@ function OperationalTab({ token, onToast, payoutDate, opRounds, reloadOpRounds, 
       } catch { if (alive) onToast('운영 지급회차 조회 실패'); }
     })();
     return () => { alive = false; };
-  }, [selId, hasActive, payoutDate, refreshKey]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selId, hasOpen, payoutDate, refreshKey]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!payoutDate) return (
     <div data-testid="pd-op-none" style={{ border: '1px dashed #d1d5db', borderRadius: 10, padding: 18, color: '#6b7280', fontSize: 13 }}>
@@ -540,9 +543,10 @@ function OperationalTab({ token, onToast, payoutDate, opRounds, reloadOpRounds, 
             style={{ padding: '4px 10px', borderRadius: 8, fontSize: 11.5, fontWeight: 600, border: '1px dashed #cbd5e1', background: '#fff', color: '#6b7280', cursor: 'pointer' }}>
             취소된 회차 {sorted.filter(r => r.status === 'cancelled').length}개 {showCancelled ? '숨기기' : '보기'}</button>
         )}
-        {!hasActive && canManage && (
-          <button type="button" onClick={() => setShowCreate(true)} data-testid="pd-op-create" aria-label="지급회차 생성"
-            style={{ marginLeft: 'auto', padding: '7px 14px', borderRadius: 8, fontSize: 12, fontWeight: 700, border: 'none', background: '#0369a1', color: '#fff', cursor: 'pointer' }}>+ 지급회차 생성 ({formatDisplayDate(payoutDate)})</button>
+        {!hasOpen && canManage && (!hasActive || (preview?.length ?? 0) > 0) && (
+          <button type="button" onClick={() => setShowCreate(true)} data-testid="pd-op-create" aria-label={hasActive ? '같은 지급일 추가 지급회차 생성' : '지급회차 생성'}
+            style={{ marginLeft: 'auto', padding: '7px 14px', borderRadius: 8, fontSize: 12, fontWeight: 700, border: 'none', background: '#0369a1', color: '#fff', cursor: 'pointer' }}>
+            {hasActive ? `+ 추가 지급회차 생성 (${formatDisplayDate(payoutDate)} · 미배정 ${preview?.length ?? 0}건)` : `+ 지급회차 생성 (${formatDisplayDate(payoutDate)})`}</button>
         )}
       </div>
 

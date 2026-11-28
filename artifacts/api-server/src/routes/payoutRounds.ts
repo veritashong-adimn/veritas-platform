@@ -778,18 +778,27 @@ router.post("/admin/payout-rounds", ...payoutManage, async (req, res) => {
   const batchNumber = parsed.data.batchNumber || `${paymentDate} 지급회차`;
   const userId = req.user?.id ?? null;
   try {
-    // 동일 지급일 중복 생성 방지 — 진행 중(draft·reviewing·confirmed) 회차가 이미 있으면
+    // 동일 지급일 중복 생성 방지 — 작성 중·검토 중(draft·reviewing) 회차가 이미 있으면
     // 새로 만들지 않고 기존 회차를 그대로 반환한다(duplicate=true). (취소·지급완료건은 제외)
     const [dup] = await db.select().from(payoutRoundsTable)
       .where(and(
         eq(payoutRoundsTable.paymentDate, paymentDate),
-        inArray(payoutRoundsTable.status, ["draft", "reviewing", "confirmed"]),
+        inArray(payoutRoundsTable.status, ["draft", "reviewing"]),
       ))
       .limit(1);
     if (dup) {
       const existing = await loadRoundDetail(dup);
       res.status(200).json({ ...existing, duplicate: true });
       return;
+    }
+    // 같은 지급일 추가 회차(2026-11-28 부분 지급확정) — 이미 확정된 회차만 있으면, 그 회차에서 제외된(미배정·미지급) 지급대상 등
+    //   수집 조건을 충족한 미배정 건이 있을 때만 새 회차를 만든다(빈 회차 생성 방지). 한 수행건은 한 회차에만 속한다(payoutRoundId).
+    const [confirmedSameDay] = await db.select({ id: payoutRoundsTable.id }).from(payoutRoundsTable)
+      .where(and(eq(payoutRoundsTable.paymentDate, paymentDate), eq(payoutRoundsTable.status, "confirmed"))).limit(1);
+    if (confirmedSameDay) {
+      const [c] = await db.select({ n: sql<number>`count(*)::int` }).from(performanceAssignmentsTable)
+        .where(collectWhere(periodStart, periodEnd, collectionBasis));
+      if (!Number(c?.n)) { res.status(400).json({ error: "같은 지급일의 확정된 회차 외에 새로 수집할 미배정 지급대상이 없습니다.", code: "NOTHING_TO_COLLECT" }); return; }
     }
     const [round] = await db.insert(payoutRoundsTable).values({
       batchNumber, paymentDate, periodStart, periodEnd, collectionBasis, note: note ?? null,
@@ -1025,19 +1034,49 @@ function identityBlockBody(mm: any[], what: string) {
 }
 
 // ── PATCH 지급확정(§16) ──────────────────────────────────────────────────────
+// 선택 지급대상만 지급확정(2026-11-28) — body.excludePayeeKeys(지급대상 키 'i:통번역사id' / 'v:외주업체id')로 이번 확정에서 뺄 지급대상 지정.
+//   · 제외 지급대상의 수행건은 이 회차 연결만 해제(기존 '제외/이월'과 같음) — 지급예정일·수행정보·금액·미지급 상태 그대로.
+//     같은 지급일 추가 회차로 수집해 별도 확정·이체 파일 생성(한 수행건은 한 회차에만 속하므로 중복 확정·중복 송금 불가).
+//   · 정정 차액 항목이 있는 지급대상은 제외 불가(차액이 회차에 남아 원 수행건과 분리되지 않게). 최소 1명은 확정.
+//   · 검증(상계 한도·신원 불일치)은 선택 지급대상 기준으로 먼저 하고, 통과한 뒤에만 제외를 적용한다. 확정 중 오류면 제외를 되돌린다.
+const confirmSchema = z.object({ excludePayeeKeys: z.array(z.string().regex(/^[iv]:(\d+|none)$/)).max(2000).optional() });
 router.patch("/admin/payout-rounds/:id/confirm", ...payoutConfirm, async (req, res) => {
   const id = Number(req.params.id);
   const [round] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
   if (!round) { res.status(404).json({ error: "지급회차를 찾을 수 없습니다." }); return; }
   if (round.status === "confirmed" || round.status === "paid") { res.status(400).json({ error: "이미 확정된 회차입니다." }); return; }
+  const parsedC = confirmSchema.safeParse(req.body ?? {});
+  if (!parsedC.success) { res.status(400).json({ error: "제외할 지급대상 형식이 올바르지 않습니다." }); return; }
+  const exclude = new Set(parsedC.data.excludePayeeKeys ?? []);
+  let excludeIds: number[] = [];
+  let excludedPayees: { payeeKey: string; payeeName: string; count: number; netTotal: number }[] = [];
   {
+    const full = await loadRoundDetail(round);
+    const groups = full.summary as any[];
+    if (exclude.size) {
+      const known = new Set(groups.map((g) => g.payeeKey));
+      const unknown = [...exclude].filter((k) => !known.has(k));
+      if (unknown.length) { res.status(400).json({ error: `이 회차에 없는 지급대상입니다: ${unknown.join(", ")}`, code: "UNKNOWN_PAYEE" }); return; }
+      const withAdj = groups.filter((g) => exclude.has(g.payeeKey) && (g.items ?? []).some((it: any) => it.adjustmentId));
+      if (withAdj.length) { res.status(400).json({ error: `정정 차액 항목이 있는 지급대상은 이번 확정에서 제외할 수 없습니다: ${withAdj.map((g) => g.payeeName).join(", ")}`, code: "EXCLUDE_HAS_ADJUSTMENT" }); return; }
+      if (groups.every((g) => exclude.has(g.payeeKey))) { res.status(400).json({ error: "지급확정할 지급대상을 1명 이상 선택해 주세요.", code: "NO_PAYEE_SELECTED" }); return; }
+      const ex = groups.filter((g) => exclude.has(g.payeeKey));
+      excludeIds = ex.flatMap((g) => (g.items ?? []).filter((it: any) => !it.adjustmentId && it.paymentStatus !== "paid").map((it: any) => Number(it.id)));
+      excludedPayees = ex.map((g) => ({ payeeKey: g.payeeKey, payeeName: g.payeeName, count: g.count, netTotal: g.netTotal }));
+    }
     // 상계(−) 정정 항목 검증(2026-11) — 지급대상별 실지급 합계가 음수가 되면 확정 불가(상계 한도 초과 → 환수로 전환 필요).
-    const live = await loadRoundDetail(round);
+    const live = { ...full, summary: groups.filter((g) => !exclude.has(g.payeeKey)) };
     const neg = (live.summary as any[]).filter((g) => g.netTotal < -0.004);
     if (neg.length) { res.status(400).json({ error: `상계 금액이 지급액보다 큽니다: ${neg.map((g) => `${g.payeeName} ${Math.round(g.netTotal).toLocaleString("ko-KR")}원`).join(", ")}. 해당 정정은 환수로 전환하거나 다른 회차에 편입해 주세요.` }); return; }
     // 수행자 ↔ 지급대상 신원 확정 불일치 — 지급확정 차단(서버 최종 판정)
     const mm = await roundIdentityMismatches(round, live);
     if (mm.length) { req.log.warn({ payoutRoundId: id, count: mm.length, assignmentIds: mm.map(m => m.assignmentId) }, "지급확정 차단: 수행자-지급대상 신원 불일치"); res.status(409).json(identityBlockBody(mm, "지급확정")); return; }
+  }
+  // 제외 지급대상 — 회차 연결 해제(이 회차·미지급 건만). 확정 실패 시 아래 catch 에서 되돌린다.
+  if (excludeIds.length) {
+    await db.update(performanceAssignmentsTable).set({ payoutRoundId: null, updatedAt: new Date() })
+      .where(and(inArray(performanceAssignmentsTable.id, excludeIds), eq(performanceAssignmentsTable.payoutRoundId, id), ne(performanceAssignmentsTable.paymentStatus, "paid")));
+    req.log.info({ payoutRoundId: id, excludedPayees: excludedPayees.map(p => p.payeeKey), excludedAssignments: excludeIds.length }, "지급확정: 선택 제외 지급대상 회차 연결 해제");
   }
   try {
     const confirmedAt = new Date();
@@ -1051,9 +1090,15 @@ router.patch("/admin/payout-rounds/:id/confirm", ...payoutConfirm, async (req, r
     let transferResync: Awaited<ReturnType<typeof resyncTransfersIfAny>> = null;
     try { transferResync = await resyncTransfersIfAny(refreshed, req.log); }
     catch (e) { req.log.error({ e, payoutRoundId: id }, "재확정 송금건 재동기화 실패(확정은 정상)"); }
-    res.json({ ...(await loadRoundDetail(refreshed)), ...(transferResync ? { transferResync } : {}) });
+    res.json({ ...(await loadRoundDetail(refreshed)), ...(transferResync ? { transferResync } : {}), ...(excludedPayees.length ? { excludedPayees } : {}) });
   } catch (err) {
     req.log.error({ err }, "지급확정 실패");
+    if (excludeIds.length) {   // 확정 실패 — 제외 해제 되돌림(다른 회차에 배정되지 않은 건만)
+      try {
+        await db.update(performanceAssignmentsTable).set({ payoutRoundId: id, updatedAt: new Date() })
+          .where(and(inArray(performanceAssignmentsTable.id, excludeIds), isNull(performanceAssignmentsTable.payoutRoundId)));
+      } catch (e) { req.log.error({ e, payoutRoundId: id }, "지급확정 실패 후 제외 되돌림 실패"); }
+    }
     res.status(500).json({ error: "지급확정 중 오류가 발생했습니다." });
   }
 });

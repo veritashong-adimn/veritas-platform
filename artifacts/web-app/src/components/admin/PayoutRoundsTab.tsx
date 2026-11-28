@@ -274,6 +274,28 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
   const isOverview = !!detail && !round;
   const overviewInfo = detail?.overview ?? null;
   const showActions = !!round && !locked && perms.manage;   // 제외/이월/보류는 특정 회차(편집가능)·작성 권한(payout.manage)에서만
+  // ── 지급대상 선택 지급확정(2026-11-28) — 작성중·검토중 회차 · 지급확정 권한. 기본 전체 선택, 체크 해제 = 이번 확정에서 제외.
+  //   선택 상태는 지급대상 키로만 보관(검색·필터·페이지 이동으로 바뀌지 않음), 회차가 바뀔 때만 초기화.
+  //   제외 지급대상은 서버가 회차 연결만 해제(미지급·지급예정일·금액 그대로) → 같은 지급일 추가 회차로 별도 확정.
+  //   집계는 필터와 무관하게 회차 전체 지급대상 기준(서버 지급대상별 금액 그대로 합산).
+  const selectMode = !!round && (round.status === 'draft' || round.status === 'reviewing') && perms.confirm;
+  const [excludedPayees, setExcludedPayees] = useState<Set<string>>(new Set());
+  useEffect(() => { setExcludedPayees(new Set()); }, [selId, round?.id]);
+  const fullGroups: any[] = detail?.summary ?? [];
+  const hasAdjustment = (key: string) => (fullGroups.find((g: any) => g.payeeKey === key)?.items ?? []).some((it: any) => it.adjustmentId);
+  const selection = useMemo(() => {
+    const sel = fullGroups.filter((g: any) => !excludedPayees.has(g.payeeKey));
+    const sum = (f: (g: any) => number) => sel.reduce((s: number, g: any) => s + f(g), 0);
+    return { payees: sel.length, excluded: fullGroups.length - sel.length, count: sum(g => numOf(g.count)), gross: sum(g => numOf(g.grossTotal)),
+      withholding: sum(g => numOf(g.withholdingTotal)), vat: sum(g => numOf(g.vatTotal)), net: sum(g => numOf(g.netTotal)),
+      excludedNames: fullGroups.filter((g: any) => excludedPayees.has(g.payeeKey)).map((g: any) => g.payeeName as string) };
+  }, [fullGroups, excludedPayees]);
+  const togglePayee = (key: string) => setExcludedPayees(prev => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n; });
+  const toggleableShown = filteredSummary.filter((g: any) => !hasAdjustment(g.payeeKey)).map((g: any) => g.payeeKey as string);
+  const allShownSelected = toggleableShown.length > 0 && toggleableShown.every(k => !excludedPayees.has(k));
+  const someShownSelected = toggleableShown.some(k => !excludedPayees.has(k));
+  const toggleAllShown = () => setExcludedPayees(prev => { const n = new Set(prev); for (const k of toggleableShown) { if (allShownSelected) n.add(k); else n.delete(k); } return n; });
+  const sumOffset = selectMode ? STK_W.chk : 0;   // 체크박스 열이 있으면 지급대상 고정열을 그만큼 오른쪽으로
   // 건별(선택) 처리 가능 모드 — 지급확정(confirmed) 회차에서만. 부분 지급완료도 status는 confirmed 유지.
   const perItemMode = !!round && round.status === 'confirmed' && (perms.transfer || perms.superAdmin); // 선택 지급완료(transfer)·선택 확정취소(관리자)
   const payStats = detail?.payStats ?? { paid: 0, hold: 0, unpaid: 0, total: 0 };
@@ -367,13 +389,19 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
 
   const confirmRound = async () => {
     if (!selId || busy) return;
-    if (!(await confirmDialog({ title: '지급확정', message: '이 회차를 지급확정할까요?\n확정 후에는 관리자만 수정할 수 있습니다.', confirmLabel: '지급확정', variant: 'warning' }))) return;
+    const ex = [...excludedPayees].filter(k => fullGroups.some((g: any) => g.payeeKey === k));
+    if (ex.length && selection.payees === 0) { onToast('지급확정할 지급대상을 1명 이상 선택해 주세요.'); return; }
+    const exMsg = ex.length
+      ? `\n\n선택 ${selection.payees}명 · ${selection.count}건 · 실지급 ${won(selection.net)}원만 확정합니다.\n제외 ${ex.length}명(${selection.excludedNames.slice(0, 5).join(', ')}${selection.excludedNames.length > 5 ? ' 외' : ''})은 이 회차에서 빠지고 미지급·지급예정일 그대로 남습니다(같은 지급일 추가 회차로 별도 확정).`
+      : '';
+    if (!(await confirmDialog({ title: '지급확정', message: `이 회차를 지급확정할까요?\n확정 후에는 관리자만 수정할 수 있습니다.${exMsg}`, confirmLabel: '지급확정', variant: 'warning' }))) return;
     setBusy(true);
     try {
-      const res = await fetch(api(`/api/admin/payout-rounds/${selId}/confirm`), { method: 'PATCH', headers: authH });
+      const res = await fetch(api(`/api/admin/payout-rounds/${selId}/confirm`), { method: 'PATCH', headers: authH, ...(ex.length ? { body: JSON.stringify({ excludePayeeKeys: ex }) } : {}) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { onToast(data.error ?? '지급확정 실패'); return; }
-      setDetail(data); await loadRounds(); onToast('지급확정되었습니다.');
+      setDetail(data); await loadRounds();
+      onToast(data.excludedPayees?.length ? `지급확정되었습니다. 제외 ${data.excludedPayees.length}명은 미지급으로 남았습니다(같은 지급일 추가 회차로 확정 가능).` : '지급확정되었습니다.');
     } catch { onToast('지급확정 중 오류'); } finally { setBusy(false); }
   };
 
@@ -748,17 +776,26 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
               <div style={{ overflowX: 'auto' }}>
                 <table className="veritas-thead" style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1260 }}>
                   <thead><tr>
-                    <th style={{ ...th, ...stickyCol(0, { header: true, last: true, width: STK_W.sumPayee }) }}>지급대상</th><th style={th}>이메일</th><th style={th}>구분</th>
+                    {selectMode && <th style={{ ...th, textAlign: 'center', ...stickyCol(0, { header: true, width: STK_W.chk }) }}>
+                      <input type="checkbox" checked={allShownSelected} ref={el => { if (el) el.indeterminate = !allShownSelected && someShownSelected; }} onChange={toggleAllShown}
+                        disabled={toggleableShown.length === 0} data-testid="payout-select-all" aria-label="표시된 지급대상 전체 선택·해제" /></th>}
+                    <th style={{ ...th, ...stickyCol(sumOffset, { header: true, last: true, width: STK_W.sumPayee }) }}>지급대상</th><th style={th}>이메일</th><th style={th}>구분</th>
                     <th style={{ ...th, textAlign: 'right' }}>건수</th><th style={{ ...th, textAlign: 'right' }}>번역</th><th style={{ ...th, textAlign: 'right' }}>통역</th><th style={{ ...th, textAlign: 'right' }}>장비·외주</th>
                     <th style={{ ...th, textAlign: 'right' }}>통번역료</th><th style={{ ...th, textAlign: 'right' }}>기타비용</th><th style={{ ...th, textAlign: 'right' }}>차감</th>
                     <th style={{ ...th, textAlign: 'right' }}>세전</th><th style={th}>세금처리</th><th style={{ ...th, textAlign: 'right' }} title="조회된 개인 지급대상의 원천세율(확정 회차는 확정 당시 스냅샷 기준)">{deductionHeaderLabel(filteredSummary)}</th><th style={{ ...th, textAlign: 'right' }}>실지급</th>
                   </tr></thead>
                   <tbody>
-                    {filteredSummary.length === 0 && <tr><td colSpan={14} style={{ ...td, textAlign: 'center', color: C.g400, padding: 20 }}>{filterActive ? '조건에 맞는 지급대상이 없습니다.' : (isOverview ? '현재 지급확정 대상이 없습니다.' : '수집된 지급대상이 없습니다.')}</td></tr>}
+                    {filteredSummary.length === 0 && <tr><td colSpan={14 + (selectMode ? 1 : 0)} style={{ ...td, textAlign: 'center', color: C.g400, padding: 20 }}>{filterActive ? '조건에 맞는 지급대상이 없습니다.' : (isOverview ? '현재 지급확정 대상이 없습니다.' : '수집된 지급대상이 없습니다.')}</td></tr>}
                     {/* 집계 전용 — 펼침 없음. 건별 근거·세부내역은 '건별 상세내역' 탭에서 확인(§1·§2). */}
                     {sumPg.paged.map((g) => (
-                      <tr key={g.payeeKey} style={summaryRowBg(g) ? { background: summaryRowBg(g) } : undefined}>
-                        <td style={{ ...td, fontWeight: 700, ...stickyCol(0, { last: true, width: STK_W.sumPayee, bg: summaryRowBg(g) }) }} title={g.payeeName}>{g.payeeName}</td>
+                      <tr key={g.payeeKey} data-testid={`payout-summary-row-${g.payeeKey}`} data-selected={selectMode ? String(!excludedPayees.has(g.payeeKey)) : undefined}
+                        style={selectMode && excludedPayees.has(g.payeeKey) ? { background: C.g50, color: C.textMuted } : summaryRowBg(g) ? { background: summaryRowBg(g) } : undefined}>
+                        {selectMode && <td style={{ ...td, textAlign: 'center', ...stickyCol(0, { width: STK_W.chk, bg: summaryRowBg(g) }) }}>
+                          {hasAdjustment(g.payeeKey)
+                            ? <input type="checkbox" checked disabled title="정정 차액 항목이 있어 이번 확정에서 제외할 수 없습니다" data-testid={`payout-select-${g.payeeKey}`} aria-label={`${g.payeeName} 지급확정 대상(정정 차액 — 제외 불가)`} />
+                            : <input type="checkbox" checked={!excludedPayees.has(g.payeeKey)} onChange={() => togglePayee(g.payeeKey)} data-testid={`payout-select-${g.payeeKey}`} aria-label={`${g.payeeName} 지급확정 대상 선택`} />}
+                        </td>}
+                        <td style={{ ...td, fontWeight: 700, ...stickyCol(sumOffset, { last: true, width: STK_W.sumPayee, bg: summaryRowBg(g) }) }} title={g.payeeName}>{g.payeeName}</td>
                         <td style={{ ...td, color: C.textSecondary }} title={g.payeeEmail || '-'}>{g.payeeEmail || '-'}</td>
                         <td style={td}>{g.payeeType === 'individual' ? '통번역사' : '외주업체'}</td>
                         <td style={tdR}>{g.count}건</td><td style={tdR}>{g.translationCount}</td><td style={tdR}>{g.interpretationCount}</td><td style={tdR}>{g.equipmentEtcCount}</td>
@@ -957,7 +994,16 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
                   : round.status === 'cancelled'
                     ? <span style={{ ...TYPO.helper, color: ROUND_STATUS.cancelled.color, fontWeight: 700 }}>{ROUND_STATUS.cancelled.label} — 수정 불가</span>
                     : perms.confirm
-                      ? <PrimaryBtn onClick={confirmRound} disabled={busy || (totals.assignments ?? 0) === 0} style={{ fontSize: 13, padding: '9px 20px' }} data-testid="payout-confirm" aria-label="지급확정">지급확정</PrimaryBtn>
+                      ? <>
+                          {selectMode && (
+                            <span data-testid="payout-selection-summary" style={{ ...TYPO.helper, alignSelf: 'center', marginRight: 'auto', fontVariantNumeric: 'tabular-nums' }}>
+                              지급확정 선택 <b>{selection.payees}명</b> · {selection.count}건 · 세전 {won(selection.gross)} · 원천세 {won(selection.withholding)} · 부가세 {won(selection.vat)} · 실지급 <b style={{ color: C.primaryText }}>{won(selection.net)}원</b>
+                              {selection.excluded > 0 && <span data-testid="payout-selection-excluded" style={{ marginLeft: 8, color: C.danger, fontWeight: 700 }}>제외 {selection.excluded}명(미지급 유지)</span>}
+                            </span>
+                          )}
+                          <PrimaryBtn onClick={confirmRound} disabled={busy || (totals.assignments ?? 0) === 0 || (selectMode && selection.payees === 0)} style={{ fontSize: 13, padding: '9px 20px' }} data-testid="payout-confirm" aria-label="지급확정">
+                            {selectMode && selection.excluded > 0 ? `선택 ${selection.payees}명 지급확정` : '지급확정'}</PrimaryBtn>
+                        </>
                       : <span style={{ ...TYPO.helper, color: C.textSecondary, fontWeight: 700, alignSelf: 'center' }} data-testid="payout-confirm-locked">지급확정은 관리자 권한이 필요합니다</span>}
               </div>
             )}
