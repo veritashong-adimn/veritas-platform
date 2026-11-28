@@ -8,7 +8,7 @@
 import { Router, type IRouter } from "express";
 import {
   db, payoutRoundsTable, payoutRoundItemsTable, payoutTransfersTable, performanceAssignmentsTable, payoutAdjustmentsTable, projectsTable, companiesTable, quotesTable, usersTable,
-  performanceExpensesTable, performanceDeductionsTable, translatorSensitiveTable, translatorProfilesTable,
+  performanceExpensesTable, performanceDeductionsTable, translatorSensitiveTable, translatorProfilesTable, translatorMergesTable,
   calcPayoutWithholding, vendorVatApplies,
 } from "@workspace/db";
 import { eq, and, or, isNull, isNotNull, inArray, ne, sql } from "drizzle-orm";
@@ -1367,26 +1367,38 @@ router.post("/admin/payout-rounds/:id/transfers/ibk-file", ...payoutTransfer, re
     );
     if (included.length === 0) { res.status(409).json({ error: "송금파일 생성 불가 · 대상 없음" }); return; }
 
-    // 「내통장인쇄내용」 자동 생성용 원천(통번역사 관리) 조회 — 개인 지급대상만. 판매/수행 데이터는 쓰지 않는다.
-    //  · language_pairs(주언어)·education/major(통대·학교)·payment_method/country(해외·국가) 단일 원천.
+    // 「내통장인쇄내용」 자동 생성용 원천(통번역사 명부) 조회 — 개인 지급대상만. 판매/수행 데이터는 쓰지 않는다(lib/ibkPrintName 표준 규칙).
+    //  · language_pairs(언어)·education/major/education_history/bio(통대·학교·일반)·payment_method/country(해외·국가).
+    //  · 통합(translator_merges active)된 통번역사는 통합 대표 명부 기준 — 확정 스냅샷 이름(대표 명부 이름)과 같은 명부의 정보를 쓴다.
+    //    지급대상 식별(payeeId)·이름·계좌·금액은 바꾸지 않는다(조회 기준 id 만 대표 명부로).
     const indivPayeeIds = [...new Set(
       included.filter((t) => t.payeeType === "individual" && t.payeeId != null).map((t) => t.payeeId as number),
     )];
-    const profMap = new Map<number, { languagePairs: string | null; education: string | null; major: string | null }>();
-    const sensMap = new Map<number, { paymentMethod: string | null; country: string | null }>();
+    const repOf = new Map<number, number>();
     if (indivPayeeIds.length) {
+      const ms = await db.select({ m: translatorMergesTable.mergedMasterId, r: translatorMergesTable.representativeMasterId }).from(translatorMergesTable)
+        .where(and(inArray(translatorMergesTable.mergedMasterId, indivPayeeIds), eq(translatorMergesTable.status, "active")));
+      for (const x of ms) repOf.set(x.m, x.r);
+    }
+    const profileIdOf = (payeeId: number) => repOf.get(payeeId) ?? payeeId;
+    const lookupIds = [...new Set(indivPayeeIds.map(profileIdOf))];
+    const profMap = new Map<number, { languagePairs: string | null; education: string | null; major: string | null; educationHistory: unknown; bio: string | null }>();
+    const sensMap = new Map<number, { paymentMethod: string | null; country: string | null }>();
+    if (lookupIds.length) {
       const profs = await db.select({
         userId: translatorProfilesTable.userId,
         languagePairs: translatorProfilesTable.languagePairs,
         education: translatorProfilesTable.education,
         major: translatorProfilesTable.major,
-      }).from(translatorProfilesTable).where(inArray(translatorProfilesTable.userId, indivPayeeIds));
-      for (const p of profs) profMap.set(p.userId, { languagePairs: p.languagePairs, education: p.education, major: p.major });
+        educationHistory: translatorProfilesTable.educationHistory,
+        bio: translatorProfilesTable.bio,
+      }).from(translatorProfilesTable).where(inArray(translatorProfilesTable.userId, lookupIds));
+      for (const p of profs) profMap.set(p.userId, { languagePairs: p.languagePairs, education: p.education, major: p.major, educationHistory: p.educationHistory, bio: p.bio });
       const senss = await db.select({
         translatorId: translatorSensitiveTable.translatorId,
         paymentMethod: translatorSensitiveTable.paymentMethod,
         country: translatorSensitiveTable.country,
-      }).from(translatorSensitiveTable).where(inArray(translatorSensitiveTable.translatorId, indivPayeeIds));
+      }).from(translatorSensitiveTable).where(inArray(translatorSensitiveTable.translatorId, lookupIds));
       for (const s of senss) sensMap.set(s.translatorId, { paymentMethod: s.paymentMethod, country: s.country });
     }
 
@@ -1396,14 +1408,16 @@ router.post("/admin/payout-rounds/:id/transfers/ibk-file", ...payoutTransfer, re
     for (const t of included) {
       const plain = t.bankAccountEncSnapshot ? readAccountPlain(t.bankAccountEncSnapshot, null) : null;
       if (!plain || !isValidBankAccountFormat(plain)) { accountIssues.push(t.payeeName ?? `#${t.id}`); continue; }
-      const prof = t.payeeId != null ? profMap.get(t.payeeId) : undefined;
-      const sens = t.payeeId != null ? sensMap.get(t.payeeId) : undefined;
+      const prof = t.payeeId != null ? profMap.get(profileIdOf(t.payeeId)) : undefined;
+      const sens = t.payeeId != null ? sensMap.get(profileIdOf(t.payeeId)) : undefined;
       const printName = buildPayeePrintName({
         payeeType: t.payeeType,
         name: t.payeeName,
         languagePairs: prof?.languagePairs,
         education: prof?.education,
         major: prof?.major,
+        educationHistory: prof?.educationHistory,
+        bio: prof?.bio,
         paymentMethod: sens?.paymentMethod,
         country: sens?.country,
       });
