@@ -10,6 +10,7 @@
 import { canExport as canExportData } from '../../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../../lib/constants';
+import { sortByPayoutOrder, unifiedPayoutOrderKey } from '../../lib/payoutItemOrder';   // 건별 금액자료 공통 정렬 원칙
 import { exportReproStatementExcel, exportReproStatementPdf, reproPayeeLanguages } from '../../lib/payoutReproStatement';
 import { ConversionCell, type ConversionInfo } from './LegacyPayoutConversion';
 import { PayoutReadinessPanel } from './PayoutReadinessPanel';
@@ -148,7 +149,8 @@ export function PayoutRoundDetail({ token, onToast, payoutDate, opRounds, reload
       const p = new URLSearchParams(); p.set('date', payoutDate ?? 'none'); p.set('basis', 'payout');
       const r = await fetch(api(`/api/admin/payout-unified/payees?${p}`), { headers: authH });
       const d = await r.json(); if (!r.ok) throw new Error(d?.error || '조회 실패');
-      setItems(d.items ?? []); setPayees(d.payees ?? []); setTotals(d.totals ?? null);
+      // 건별 자료는 공통 정렬 원칙(lib/payoutItemOrder)으로 한 번 정렬 — 건별 상세내역 화면·Excel·지급대상별 지급명세서 Excel·PDF 가 같은 순서를 쓴다.
+      setItems(sortByPayoutOrder<DetailRow>(d.items ?? [], unifiedPayoutOrderKey)); setPayees(d.payees ?? []); setTotals(d.totals ?? null);
     } catch (e: any) { onToast(e?.message || '지급회차 상세 조회 실패'); } finally { setLoading(false); }
   }, [token, payoutDate]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { void load(); }, [load]);
@@ -426,6 +428,8 @@ function OperationalTab({ token, onToast, payoutDate, opRounds, reloadOpRounds, 
     if (selId == null || !opRounds.some(r => r.id === selId)) setSelId(defaultId());
   }, [opRounds]);   // eslint-disable-line react-hooks/exhaustive-deps
   const hasActive = opRounds.some(r => ACTIVE_OP.includes(r.status));
+  // 판매 id → 판매번호(통합 조회 자료) — 운영 회차 건별 상세내역을 건별 상세내역 탭과 같은 판매번호순으로 정렬하는 데만 사용.
+  const saleNoByProject = useMemo(() => { const m = new Map<number, string>(); for (const it of unifiedItems) if (it.projectId != null && it.saleNo && !m.has(Number(it.projectId))) m.set(Number(it.projectId), it.saleNo); return m; }, [unifiedItems]);
   const [showCreate, setShowCreate] = useState(false);
 
   // 운영 기준 데이터 — 선택 회차 상세(포함 건·제외/확인 필요 사유) 또는 회차 생성 전 수집 예정(미배정 자격충족 건 중 지급예정일 = 지급일).
@@ -556,7 +560,7 @@ function OperationalTab({ token, onToast, payoutDate, opRounds, reloadOpRounds, 
 
       {roundSel && <div style={{ fontSize: 13, fontWeight: 800, color: '#374151', margin: '4px 0 6px' }} data-testid="pd-op-round-title">운영 지급회차 상세 — 실제 지급대상(운영 회차 기준)</div>}
       {roundSel && (
-        <PayoutRoundsTab key={roundSel.id} token={token} onToast={onToast} perms={perms} fixedRoundId={roundSel.id}
+        <PayoutRoundsTab key={roundSel.id} token={token} onToast={onToast} perms={perms} fixedRoundId={roundSel.id} saleNoByProject={saleNoByProject}
           onRoundsChanged={() => { reloadOpRounds(); setRefreshKey(k => k + 1); }} />
       )}
 

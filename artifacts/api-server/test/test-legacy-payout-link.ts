@@ -4,7 +4,7 @@
 //  fixture 는 끝나면 모두 삭제한다.
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
-import jwt from "jsonwebtoken";
+import { testSessionToken } from "../src/testing/sessionToken";
 
 let pass = 0, fail = 0;
 const check = (n: string, ok: boolean, d: unknown = "") => { ok ? pass++ : fail++; console.log(`  ${ok ? "✅" : "❌"} ${n}${ok ? "" : " — " + JSON.stringify(d)}`); };
@@ -16,7 +16,9 @@ const kst = (d = 0) => new Date(Date.now() + 9 * 3600e3 + d * 86400e3).toISOStri
 async function main() {
   if (/neon\.tech/.test(process.env.DATABASE_URL ?? "")) throw new Error("운영 DB 로 보이는 연결에서는 실행하지 않습니다.");
   const [admin] = await rows(sql`SELECT id, email FROM users WHERE role = 'admin' AND role_id IS NULL AND deleted_at IS NULL AND is_active LIMIT 1`);
-  const H = { Authorization: `Bearer ${jwt.sign({ id: admin.id, email: admin.email, role: "admin" }, process.env.JWT_SECRET!, { expiresIn: "15m" })}`, "Content-Type": "application/json" };
+  // 실제 최고관리자 계정 + 유효한 로그인 세션(user_sessions) 토큰 — 세션 필수 인증(2026-11-27) 기준. 세션은 끝에서 삭제.
+  const token = await testSessionToken(db, Number(admin.id));
+  const H = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
   const call = async (m: string, p: string, b?: unknown) => { const r = await fetch(B + p, { method: m, headers: H, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, ok: r.ok, data: await r.json().catch(() => null) as any }; };
   const tag = `__TEST_LPL_${Date.now()}`;
   const YEST = kst(-1), TOMO = kst(1);
@@ -166,6 +168,7 @@ async function main() {
     await db.execute(sql`DELETE FROM quotes WHERE id = ${Q}`);
     await db.execute(sql`DELETE FROM projects WHERE id = ${P}`);
     await db.execute(sql`DELETE FROM companies WHERE id = ${fx.companyId ?? 0}`);
+    await db.execute(sql`DELETE FROM user_sessions WHERE user_id = ${admin.id} AND user_agent = 'automated-test'`);   // 테스트 세션 정리
     const [left] = await rows(sql`SELECT (SELECT count(*) FROM projects WHERE title LIKE ${tag + "%"}) p, (SELECT count(*) FROM performance_assignments WHERE performer_name_snapshot LIKE ${tag + "%"}) pa, (SELECT count(*) FROM legacy_archive_rows WHERE row_hash LIKE ${tag + "%"}) ar`);
     console.log(`\n정리 완료 — 남은 테스트 데이터: 프로젝트 ${left.p} · 수행정보 ${left.pa} · 원본행 ${left.ar}`);
   }

@@ -92,7 +92,9 @@ const reasonText = (r: Item): string => {
     const l = b.code === 'tax_registry_missing' ? `참고: ${b.text}` : b.code in REASON_LABEL ? REASON_LABEL[b.code] : b.text;
     if (l) out.add(l);
   }
-  return [...out].sort((a, b) => (REASON_ORDER.indexOf(a) + 1 || 99) - (REASON_ORDER.indexOf(b) + 1 || 99)).join(', ');
+  // 수행자 ↔ 지급대상 신원 불일치(identity_mismatch)는 서버 문구(수행자·연결 지급대상·사유) 그대로 맨 앞 — 지급확정·은행이체 파일 차단 사유
+  const rank = (l: string) => (l.startsWith('신원 불일치') ? 0 : (REASON_ORDER.indexOf(l) + 1 || 99));
+  return [...out].sort((a, b) => rank(a) - rank(b)).join(', ');
 };
 const isFx = (r: Item) => !!r.payCurrency && r.payCurrency !== 'KRW';
 const fxAmt = (cur: string, v: number | null | undefined) => v == null ? `${cur} 미입력` : `${cur} ${v.toLocaleString('ko-KR', { minimumFractionDigits: cur === 'JPY' ? 0 : 2, maximumFractionDigits: 2 })}`;

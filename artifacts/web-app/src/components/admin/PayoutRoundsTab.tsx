@@ -3,7 +3,8 @@
 //  · 수행정보 미지급 건을 지급일별 회차로 묶어 지급대상(개인/외주)별 자동합산·검토·확정.
 //  · 계산은 서버(payoutRounds API)가 costTotal+세금처리로 산출. 화면은 표시·조작만.
 // ─────────────────────────────────────────────────────────────────────────────
-import { canExport as canExportData } from '../../lib/exportAccess';   // Excel·CSV 출력 — 관리자만(공통 기준)
+import { canExport as canExportData } from '../../lib/exportAccess';
+import { sortByPayoutOrder } from '../../lib/payoutItemOrder';   // 건별 금액자료 공통 정렬 원칙   // Excel·CSV 출력 — 관리자만(공통 기준)
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { formatDisplayDate, formatScheduleRange, formatLabelDates } from '../../lib/dateFormat';
 import { api, formatLanguageLabel } from '../../lib/constants';
@@ -102,9 +103,11 @@ interface Props {
   fixedRoundId?: number | null;
   /** 회차 상태가 바뀐 뒤(확정·확정취소·지급완료·재수집 등) 상위 화면의 운영 회차 목록 재조회 */
   onRoundsChanged?: () => void;
+  /** 판매 id(projectId) → 판매번호 — 건별 상세내역 정렬(판매번호순)용. 지급회차 상세가 통합 조회 자료로 넘겨준다. 없으면 판매 id 순. */
+  saleNoByProject?: ReadonlyMap<number, string> | null;
 }
 
-export default function PayoutRoundsTab({ token, onToast, perms = { manage: true, confirm: true, transfer: true, superAdmin: true }, adjFocus = null, fixedRoundId = null, onRoundsChanged }: Props) {
+export default function PayoutRoundsTab({ token, onToast, perms = { manage: true, confirm: true, transfer: true, superAdmin: true }, adjFocus = null, fixedRoundId = null, onRoundsChanged, saleNoByProject = null }: Props) {
   const embedded = fixedRoundId != null;
   const onRoundsChangedRef = useRef(onRoundsChanged); onRoundsChangedRef.current = onRoundsChanged;
   const authH = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
@@ -238,9 +241,15 @@ export default function PayoutRoundsTab({ token, onToast, perms = { manage: true
       .filter((g: any) => g.items.length > 0);
   }, [detail, custFilter, payeeQ, dateFrom, dateTo]);
   // 건별(필터 적용) — 두 탭이 동일한 조건. 전체선택·페이지네이션 기준.
+  //   행 순서 = 건별 금액자료 공통 정렬 원칙(lib/payoutItemOrder): 납품일 → 거래처 → 판매번호(판매 id) → 지급대상 → 등록순.
+  //   판매 = 프로젝트(판매 id). 견적번호는 추가비용 행(교통비 등)에 비어 있을 수 있어 판매 묶음 기준으로 쓰지 않는다.
+  //   화면·건별 Excel 이 같은 배열을 사용한다. 지급대상별 요약(filteredSummary) 순서·집계는 불변.
   const itemRows: any[] = useMemo(
-    () => filteredSummary.flatMap((g: any) => g.items.map((it: any) => ({ ...it, payeeName: g.payeeName, payeeEmail: g.payeeEmail ?? it.payeeEmail ?? null }))),
-    [filteredSummary],
+    () => sortByPayoutOrder(
+      filteredSummary.flatMap((g: any) => g.items.map((it: any) => ({ ...it, payeeName: g.payeeName, payeeEmail: g.payeeEmail ?? it.payeeEmail ?? null, _payeeKey: g.payeeKey ?? null }))),
+      (it: any) => ({ deliveryDate: it.deliveryDate, client: it.customerName, saleNo: it.projectId != null ? saleNoByProject?.get(Number(it.projectId)) ?? null : null, saleId: it.projectId ?? null,
+        performer: it.payeeName, performerKey: it._payeeKey, sourceRank: it.adjustmentId ? 1 : 0, regId: it.id })),
+    [filteredSummary, saleNoByProject],
   );
   // 필터 결과 총계(조회 결과 라인·개요바용). 회차 총계/지급확정 영역은 회차 전체값 유지(운영 안전).
   const filteredTotals = useMemo(() => {

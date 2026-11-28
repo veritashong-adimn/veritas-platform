@@ -22,6 +22,7 @@ import { logEvent } from "../lib/logEvent";
 import { buildIbkTransferWorkbook, ibkFileName, type IbkTransferRow } from "../lib/ibkTransferExcel";
 import { buildPayeePrintName } from "../lib/ibkPrintName";
 import { collectUnifiedItems } from "./payoutUnified";
+import { identityMismatchesOf } from "../services/payeeIdentity";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -996,6 +997,33 @@ router.patch("/admin/payout-rounds/:id/recollect", ...payoutManage, async (req, 
   }
 });
 
+// ── 수행자 ↔ 지급대상 신원 확정 불일치 차단(2026-11-28, services/payeeIdentity) — 지급확정·IBK 대량이체 파일 생성 공통 ──
+//   확정 전 회차 = 현재 수행정보 연결(실시간) / 확정·지급완료 회차 = 확정 스냅샷(payout_round_items)의 지급대상. 지급완료 건·정정 차액 항목 제외.
+//   이름만 다른 경우(개명·영문명·법인명 표기)는 차단하지 않는다. 식별정보 원문은 응답·로그에 넣지 않는다.
+const IDENTITY_BLOCK_CODE = "PAYEE_IDENTITY_MISMATCH";
+async function roundIdentityMismatches(round: any, live?: any) {
+  let targets: { assignmentId: number; payeeType: string | null; payeeId: number | null; gross: number | null; net: number | null }[];
+  if (round.status === "confirmed" || round.status === "paid") {
+    const its = await db.select({ aid: payoutRoundItemsTable.performanceAssignmentId, pt: payoutRoundItemsTable.payeeType, pid: payoutRoundItemsTable.payeeId,
+      gross: payoutRoundItemsTable.grossAmount, net: payoutRoundItemsTable.netAmount, ps: performanceAssignmentsTable.paymentStatus })
+      .from(payoutRoundItemsTable).leftJoin(performanceAssignmentsTable, eq(performanceAssignmentsTable.id, payoutRoundItemsTable.performanceAssignmentId))
+      .where(and(eq(payoutRoundItemsTable.payoutRoundId, round.id), isNull(payoutRoundItemsTable.adjustmentId)));
+    targets = its.filter(x => x.ps !== "paid").map(x => ({ assignmentId: Number(x.aid), payeeType: x.pt, payeeId: x.pid != null ? Number(x.pid) : null, gross: num(x.gross), net: num(x.net) }));
+  } else {
+    const d = live ?? await loadRoundDetail(round);
+    targets = (d.summary as any[]).flatMap((g: any) => (g.items ?? []).filter((it: any) => !it.adjustmentId && it.paymentStatus !== "paid").map((it: any) => {
+      const pt = it.payeeType || it.performerCategory;
+      return { assignmentId: Number(it.id), payeeType: pt, payeeId: pt === "vendor" ? (it.vendorCompanyId ?? null) : (it.individualUserId ?? null), gross: num(it.gross), net: num(it.netPayment) };
+    }));
+  }
+  return identityMismatchesOf(db, targets);
+}
+function identityBlockBody(mm: any[], what: string) {
+  const head = mm.slice(0, 3).map(m => `${m.client ?? "-"} ${m.saleNo ?? ""} · 수행자 ${m.performerName ?? "-"} → 지급대상 ${m.payeeName ?? "-"}(#${m.payeeId}) ${Math.round(m.net ?? 0).toLocaleString("ko-KR")}원`).join(" / ");
+  return { error: `수행자와 지급대상의 신원이 다른 건 ${mm.length}건이 있어 ${what}할 수 없습니다: ${head}${mm.length > 3 ? ` 외 ${mm.length - 3}건` : ""}. 지급준비점검에서 확인 후 판매관리 수행정보에서 수행자를 정정해 주세요.`,
+    code: IDENTITY_BLOCK_CODE, mismatches: mm };
+}
+
 // ── PATCH 지급확정(§16) ──────────────────────────────────────────────────────
 router.patch("/admin/payout-rounds/:id/confirm", ...payoutConfirm, async (req, res) => {
   const id = Number(req.params.id);
@@ -1007,6 +1035,9 @@ router.patch("/admin/payout-rounds/:id/confirm", ...payoutConfirm, async (req, r
     const live = await loadRoundDetail(round);
     const neg = (live.summary as any[]).filter((g) => g.netTotal < -0.004);
     if (neg.length) { res.status(400).json({ error: `상계 금액이 지급액보다 큽니다: ${neg.map((g) => `${g.payeeName} ${Math.round(g.netTotal).toLocaleString("ko-KR")}원`).join(", ")}. 해당 정정은 환수로 전환하거나 다른 회차에 편입해 주세요.` }); return; }
+    // 수행자 ↔ 지급대상 신원 확정 불일치 — 지급확정 차단(서버 최종 판정)
+    const mm = await roundIdentityMismatches(round, live);
+    if (mm.length) { req.log.warn({ payoutRoundId: id, count: mm.length, assignmentIds: mm.map(m => m.assignmentId) }, "지급확정 차단: 수행자-지급대상 신원 불일치"); res.status(409).json(identityBlockBody(mm, "지급확정")); return; }
   }
   try {
     const confirmedAt = new Date();
@@ -1261,6 +1292,11 @@ router.post("/admin/payout-rounds/:id/transfers/ibk-file", ...payoutTransfer, re
     // 지급확정(confirmed)/지급완료(paid) 회차에서만 — 작성중/검토중 회차는 은행 파일 생성 대상 아님.
     if (round.status !== "confirmed" && round.status !== "paid") {
       res.status(400).json({ error: "지급확정된 회차에서만 IBK 대량이체 파일을 생성할 수 있습니다." }); return;
+    }
+    // 수행자 ↔ 지급대상 신원 확정 불일치 — 은행이체 파일 생성 차단(확정 스냅샷 지급대상 기준)
+    {
+      const mm = await roundIdentityMismatches(round);
+      if (mm.length) { req.log.warn({ payoutRoundId: id, count: mm.length, assignmentIds: mm.map(m => m.assignmentId) }, "IBK 파일 차단: 수행자-지급대상 신원 불일치"); res.status(409).json(identityBlockBody(mm, "은행이체 파일을 생성")); return; }
     }
 
     const rows = await db.select().from(payoutTransfersTable)

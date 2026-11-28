@@ -27,6 +27,7 @@ import {
 } from "@workspace/db";
 import { sql, eq } from "drizzle-orm";
 import { normalizeCompanyName } from "../lib/normalizeCompany";
+import { decrypt } from "../lib/encrypt";
 import { isLegacyConfirmedPaid } from "../lib/legacyPayoutRule";
 import { checkPaidAmount, foreignPayOf } from "../lib/foreignPay";
 import { legacyPayoutDisplay, suggestedPaidAmount } from "./legacyPayoutStatus";
@@ -75,21 +76,45 @@ function itemTypeOf(productName: string): "translation" | "interpretation" | "eq
   return /통역/.test(productName) ? "interpretation" : "translation";
 }
 
-async function loadTranslatorIndex(dbx: Dbx) {
+// 과거 CRM 이름 → 통번역사 Master. 이름 매핑(legacy_master_mappings, 인물 단위)으로 1명일 때 연결하되,
+//   (2026-11-28) 동명이인 보호: 명부에 같은 이름의 다른 사람(미삭제, Master 통합·같은 주민번호는 한 사람)이 있으면 이름만으로 연결하지 않는다.
+//   이때는 CRM 원본 행 주민번호가 같은 이름의 명부 1명과 정확히 일치할 때만 그 사람으로 연결(homonym_rrn), 아니면 미연결(homonym_unverified) — 전환 후 담당자 지정.
+//   주민번호는 서버 메모리에서만 비교한다(결과·로그에 원문 없음). 행 단위 연결(row_link)은 이 판정보다 우선한다(호출부).
+export async function loadTranslatorIndex(dbx: Dbx) {
   const maps = await rows(dbx, sql`SELECT btrim(m.legacy_id) nm, m.entity_id id FROM legacy_master_mappings m
     JOIN users u ON u.id = m.entity_id AND u.deleted_at IS NULL AND u.role = 'translator'
     WHERE m.entity_type = 'translator' AND m.status <> 'rolled_back' AND btrim(m.legacy_id) <> ''`);
+  const pKey = (v: unknown) => String(v ?? "").replace(/\s/g, "").toLowerCase();
+  const merges = await rows(dbx, sql`SELECT merged_master_id m, representative_master_id r FROM translator_merges WHERE status = 'active'`);
+  const repOf = new Map<number, number>(merges.map(x => [Number(x.m), Number(x.r)]));
+  const roster = await rows(dbx, sql`SELECT u.id, u.name, ts.resident_number FROM users u LEFT JOIN translator_sensitive ts ON ts.translator_id = u.id
+    WHERE u.deleted_at IS NULL AND u.role IN ('translator', 'linguist') AND btrim(coalesce(u.name, '')) <> ''`);
+  const rrn13 = (v: unknown) => { if (!v) return null; try { const d = decrypt(String(v)).replace(/\D/g, ""); return d.length === 13 ? d : null; } catch { return null; } };
+  // 이름 → 사람 목록(사람 = 주민번호 › 통합 대표 Master 기준)
+  const people = new Map<string, Map<string, { ids: number[]; rrn: string | null }>>();
+  for (const u of roster) {
+    const k = pKey(u.name); const rrn = rrn13(u.resident_number); const rep = repOf.get(Number(u.id)) ?? Number(u.id);
+    const pk = rrn ? `r:${rrn}` : `u:${rep}`;
+    const m = people.get(k) ?? new Map(); const e = m.get(pk) ?? { ids: [], rrn }; e.ids.push(Number(u.id)); m.set(pk, e); people.set(k, m);
+  }
+  const homonymGuard = (name: string, id: number, rowRrn: string | null): { id: number | null; method: "homonym_rrn" | "homonym_unverified" } | null => {
+    const ps = [...(people.get(pKey(name))?.values() ?? [])];
+    if (ps.length < 2) return null;   // 같은 이름의 다른 사람 없음 — 기존 이름 매핑 그대로
+    const hit = rowRrn ? ps.filter(x => x.rrn === rowRrn) : [];
+    if (hit.length === 1) { const ids = hit[0].ids; return { id: ids.includes(id) ? id : ids[0], method: "homonym_rrn" }; }
+    return { id: null, method: "homonym_unverified" };
+  };
   const exact = new Map<string, Set<number>>(), norm = new Map<string, Set<number>>();
   const add = (mp: Map<string, Set<number>>, k: string, id: number) => { if (!k) return; const s = mp.get(k) ?? new Set(); s.add(id); mp.set(k, s); };
   for (const r of maps) { add(exact, String(r.nm), Number(r.id)); add(norm, normalizeCompanyName(r.nm), Number(r.id)); }
-  return (name: string): { id: number | null; method: "mapping" | "mapping_normalized" | "ambiguous" | "unmapped" | "none" } => {
+  return (name: string, rowRrn: string | null = null): { id: number | null; method: "mapping" | "mapping_normalized" | "ambiguous" | "unmapped" | "none" | "homonym_rrn" | "homonym_unverified" } => {
     const n = String(name ?? "").trim();
     if (!n) return { id: null, method: "none" };
     const e = exact.get(n);
-    if (e?.size === 1) return { id: [...e][0], method: "mapping" };
+    if (e?.size === 1) { const id = [...e][0]; return homonymGuard(n, id, rowRrn) ?? { id, method: "mapping" }; }
     if (e && e.size > 1) return { id: null, method: "ambiguous" };
     const z = norm.get(normalizeCompanyName(n));
-    if (z?.size === 1) return { id: [...z][0], method: "mapping_normalized" };
+    if (z?.size === 1) { const id = [...z][0]; return homonymGuard(n, id, rowRrn) ?? { id, method: "mapping_normalized" }; }
     if (z && z.size > 1) return { id: null, method: "ambiguous" };
     return { id: null, method: "unmapped" };
   };
@@ -244,7 +269,8 @@ export async function buildActivationPlan(dbx: Dbx, legacyRowId: number) {
   const rowLinks = await loadRowLinks(dbx, prog.map((p: any) => Number(p.id)));
   const matchRow = (p: any, name: string) => {
     const linked = rowLinks.get(Number(p.id));
-    return linked != null ? { id: linked, method: "row_link" as const } : matchTr(name);
+    const rrn = String(p.source_raw?.["주민등록번호"] ?? "").replace(/\D/g, "");
+    return linked != null ? { id: linked, method: "row_link" as const } : matchTr(name, rrn.length === 13 ? rrn : null);
   };
   const trIds = [...new Set(prog.map((p: any) => matchRow(p, rawRowFromRecord(p.source_raw ?? {}, "진행관리", 0).translatorName).id).filter((x: number | null): x is number => x != null))];
   const pmByTr = new Map<number, string | null>();
@@ -319,6 +345,8 @@ export async function buildActivationPlan(dbx: Dbx, legacyRowId: number) {
   if (!company.matchedId) warnings.push(company.method === "ambiguous" ? "거래처 후보가 여러 곳이라 연결하지 않습니다(전환 후 판매 상세에서 지정)." : "일치하는 거래처 Master 가 없어 원본 거래처명만 보존합니다.");
   const unm = performances.filter(p => !p.translatorId).length;
   if (unm) warnings.push(`통번역사 Master 미연결 ${unm}건 — 수행정보는 원본 이름으로 만들고 연결은 전환 후 지정합니다.`);
+  const homN = performances.filter(p => p.translatorMatch === "homonym_unverified").length;
+  if (homN) warnings.push(`동명이인 확인 필요 ${homN}건 — 같은 이름의 통번역사가 여러 명이고 CRM 주민번호로 확인되지 않아 연결하지 않습니다(전환 후 판매 상세에서 실제 수행자 지정).`);
   const reviewN = performances.filter(p => p.withholdingBasis === "review_required" && (p.originalPreTax ?? p.computedPreTax) > 0).length;
   if (reviewN) warnings.push(`원천세 확인 필요 ${reviewN}건 — CRM 세전·세후로 세율이 확인되지 않고 통번역사 Master 지급방식도 없어 세금처리를 비워 둡니다(0%·세금계산서로 처리하지 않음).`);
   const postMis = performances.filter(p => p.postTaxStatus === "mismatch").length;

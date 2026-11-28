@@ -23,6 +23,7 @@ import { masterTreatmentOf } from "./legacyActivationLineage";
 import { DATE_DECISIONS } from "../lib/payoutDateDecisions";
 import { payStatusOf, isAmountMissing, PAY_STATUS_LABEL, emptyStatusCounts, type PayStatusKey } from "../lib/payDisplayStatus";
 import { decrypt } from "../lib/encrypt";
+import { checkPayeeIdentity } from "./payeeIdentity";
 import { splitPayAmount, domesticPayeeKey, wonPayTotals, type PayeeType } from "../lib/payoutAmount";
 import { isLegacyPlaceholderEmail } from "../lib/mailer";
 import { rawRowFromRecord } from "../routes/pastWorkImport";
@@ -250,6 +251,11 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
   const TREAT_LABEL: Record<string, string> = { domestic_3_3: "3.3%", domestic_2_2: "2.2%", exempt: "원천징수 제외", tax_review_required: "세금계산서·세무 확인", nonresident_custom: "원천징수 제외", treaty_reduction_or_exemption: "원천징수 제외" };
   // 수행정보 화면과 같은 정규화 — 미사용 레거시(비거주자·조세조약)는 '원천징수 제외'와 같은 것으로 본다
   const normTreat = (t: unknown) => (t === "nonresident_custom" || t === "treaty_reduction_or_exemption" ? "exempt" : String(t ?? ""));
+  // ⑨ 수행자 ↔ 지급대상 신원 일치(2026-11-28, services/payeeIdentity) — 미지급 플랫폼·CRM 전환 수행정보의 현재 연결(플랫폼 기준)을
+  //   수행정보 주민번호·사업자번호 스냅샷과 명부 신원정보로 대조. 확정 불일치만 확인 필요(C), 이름만 다른 경우는 참고(I).
+  const identity = await checkPayeeIdentity(dbx, [...pa.values()].filter(x => x.payment_status !== "paid").map(x => ({
+    assignmentId: Number(x.id), payeeType: x.cat === "vendor" ? "vendor" : "individual",
+    payeeId: x.cat === "vendor" ? (x.vendor_company_id != null ? Number(x.vendor_company_id) : null) : (x.individual_user_id != null ? Number(x.individual_user_id) : null) })));
   const out: any[] = [];
   for (const b of base) {
     const bl: Blocker[] = [];
@@ -354,6 +360,9 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
       if (p.payout_round_id == null) add("I", "no_round", "지급회차 미배정", "지급회차 생성 시 자격 충족하면 자동 포함");
     }
     if (kind !== "platform" && masterId == null && vendorId == null && !paid) add("C", "no_payee", "수행자 미연결(과거 CRM 이름만)", "통번역사 Master 연결 확인");
+    const idv = p && !paid ? identity.get(Number(p.id)) ?? null : null;
+    if (idv?.status === "mismatch") add("C", "identity_mismatch", `신원 불일치 — ${idv.reason}`, "판매관리 수행정보에서 실제 수행자를 다시 선택해 저장(지급회차 배정 건은 변경 사유 입력) — 지급확정·은행이체 파일 생성 차단");
+    else if (idv?.status === "name_diff") add("I", "identity_name_diff", idv.reason ?? "수행자명 ≠ 지급대상 명부명", "개명·영문명·법인명 표기·대리 지급 여부 확인");
     // 명부 원천징수 불일치(2026-11) — 미지급 개인 수행정보만(지급완료·외주업체 제외). 세금처리·원천세·실지급액은 바꾸지 않는다.
     //  · 명부 해외 송금방식(해외 은행·PayPal)은 원천징수 등록값이 아니므로 비교하지 않는다(해외송금이라는 이유만으로 불일치 판정 금지).
     //  · 명부 미등록·미확정(세무 검토)은 참고(I)만. 수행정보 세금처리 미설정은 기존 no_tax 로 표시.
@@ -457,6 +466,8 @@ export async function computePayoutReadiness(dbx: Dbx, opts: { scope: "date" | "
       // 합계 이중집계 방지 — 플랫폼 수행과 같은 CRM 원본 행은 합계에서 제외(표시는 유지)
       countedInTotals: !(b.source === "legacy" && dupRows.has(Number(b.id))),
       blockers: bl, actions: [...new Set(bl.filter(x => x.cat !== "I").map(x => x.action))],
+      // 수행자 ↔ 지급대상 신원 점검 결과(표시용 — 식별정보 원문 없음)
+      identity: idv ? { status: idv.status, basis: idv.basis, performerName: idv.performerName, payeeName: idv.payeeName, payeeId: idv.payeeId, reason: idv.reason } : null,
       state, stateLabel: READINESS_LABEL[state],
     });
   }
